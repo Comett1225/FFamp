@@ -142,6 +142,7 @@ struct EncodeSpec {
     int keyInterval = 30;
     bool hevc = false;
     bool reorder = true;
+    bool bgra = false;
 };
 
 class VideoEncoder {
@@ -149,6 +150,7 @@ public:
     static std::unique_ptr<VideoEncoder> open(const EncodeSpec& spec, std::string* error = nullptr);
     ~VideoEncoder();
     bool encodeI420(const uint8_t* data, int64_t pts, int64_t duration);
+    bool encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration);
     bool encode(const Frame& frame, int64_t pts, int64_t duration);
     bool finish();
     bool take(Packet& out);

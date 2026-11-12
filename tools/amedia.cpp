@@ -205,7 +205,8 @@ int encode(const Args& args) {
     if (sscanf(fps.c_str(), "%ld/%ld", &num, &den) < 1 || num <= 0 || den <= 0) return fail("bad --fps");
     FILE* video = fopen(args.get("video").c_str(), "rb");
     if (!video) return fail("cannot open the raw video");
-    size_t frameSize = size_t(width) * height + 2 * size_t((width + 1) / 2) * ((height + 1) / 2);
+    bool bgra = args.get("format", "i420") == "bgra";
+    size_t frameSize = bgra ? size_t(width) * height * 4 : size_t(width) * height + 2 * size_t((width + 1) / 2) * ((height + 1) / 2);
     fseeko(video, 0, SEEK_END);
     long available = long(ftello(video) / off_t(frameSize));
     fseeko(video, 0, SEEK_SET);
@@ -222,6 +223,7 @@ int encode(const Args& args) {
     spec.keyInterval = int(args.number("gop", long(spec.fps + 0.5)));
     spec.hevc = hevc;
     spec.reorder = !args.has("no-reorder");
+    spec.bgra = bgra;
     auto encoder = VideoEncoder::open(spec, &error);
     if (!encoder) return fail(error);
     auto writer = Mp4Writer::open(args.plain[0], &error);
@@ -285,7 +287,7 @@ int encode(const Args& args) {
     double start = now();
     for (long n = 0; n < total; ++n) {
         if (fread(raw.data(), 1, frameSize, video) != frameSize) return fail("raw video ended early");
-        if (!encoder->encodeI420(raw.data(), n * den, den)) return fail("the encoder refused a frame");
+        if (!(bgra ? encoder->encodeBGRA(raw.data(), n * den, den) : encoder->encodeI420(raw.data(), n * den, den))) return fail("the encoder refused a frame");
         if (aac) {
             long want = std::min(soundFrames, long(double(n + 1) * den / num * rate)) - soundDone;
             if (want > 0) {

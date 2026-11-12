@@ -1,0 +1,41 @@
+# absent-media
+
+A small media layer for AbsentMotion's desktop apps that does not use FFmpeg: its own container code, written from the public
+specifications, on top of the codecs the operating system already has.
+
+This is a prototype. It proves the riskiest part on macOS; nothing here is used by the app yet.
+
+## What works today (macOS)
+
+- MP4 and MOV reader: plain and fragmented files, H.264 and HEVC video, AAC audio, edit lists, rotation, colour tags.
+- MP4 writer: movie header in front (plays while downloading), B-frames, edit lists, gapless audio signalling.
+- H.264 and HEVC decoding through VideoToolbox, frames stay on the GPU (IOSurface, Metal-ready).
+- Frame-exact seeking to any frame.
+- H.264 and HEVC encoding through VideoToolbox, AAC through AudioToolbox.
+- `amedia`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
+
+## Build and test
+
+    cmake -S . -B build -G Ninja && cmake --build build
+    tests/run.sh
+
+The test script needs `ffmpeg`, `ffprobe`, Python 3 with NumPy and the Xcode command line tools. FFmpeg is only the judge: it makes the
+test clips and is the reference every frame is compared against. Set `FFMPEG` and `FFPROBE` to use other binaries. Nothing from FFmpeg
+is linked or copied.
+
+## Layout
+
+    include/absent/media.h   the whole public interface
+    src/mp4_read.cpp         ISO base media file reader (ISO/IEC 14496-12, 14496-14, 14496-15)
+    src/mp4_write.cpp        ISO base media file writer
+    src/mac/                 VideoToolbox and AudioToolbox back end
+    tools/amedia.cpp         command-line tool
+    tests/                   comparison against FFmpeg and against AVFoundation
+    docs/                    results and the proposal for how AbsentMotion would call this
+
+## Rules
+
+- Written from the specifications and the operating-system documentation. No code is copied or translated from FFmpeg, GStreamer or any
+  other GPL or LGPL project.
+- No comments in source files; explanations go in `docs/`.
+- Licence: not chosen yet.

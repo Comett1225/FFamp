@@ -114,7 +114,7 @@ std::unique_ptr<VideoEncoder> VideoEncoder::open(const EncodeSpec& spec, std::st
     Impl& e = *encoder->impl;
     e.spec = spec;
     CFMutableDictionaryRef source = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    number(source, kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+    number(source, kCVPixelBufferPixelFormatTypeKey, spec.bgra ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
     number(source, kCVPixelBufferWidthKey, spec.width);
     number(source, kCVPixelBufferHeightKey, spec.height);
     CFMutableDictionaryRef surface = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -141,7 +141,7 @@ bool VideoEncoder::encodeI420(const uint8_t* data, int64_t pts, int64_t duration
     Impl& e = *impl;
     CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(e.session);
     CVPixelBufferRef buffer = nullptr;
-    if (!pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
+    if (e.spec.bgra || !pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
     CVPixelBufferLockBaseAddress(buffer, 0);
     const size_t w = size_t(e.spec.width), h = size_t(e.spec.height);
     const size_t cw = (w + 1) / 2, ch = (h + 1) / 2;
@@ -159,6 +159,21 @@ bool VideoEncoder::encodeI420(const uint8_t* data, int64_t pts, int64_t duration
             line[2 * x + 1] = v[row * cw + x];
         }
     }
+    CVPixelBufferUnlockBaseAddress(buffer, 0);
+    bool ok = e.submit(buffer, pts, duration);
+    CFRelease(buffer);
+    return ok;
+}
+
+bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration) {
+    Impl& e = *impl;
+    CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(e.session);
+    CVPixelBufferRef buffer = nullptr;
+    if (!e.spec.bgra || !pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
+    CVPixelBufferLockBaseAddress(buffer, 0);
+    uint8_t* pixels = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(buffer));
+    const size_t stride = CVPixelBufferGetBytesPerRow(buffer), row = size_t(e.spec.width) * 4;
+    for (int y = 0; y < e.spec.height; ++y) memcpy(pixels + y * stride, data + y * row, row);
     CVPixelBufferUnlockBaseAddress(buffer, 0);
     bool ok = e.submit(buffer, pts, duration);
     CFRelease(buffer);

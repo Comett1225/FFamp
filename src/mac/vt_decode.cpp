@@ -59,6 +59,7 @@ struct VideoDecoder::Impl {
     std::mutex lock;
     std::map<int64_t, CVPixelBufferRef> ready;
     std::atomic<uint64_t> shown{0};
+    std::atomic<int64_t> floor{0};
     bool keep = true;
     uint32_t next = kNone;
     uint64_t fed = 0;
@@ -84,7 +85,7 @@ struct VideoDecoder::Impl {
         auto* d = static_cast<Impl*>(self);
         if (status != noErr || !image) return;
         ++d->shown;
-        if (!d->keep) return;
+        if (!d->keep || pts.value < d->floor) return;
         std::lock_guard<std::mutex> hold(d->lock);
         auto found = d->ready.find(pts.value);
         if (found != d->ready.end()) CFRelease(found->second);
@@ -200,6 +201,7 @@ Frame VideoDecoder::frame(uint32_t index) {
     const uint32_t target = track.order[index];
     const int64_t pts = track.samples[target].pts;
     d.keep = true;
+    d.floor = pts;
     CVPixelBufferRef buffer = d.take(pts);
     if (!buffer) {
         const uint32_t key = d.keyFor(target);
@@ -210,9 +212,10 @@ Frame VideoDecoder::frame(uint32_t index) {
             ++d.restarts;
         }
         while (d.next <= target) {
-            if (!d.feed(d.next, false)) break;
+            if (!d.feed(d.next, true)) break;
             ++d.next;
         }
+        VTDecompressionSessionWaitForAsynchronousFrames(d.session);
         buffer = d.take(pts);
         if (!buffer) {
             VTDecompressionSessionFinishDelayedFrames(d.session);

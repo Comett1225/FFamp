@@ -70,7 +70,7 @@ TrackSpec specOf(const Track& t) {
 
 struct Copier {
     Mp4Reader& reader;
-    Mp4Writer& writer;
+    Writer& writer;
     const Track& track;
     int out;
     uint32_t next = 0;
@@ -226,7 +226,7 @@ int encode(const Args& args) {
     spec.bgra = bgra;
     auto encoder = VideoEncoder::open(spec, &error);
     if (!encoder) return fail(error);
-    auto writer = Mp4Writer::open(args.plain[0], &error);
+    auto writer = Writer::open(args.plain[0], &error);
     if (!writer) return fail(error);
 
     TrackSpec picture;
@@ -242,31 +242,63 @@ int encode(const Args& args) {
     int audioTrack = -1;
     int rate = int(args.number("rate", 48000)), channels = int(args.number("channels", 2));
     long soundFrames = 0;
+    int step = 1024;
+    bool opus = args.get("acodec", "aac") == "opus";
+#ifdef ABSENT_OPUS
+    std::unique_ptr<OpusEncoder> voice;
+#endif
     if (args.has("audio")) {
         audio = fopen(args.get("audio").c_str(), "rb");
         if (!audio) return fail("cannot open the raw audio");
-        aac = AacEncoder::open(rate, channels, int(args.number("abitrate", 160000)), &error);
-        if (!aac) return fail(error);
+        if (opus) {
+#ifdef ABSENT_OPUS
+            if (rate != 48000) return fail("Opus needs 48000 Hz input");
+            voice = OpusEncoder::open(channels, int(args.number("abitrate", 128000)), &error);
+            if (!voice) return fail(error);
+            step = 960;
+#else
+            return fail("built without Opus");
+#endif
+        } else {
+            aac = AacEncoder::open(rate, channels, int(args.number("abitrate", 160000)), &error);
+            if (!aac) return fail(error);
+        }
         fseeko(audio, 0, SEEK_END);
         soundFrames = long(ftello(audio) / off_t(channels * 2));
         fseeko(audio, 0, SEEK_SET);
         soundFrames = std::min(soundFrames, long(double(total) * den / num * rate + 0.5));
         TrackSpec sound;
         sound.kind = Kind::Audio;
-        sound.codec = fourcc("mp4a");
         sound.timescale = uint32_t(rate);
         sound.sampleRate = rate;
         sound.channels = channels;
-        sound.configType = fourcc("esds");
-        sound.config = aac->config();
-        sound.skip = aac->priming();
         sound.length = soundFrames;
+        if (aac) {
+            sound.codec = fourcc("mp4a");
+            sound.configType = fourcc("esds");
+            sound.config = aac->config();
+            sound.skip = aac->priming();
+        }
+#ifdef ABSENT_OPUS
+        if (voice) {
+            sound.codec = fourcc("Opus");
+            sound.configType = fourcc("OpHd");
+            sound.config = voice->config();
+            sound.skip = voice->priming();
+        }
+#endif
         audioTrack = writer->add(sound);
     }
+    auto sound = [&](const int16_t* pcm, size_t count, bool last, const AudioSink& sink) {
+#ifdef ABSENT_OPUS
+        if (voice) return last ? voice->finish(sink) : voice->encode(pcm, count, sink);
+#endif
+        return last ? aac->finish(sink) : aac->encode(pcm, count, sink);
+    };
 
     int64_t soundPackets = 0;
     AudioSink sink = [&](const uint8_t* data, size_t size) {
-        writer->write(audioTrack, data, size, soundPackets * 1024, soundPackets * 1024, 1024, true);
+        writer->write(audioTrack, data, size, soundPackets * step, soundPackets * step, uint32_t(step), true);
         ++soundPackets;
     };
     bool configured = false;
@@ -288,12 +320,12 @@ int encode(const Args& args) {
     for (long n = 0; n < total; ++n) {
         if (fread(raw.data(), 1, frameSize, video) != frameSize) return fail("raw video ended early");
         if (!(bgra ? encoder->encodeBGRA(raw.data(), n * den, den) : encoder->encodeI420(raw.data(), n * den, den))) return fail("the encoder refused a frame");
-        if (aac) {
+        if (audio) {
             long want = std::min(soundFrames, long(double(n + 1) * den / num * rate)) - soundDone;
             if (want > 0) {
                 pcm.resize(size_t(want) * channels);
                 size_t got = fread(pcm.data(), size_t(channels) * 2, size_t(want), audio);
-                if (!aac->encode(pcm.data(), got, sink)) return fail("the AAC encoder failed");
+                if (!sound(pcm.data(), got, false, sink)) return fail("the audio encoder failed");
                 soundDone += long(got);
             }
         }
@@ -301,7 +333,7 @@ int encode(const Args& args) {
     }
     if (!encoder->finish()) return fail("the encoder failed");
     drain();
-    if (aac && !aac->finish(sink)) return fail("the AAC encoder failed");
+    if (audio && !sound(nullptr, 0, true, sink)) return fail("the audio encoder failed");
     if (!writer->finish(&error)) return fail(error);
     double spent = now() - start;
     fprintf(stderr, "encoded %ld frames in %.3f s (%.1f fps)\n", total, spent, total / spent);
@@ -328,7 +360,7 @@ int transcode(const Args& args) {
     spec.hevc = hevc;
     auto encoder = VideoEncoder::open(spec, &error);
     if (!encoder) return fail(error);
-    auto writer = Mp4Writer::open(args.plain[1], &error);
+    auto writer = Writer::open(args.plain[1], &error);
     if (!writer) return fail(error);
     TrackSpec picture;
     picture.kind = Kind::Video;
@@ -376,7 +408,7 @@ int remux(const Args& args) {
     std::string error;
     auto reader = Mp4Reader::open(args.plain[0], &error);
     if (!reader) return fail(error);
-    auto writer = Mp4Writer::open(args.plain[1], &error);
+    auto writer = Writer::open(args.plain[1], &error);
     if (!writer) return fail(error);
     std::vector<Copier> copiers;
     for (const Track& t : reader->tracks()) {

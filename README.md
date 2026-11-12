@@ -9,9 +9,10 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 
 - MP4 and MOV reader: plain and fragmented files, H.264 and HEVC video, AAC audio, edit lists, rotation, colour tags.
 - MP4 writer: movie header in front (plays while downloading), B-frames, edit lists, gapless audio signalling.
+- Matroska and WebM writer with a seek index in front, codec delay and end trimming for audio.
 - H.264 and HEVC decoding through VideoToolbox, frames stay on the GPU (IOSurface, Metal-ready).
 - Frame-exact seeking to any frame.
-- H.264 and HEVC encoding through VideoToolbox, AAC through AudioToolbox.
+- H.264 and HEVC encoding through VideoToolbox, AAC through AudioToolbox, Opus through libopus when it is installed.
 - `amedia`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
 
 ## Build and test
@@ -28,6 +29,8 @@ is linked or copied.
     include/absent/media.h   the whole public interface
     src/mp4_read.cpp         ISO base media file reader (ISO/IEC 14496-12, 14496-14, 14496-15)
     src/mp4_write.cpp        ISO base media file writer
+    src/mkv_write.cpp        Matroska and WebM writer (RFC 8794, RFC 9559)
+    src/opus_encode.cpp      Opus through libopus (BSD), built only when the library is found
     src/mac/                 VideoToolbox and AudioToolbox back end
     tools/amedia.cpp         command-line tool
     tests/                   comparison against FFmpeg and against AVFoundation

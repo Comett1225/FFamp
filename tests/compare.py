@@ -113,6 +113,20 @@ def cli_seek(path, count, seed):
     return True
 
 
+def file_seek(path, index):
+    width, height = size_of(path)
+    frame = width * height * 3 // 2
+    ref = reference(path)
+    truth = None
+    for n in range(index + 1):
+        truth = read(ref.stdout, frame)
+    ref.kill()
+    got = subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-ss", f"{index / 30:.6f}", "-noautorotate", "-i", path, "-map", "0:v:0", "-frames:v", "1",
+                          "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], capture_output=True).stdout
+    print(f"file seek {os.path.basename(path)}: frame {index} after a seek is {'identical' if got == truth else 'different'}")
+    return truth is not None and got == truth
+
+
 def audio(path, source, rate, channels):
     out = subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-i", path, "-map", "0:a:0", "-f", "s16le", "-ar", str(rate), "-ac", str(channels), "-"],
                          capture_output=True, check=True).stdout
@@ -135,6 +149,8 @@ if __name__ == "__main__":
         ok = seek(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]) if len(sys.argv) > 4 else 1)
     elif kind == "cliseek":
         ok = cli_seek(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]) if len(sys.argv) > 4 else 1)
+    elif kind == "fileseek":
+        ok = file_seek(sys.argv[2], int(sys.argv[3]))
     elif kind == "audio":
         ok = audio(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
     else:

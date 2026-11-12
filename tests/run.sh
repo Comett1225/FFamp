@@ -54,6 +54,19 @@ for c in h264 hevc; do
     check "enc_$c.mp4 has 300 frames" [ "$("$FFPROBE" -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of csv=p=0 $O/enc_$c.mp4 | tr -d ,)" = 300 ]
 done
 
+echo "== Matroska: our writer, Opus through libopus when it is installed"
+if $A encode $O/enc_opus.mkv --video $O/raw_1080.yuv --size 1920x1080 --fps 30 --codec h264 --bitrate 8000000 --audio $O/pcm.raw --acodec opus 2> /dev/null; then
+    check "enc_opus.mkv has no ffprobe or decode errors" clean $O/enc_opus.mkv
+    check "enc_opus.mkv audio matches the source" python3 compare.py audio $O/enc_opus.mkv $O/pcm.raw 48000 2
+    check "enc_opus.mkv seeks to an exact frame" python3 compare.py fileseek $O/enc_opus.mkv 225
+else
+    echo "SKIP  Opus (libopus not found when building)"
+fi
+$A encode $O/enc_aac.mkv --video $O/raw_1080.yuv --size 1920x1080 --fps 30 --codec hevc --bitrate 6000000 --audio $O/pcm.raw
+check "enc_aac.mkv has no ffprobe or decode errors" clean $O/enc_aac.mkv
+check "enc_aac.mkv audio matches the source" python3 compare.py audio $O/enc_aac.mkv $O/pcm.raw 48000 2
+check "enc_aac.mkv seeks to an exact frame" python3 compare.py fileseek $O/enc_aac.mkv 225
+
 echo "== stream copy and compress"
 for f in h264_720 hevc_720; do
     $A remux $O/$f.mp4 $O/remux_$f.mp4

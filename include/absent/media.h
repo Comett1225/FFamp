@@ -84,17 +84,42 @@ struct TrackSpec {
     int64_t length = 0;
 };
 
-class Mp4Writer {
+class Writer {
+public:
+    static std::unique_ptr<Writer> open(const std::string& path, std::string* error = nullptr);
+    virtual ~Writer() = default;
+    virtual int add(const TrackSpec& spec) = 0;
+    virtual void configure(int track, uint32_t type, const std::vector<uint8_t>& config) = 0;
+    virtual bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) = 0;
+    virtual bool finish(std::string* error = nullptr) = 0;
+};
+
+class Mp4Writer : public Writer {
 public:
     static std::unique_ptr<Mp4Writer> open(const std::string& path, std::string* error = nullptr);
-    ~Mp4Writer();
-    int add(const TrackSpec& spec);
-    void configure(int track, uint32_t type, const std::vector<uint8_t>& config);
-    bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync);
-    bool finish(std::string* error = nullptr);
+    ~Mp4Writer() override;
+    int add(const TrackSpec& spec) override;
+    void configure(int track, uint32_t type, const std::vector<uint8_t>& config) override;
+    bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) override;
+    bool finish(std::string* error = nullptr) override;
 
 private:
     Mp4Writer();
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
+
+class MkvWriter : public Writer {
+public:
+    static std::unique_ptr<MkvWriter> open(const std::string& path, std::string* error = nullptr);
+    ~MkvWriter() override;
+    int add(const TrackSpec& spec) override;
+    void configure(int track, uint32_t type, const std::vector<uint8_t>& config) override;
+    bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) override;
+    bool finish(std::string* error = nullptr) override;
+
+private:
+    MkvWriter();
     struct Impl;
     std::unique_ptr<Impl> impl;
 };
@@ -164,6 +189,21 @@ private:
 };
 
 using AudioSink = std::function<void(const uint8_t* data, size_t size)>;
+
+class OpusEncoder {
+public:
+    static std::unique_ptr<OpusEncoder> open(int channels, int bitrate, std::string* error = nullptr);
+    ~OpusEncoder();
+    bool encode(const int16_t* pcm, size_t frames, const AudioSink& sink);
+    bool finish(const AudioSink& sink);
+    std::vector<uint8_t> config() const;
+    int priming() const;
+
+private:
+    OpusEncoder();
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+};
 
 class AacEncoder {
 public:

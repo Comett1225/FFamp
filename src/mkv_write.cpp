@@ -1,0 +1,389 @@
+#include "absent/media.h"
+#include "bytes.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+namespace absent {
+
+namespace {
+
+const uint32_t kEbml = 0x1A45DFA3, kSegment = 0x18538067, kSeekHead = 0x114D9B74, kSeek = 0x4DBB, kSeekId = 0x53AB, kSeekPosition = 0x53AC;
+const uint32_t kInfo = 0x1549A966, kTimestampScale = 0x2AD7B1, kDuration = 0x4489, kMuxingApp = 0x4D80, kWritingApp = 0x5741;
+const uint32_t kTracks = 0x1654AE6B, kTrackEntry = 0xAE, kTrackNumber = 0xD7, kTrackUid = 0x73C5, kTrackType = 0x83, kFlagLacing = 0x9C;
+const uint32_t kCodecId = 0x86, kCodecPrivate = 0x63A2, kCodecDelay = 0x56AA, kSeekPreRoll = 0x56BB;
+const uint32_t kVideo = 0xE0, kPixelWidth = 0xB0, kPixelHeight = 0xBA, kAudio = 0xE1, kSamplingFrequency = 0xB5, kChannels = 0x9F;
+const uint32_t kCluster = 0x1F43B675, kTimestamp = 0xE7, kSimpleBlock = 0xA3, kBlockGroup = 0xA0, kBlock = 0xA1, kDiscardPadding = 0x75A2;
+const uint32_t kCues = 0x1C53BB6B, kCuePoint = 0xBB, kCueTime = 0xB3, kCueTrackPositions = 0xB7, kCueTrack = 0xF7, kCueClusterPosition = 0xF1;
+
+void id(Bytes& b, uint32_t value) {
+    if (value > 0xFFFFFF) b.u32(value);
+    else if (value > 0xFFFF) b.u24(value);
+    else if (value > 0xFF) b.u16(value);
+    else b.u8(value);
+}
+
+void length(Bytes& b, uint64_t n) {
+    if (n < 127) {
+        b.u8(0x80 | uint32_t(n));
+    } else if (n < 16383) {
+        b.u16(0x4000 | uint32_t(n));
+    } else {
+        b.u8(0x01);
+        b.u24(uint32_t(n >> 32));
+        b.u32(uint32_t(n));
+    }
+}
+
+size_t start(Bytes& b, uint32_t element) {
+    id(b, element);
+    size_t at = b.d.size();
+    b.zero(8);
+    return at;
+}
+
+void stop(Bytes& b, size_t at) {
+    uint64_t n = b.d.size() - at - 8;
+    b.d[at] = 0x01;
+    for (int i = 1; i < 8; ++i) b.d[at + i] = uint8_t(n >> (8 * (7 - i)));
+}
+
+void number(Bytes& b, uint32_t element, uint64_t value) {
+    id(b, element);
+    int bytes = 1;
+    while (bytes < 8 && (value >> (8 * bytes))) ++bytes;
+    b.u8(0x80 | bytes);
+    for (int i = bytes - 1; i >= 0; --i) b.u8(uint32_t(value >> (8 * i)));
+}
+
+void wide(Bytes& b, uint32_t element, uint64_t value) {
+    id(b, element);
+    b.u8(0x88);
+    b.u64(value);
+}
+
+void real(Bytes& b, uint32_t element, double value) {
+    uint64_t bits;
+    memcpy(&bits, &value, 8);
+    wide(b, element, bits);
+}
+
+void binary(Bytes& b, uint32_t element, const void* data, size_t size) {
+    id(b, element);
+    length(b, size);
+    b.raw(data, size);
+}
+
+void text(Bytes& b, uint32_t element, const char* value) { binary(b, element, value, strlen(value)); }
+
+std::vector<uint8_t> audioConfig(const std::vector<uint8_t>& esds) {
+    View v{esds.data(), esds.size()};
+    v.skip(4);
+    while (v.left() >= 2) {
+        uint8_t tag = v.u8();
+        uint32_t size = 0;
+        for (int i = 0; i < 4; ++i) {
+            uint8_t c = v.u8();
+            size = (size << 7) | (c & 0x7F);
+            if (!(c & 0x80)) break;
+        }
+        if (tag == 0x03) v.skip(3);
+        else if (tag == 0x04) v.skip(13);
+        else if (tag == 0x05) {
+            View body = v.sub(size);
+            return body.ok ? std::vector<uint8_t>(body.p, body.p + body.n) : std::vector<uint8_t>();
+        } else v.skip(size);
+    }
+    return {};
+}
+
+struct Held {
+    std::vector<uint8_t> data;
+    int64_t time = 0;
+    bool any = false;
+};
+
+struct Out {
+    TrackSpec spec;
+    Held held;
+    int64_t decoded = 0;
+    int64_t end = 0;
+    bool trims = false;
+};
+
+struct Cue {
+    int64_t time;
+    int track;
+    uint64_t offset;
+};
+
+}
+
+struct MkvWriter::Impl {
+    std::string path;
+    std::string temp;
+    FILE* data = nullptr;
+    uint64_t size = 0;
+    std::vector<Out> tracks;
+    std::vector<Cue> cues;
+    Bytes cluster;
+    int64_t clusterTime = 0;
+    bool clusterOpen = false;
+    bool failed = false;
+    bool webm = false;
+
+    ~Impl() {
+        if (data) {
+            fclose(data);
+            remove(temp.c_str());
+        }
+    }
+
+    void flush() {
+        if (!clusterOpen) return;
+        Bytes head;
+        id(head, kCluster);
+        Bytes time;
+        number(time, kTimestamp, uint64_t(clusterTime));
+        uint64_t n = time.d.size() + cluster.d.size();
+        head.u8(0x01);
+        head.u24(uint32_t(n >> 32));
+        head.u32(uint32_t(n));
+        head.raw(time.d.data(), time.d.size());
+        if (fwrite(head.d.data(), 1, head.d.size(), data) != head.d.size() || fwrite(cluster.d.data(), 1, cluster.d.size(), data) != cluster.d.size()) failed = true;
+        size += head.d.size() + cluster.d.size();
+        cluster.d.clear();
+        clusterOpen = false;
+    }
+
+    void block(int track, const uint8_t* bytes, size_t count, int64_t time, bool key, int64_t discard) {
+        const bool video = tracks[track].spec.kind == Kind::Video;
+        const bool lead = video || std::none_of(tracks.begin(), tracks.end(), [](const Out& t) { return t.spec.kind == Kind::Video; });
+        if (clusterOpen && ((video && key) || time - clusterTime > 30000 || time - clusterTime < -30000 || cluster.d.size() > (4u << 20) || (lead && !video && time - clusterTime >= 2000))) flush();
+        if (!clusterOpen) {
+            clusterOpen = true;
+            clusterTime = std::max<int64_t>(time, 0);
+            if (lead && key) cues.push_back({clusterTime, track, size});
+        }
+        Bytes body;
+        body.u8(0x80 | uint32_t(track + 1));
+        body.u16(uint32_t(int16_t(time - clusterTime)));
+        body.u8(key && discard == 0 ? 0x80 : 0);
+        if (discard) {
+            size_t group = start(cluster, kBlockGroup);
+            id(cluster, kBlock);
+            length(cluster, body.d.size() + count);
+            cluster.raw(body.d.data(), body.d.size());
+            cluster.raw(bytes, count);
+            id(cluster, kDiscardPadding);
+            cluster.u8(0x88);
+            cluster.u64(uint64_t(discard));
+            stop(cluster, group);
+        } else {
+            id(cluster, kSimpleBlock);
+            length(cluster, body.d.size() + count);
+            cluster.raw(body.d.data(), body.d.size());
+            cluster.raw(bytes, count);
+        }
+    }
+};
+
+MkvWriter::MkvWriter() : impl(new Impl) {}
+MkvWriter::~MkvWriter() = default;
+
+std::unique_ptr<MkvWriter> MkvWriter::open(const std::string& path, std::string* error) {
+    std::unique_ptr<MkvWriter> writer(new MkvWriter);
+    writer->impl->path = path;
+    writer->impl->temp = path + ".part";
+    writer->impl->webm = path.size() > 5 && path.compare(path.size() - 5, 5, ".webm") == 0;
+    writer->impl->data = fopen(writer->impl->temp.c_str(), "wb+");
+    if (!writer->impl->data) {
+        if (error) *error = "cannot create output file";
+        return nullptr;
+    }
+    return writer;
+}
+
+int MkvWriter::add(const TrackSpec& spec) {
+    Out out;
+    out.spec = spec;
+    out.trims = spec.kind == Kind::Audio && (spec.skip > 0 || spec.length > 0);
+    impl->tracks.push_back(std::move(out));
+    return int(impl->tracks.size()) - 1;
+}
+
+void MkvWriter::configure(int track, uint32_t type, const std::vector<uint8_t>& config) {
+    if (track < 0 || track >= int(impl->tracks.size())) return;
+    impl->tracks[track].spec.configType = type;
+    impl->tracks[track].spec.config = config;
+}
+
+bool MkvWriter::write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t, uint32_t duration, bool sync) {
+    if (track < 0 || track >= int(impl->tracks.size()) || impl->failed) return false;
+    Out& t = impl->tracks[track];
+    if (!t.spec.timescale) return false;
+    int64_t time = std::max<int64_t>(0, std::llround(double(pts) * 1000.0 / t.spec.timescale));
+    t.decoded += duration;
+    t.end = std::max<int64_t>(t.end, std::llround(double(pts + duration) * 1000.0 / t.spec.timescale));
+    if (t.trims) {
+        if (t.held.any) impl->block(track, t.held.data.data(), t.held.data.size(), t.held.time, true, 0);
+        t.held.data.assign(data, data + size);
+        t.held.time = time;
+        t.held.any = true;
+    } else {
+        impl->block(track, data, size, time, t.spec.kind == Kind::Audio || sync, 0);
+    }
+    return !impl->failed;
+}
+
+bool MkvWriter::finish(std::string* error) {
+    auto fail = [&](const char* text) {
+        if (error) *error = text;
+        return false;
+    };
+    Impl& m = *impl;
+    if (m.failed || !m.data) return fail("writing sample data failed");
+    double duration = 0;
+    for (size_t i = 0; i < m.tracks.size(); ++i) {
+        Out& t = m.tracks[i];
+        double shown = double(t.end);
+        if (t.trims && t.held.any) {
+            int64_t extra = t.spec.length > 0 ? t.decoded - t.spec.skip - t.spec.length : 0;
+            int64_t discard = extra > 0 ? std::llround(double(extra) * 1e9 / t.spec.timescale) : 0;
+            m.block(int(i), t.held.data.data(), t.held.data.size(), t.held.time, true, discard);
+            if (t.spec.length > 0) shown = double(t.spec.length) * 1000.0 / t.spec.timescale;
+        }
+        duration = std::max(duration, shown);
+    }
+    m.flush();
+    if (m.failed) return fail("writing sample data failed");
+
+    Bytes info;
+    size_t at = start(info, kInfo);
+    number(info, kTimestampScale, 1000000);
+    text(info, kMuxingApp, "absent-media");
+    text(info, kWritingApp, "absent-media");
+    real(info, kDuration, duration);
+    stop(info, at);
+
+    Bytes tracks;
+    at = start(tracks, kTracks);
+    for (size_t i = 0; i < m.tracks.size(); ++i) {
+        const TrackSpec& spec = m.tracks[i].spec;
+        std::vector<uint8_t> secret = spec.config;
+        const char* codec = nullptr;
+        if (spec.configType == fourcc("avcC")) codec = "V_MPEG4/ISO/AVC";
+        else if (spec.configType == fourcc("hvcC")) codec = "V_MPEGH/ISO/HEVC";
+        else if (spec.configType == fourcc("OpHd")) codec = "A_OPUS";
+        else if (spec.configType == fourcc("esds")) {
+            codec = "A_AAC";
+            secret = audioConfig(spec.config);
+        }
+        if (!codec || secret.empty()) return fail("a track cannot be stored in Matroska");
+        size_t entry = start(tracks, kTrackEntry);
+        number(tracks, kTrackNumber, i + 1);
+        number(tracks, kTrackUid, i + 1);
+        number(tracks, kTrackType, spec.kind == Kind::Video ? 1 : 2);
+        number(tracks, kFlagLacing, 0);
+        text(tracks, kCodecId, codec);
+        binary(tracks, kCodecPrivate, secret.data(), secret.size());
+        if (spec.kind == Kind::Video) {
+            size_t video = start(tracks, kVideo);
+            number(tracks, kPixelWidth, uint64_t(spec.width));
+            number(tracks, kPixelHeight, uint64_t(spec.height));
+            stop(tracks, video);
+        } else {
+            if (spec.skip > 0) number(tracks, kCodecDelay, uint64_t(std::llround(double(spec.skip) * 1e9 / spec.timescale)));
+            if (spec.configType == fourcc("OpHd")) number(tracks, kSeekPreRoll, 80000000);
+            size_t audio = start(tracks, kAudio);
+            real(tracks, kSamplingFrequency, spec.sampleRate);
+            number(tracks, kChannels, uint64_t(spec.channels));
+            stop(tracks, audio);
+        }
+        stop(tracks, entry);
+    }
+    stop(tracks, at);
+
+    auto cueBytes = [&](uint64_t base) {
+        Bytes cues;
+        size_t all = start(cues, kCues);
+        for (const Cue& cue : m.cues) {
+            size_t point = start(cues, kCuePoint);
+            number(cues, kCueTime, uint64_t(cue.time));
+            size_t where = start(cues, kCueTrackPositions);
+            number(cues, kCueTrack, uint64_t(cue.track + 1));
+            wide(cues, kCueClusterPosition, base + cue.offset);
+            stop(cues, where);
+            stop(cues, point);
+        }
+        stop(cues, all);
+        return cues;
+    };
+    const uint64_t seekSize = 4 + 1 + 3 * 21;
+    Bytes probe = cueBytes(0);
+    uint64_t infoAt = seekSize, tracksAt = infoAt + info.d.size(), cuesAt = tracksAt + tracks.d.size(), clustersAt = cuesAt + probe.d.size();
+    Bytes cues = cueBytes(clustersAt);
+
+    Bytes head;
+    at = start(head, kEbml);
+    number(head, 0x4286, 1);
+    number(head, 0x42F7, 1);
+    number(head, 0x42F2, 4);
+    number(head, 0x42F3, 8);
+    text(head, 0x4282, m.webm ? "webm" : "matroska");
+    number(head, 0x4287, 4);
+    number(head, 0x4285, 2);
+    stop(head, at);
+    id(head, kSegment);
+    uint64_t total = clustersAt + m.size;
+    head.u8(0x01);
+    head.u24(uint32_t(total >> 32));
+    head.u32(uint32_t(total));
+    id(head, kSeekHead);
+    length(head, 3 * 21);
+    const std::pair<uint32_t, uint64_t> entries[3] = {{kInfo, infoAt}, {kTracks, tracksAt}, {kCues, cuesAt}};
+    for (const auto& [element, position] : entries) {
+        id(head, kSeek);
+        length(head, 18);
+        id(head, kSeekId);
+        length(head, 4);
+        head.u32(element);
+        wide(head, kSeekPosition, position);
+    }
+
+    FILE* out = fopen(m.path.c_str(), "wb");
+    if (!out) return fail("cannot create output file");
+    bool ok = true;
+    for (const Bytes* part : {&head, &info, &tracks, &cues}) ok = ok && fwrite(part->d.data(), 1, part->d.size(), out) == part->d.size();
+    std::vector<uint8_t> chunk(1 << 20);
+    fflush(m.data);
+    fseeko(m.data, 0, SEEK_SET);
+    uint64_t left = m.size;
+    while (ok && left) {
+        size_t want = size_t(std::min<uint64_t>(left, chunk.size()));
+        size_t got = fread(chunk.data(), 1, want, m.data);
+        ok = got == want && fwrite(chunk.data(), 1, got, out) == got;
+        left -= got;
+    }
+    ok = fclose(out) == 0 && ok;
+    fclose(m.data);
+    m.data = nullptr;
+    remove(m.temp.c_str());
+    if (!ok) {
+        remove(m.path.c_str());
+        return fail("writing the output file failed");
+    }
+    return true;
+}
+
+std::unique_ptr<Writer> Writer::open(const std::string& path, std::string* error) {
+    auto ends = [&](const char* tail) {
+        size_t n = strlen(tail);
+        return path.size() > n && path.compare(path.size() - n, n, tail) == 0;
+    };
+    if (ends(".mkv") || ends(".webm") || ends(".mka")) return MkvWriter::open(path, error);
+    return Mp4Writer::open(path, error);
+}
+
+}

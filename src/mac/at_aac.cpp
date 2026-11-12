@@ -93,6 +93,8 @@ std::unique_ptr<AacEncoder> AacEncoder::open(int rate, int channels, int bitrate
     to.mChannelsPerFrame = UInt32(channels);
     to.mFramesPerPacket = 1024;
     if (AudioConverterNew(&from, &to, &a.converter) != noErr) return fail("the system AAC encoder is not available");
+    UInt32 control = kAudioCodecBitRateControlMode_Constant;
+    AudioConverterSetProperty(a.converter, kAudioCodecPropertyBitRateControlMode, sizeof(control), &control);
     UInt32 rateValue = UInt32(bitrate);
     AudioConverterSetProperty(a.converter, kAudioConverterEncodeBitRate, sizeof(rateValue), &rateValue);
     UInt32 largest = 0;

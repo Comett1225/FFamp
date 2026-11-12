@@ -203,13 +203,18 @@ int encode(const Args& args) {
     long num = 30, den = 1;
     std::string fps = args.get("fps", "30");
     if (sscanf(fps.c_str(), "%ld/%ld", &num, &den) < 1 || num <= 0 || den <= 0) return fail("bad --fps");
-    FILE* video = fopen(args.get("video").c_str(), "rb");
+    FILE* video = args.get("video") == "-" ? stdin : fopen(args.get("video").c_str(), "rb");
     if (!video) return fail("cannot open the raw video");
-    bool bgra = args.get("format", "i420") == "bgra";
+    bool redFirst = args.get("format", "i420") == "rgb0";
+    bool bgra = redFirst || args.get("format", "i420") == "bgra";
+    bool piped = args.get("video") == "-";
     size_t frameSize = bgra ? size_t(width) * height * 4 : size_t(width) * height + 2 * size_t((width + 1) / 2) * ((height + 1) / 2);
-    fseeko(video, 0, SEEK_END);
-    long available = long(ftello(video) / off_t(frameSize));
-    fseeko(video, 0, SEEK_SET);
+    long available = 0x7FFFFFFF;
+    if (!piped) {
+        fseeko(video, 0, SEEK_END);
+        available = long(ftello(video) / off_t(frameSize));
+        fseeko(video, 0, SEEK_SET);
+    }
     long total = std::min(available, args.number("frames", available));
     bool hevc = args.get("codec", "h264") == "hevc";
 
@@ -266,7 +271,7 @@ int encode(const Args& args) {
         fseeko(audio, 0, SEEK_END);
         soundFrames = long(ftello(audio) / off_t(channels * 2));
         fseeko(audio, 0, SEEK_SET);
-        soundFrames = std::min(soundFrames, long(double(total) * den / num * rate + 0.5));
+        if (!piped) soundFrames = std::min(soundFrames, long(double(total) * den / num * rate + 0.5));
         TrackSpec sound;
         sound.kind = Kind::Audio;
         sound.timescale = uint32_t(rate);
@@ -317,9 +322,20 @@ int encode(const Args& args) {
     std::vector<int16_t> pcm;
     long soundDone = 0;
     double start = now();
+    long done = 0;
     for (long n = 0; n < total; ++n) {
-        if (fread(raw.data(), 1, frameSize, video) != frameSize) return fail("raw video ended early");
-        if (!(bgra ? encoder->encodeBGRA(raw.data(), n * den, den) : encoder->encodeI420(raw.data(), n * den, den))) return fail("the encoder refused a frame");
+        size_t got = 0;
+        while (got < frameSize) {
+            size_t more = fread(raw.data() + got, 1, frameSize - got, video);
+            if (!more) break;
+            got += more;
+        }
+        if (got != frameSize) {
+            if (piped && got == 0) break;
+            return fail("raw video ended early");
+        }
+        ++done;
+        if (!(bgra ? encoder->encodeBGRA(raw.data(), n * den, den, redFirst) : encoder->encodeI420(raw.data(), n * den, den))) return fail("the encoder refused a frame");
         if (audio) {
             long want = std::min(soundFrames, long(double(n + 1) * den / num * rate)) - soundDone;
             if (want > 0) {
@@ -333,6 +349,15 @@ int encode(const Args& args) {
     }
     if (!encoder->finish()) return fail("the encoder failed");
     drain();
+    total = done;
+    while (audio && soundDone < soundFrames) {
+        long want = std::min<long>(soundFrames - soundDone, rate);
+        pcm.resize(size_t(want) * channels);
+        size_t got = fread(pcm.data(), size_t(channels) * 2, size_t(want), audio);
+        if (!got) break;
+        if (!sound(pcm.data(), got, false, sink)) return fail("the audio encoder failed");
+        soundDone += long(got);
+    }
     if (audio && !sound(nullptr, 0, true, sink)) return fail("the audio encoder failed");
     if (!writer->finish(&error)) return fail(error);
     double spent = now() - start;

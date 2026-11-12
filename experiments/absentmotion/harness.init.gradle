@@ -1,0 +1,12 @@
+allprojects {
+    afterEvaluate { p ->
+        def extra = System.getenv("FM_HARNESS")
+        if (extra != null && p.tasks.findByName("test") != null && p.extensions.findByName("sourceSets") != null) {
+            p.sourceSets.test.kotlin.srcDir(extra)
+            p.tasks.named("test") {
+                outputs.upToDateWhen { false }
+                testLogging { showStandardStreams = true }
+            }
+        }
+    }
+}

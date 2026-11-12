@@ -165,7 +165,7 @@ bool VideoEncoder::encodeI420(const uint8_t* data, int64_t pts, int64_t duration
     return ok;
 }
 
-bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration) {
+bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration, bool redFirst) {
     Impl& e = *impl;
     CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(e.session);
     CVPixelBufferRef buffer = nullptr;
@@ -173,7 +173,20 @@ bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration
     CVPixelBufferLockBaseAddress(buffer, 0);
     uint8_t* pixels = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(buffer));
     const size_t stride = CVPixelBufferGetBytesPerRow(buffer), row = size_t(e.spec.width) * 4;
-    for (int y = 0; y < e.spec.height; ++y) memcpy(pixels + y * stride, data + y * row, row);
+    for (int y = 0; y < e.spec.height; ++y) {
+        const uint8_t* from = data + y * row;
+        uint8_t* to = pixels + y * stride;
+        if (!redFirst) {
+            memcpy(to, from, row);
+            continue;
+        }
+        for (size_t x = 0; x < row; x += 4) {
+            to[x] = from[x + 2];
+            to[x + 1] = from[x + 1];
+            to[x + 2] = from[x];
+            to[x + 3] = 255;
+        }
+    }
     CVPixelBufferUnlockBaseAddress(buffer, 0);
     bool ok = e.submit(buffer, pts, duration);
     CFRelease(buffer);

@@ -146,6 +146,9 @@ list; `Sample.offset` is then free for the reader's use.
   `msmpeg4v3`, from ASF and AVI. Until their codec rounds land, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio
   2) is not decoded yet` and `VideoDecoder::open` with `this video codec (Windows Media Video 8) is not decoded yet` (each with its own
   name). `WMV3`, `WVC1` and `WMVA` decode (VC-1 section below).
+  `msmpeg4v3`, from ASF, AVI and (sound) Matroska. Windows Media Audio 1 and 2 decode (next sections); until their codec rounds land,
+  `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9 Professional) is not decoded yet` and `VideoDecoder::open`
+  with `this video codec (Windows Media Video 9) is not decoded yet` (each with its own name).
 - H.263 and Motion JPEG in ASF get their FFamp codes (`h263`, `jpeg`) and decode. Other sound tags keep a track named by the tag in
   hex (`0130`), other video fourccs a track named by the fourcc.
 
@@ -224,3 +227,46 @@ list; `Sample.offset` is then free for the reader's use.
   shows the nearest earlier picture as FFmpeg's concealment does; a jump destroys the decoder state and starts again at a key frame.
 - Frame buffers come from a small pool owned by the decoder: a picture handed to the sink stays valid until the next `decode`.
 
+## Audio framework for the Windows Media family (`src/bits.h`, `src/vlc.h`, `src/mdct.h`, `src/wma.h`)
+
+- `BitReader`: most significant bit first, `read(n)` for 0 to 32 bits, `peek`, `skip`, `align`, `left` (may go negative). Reading past
+  the end gives zero bits and never touches memory outside the buffer; a third constructor argument limits the stated length in bits
+  while the bytes behind it stay readable (the bit reservoir).
+- `Vlc`: lookup tables of any depth (`rootBits` per level, longer codes in sub-tables). `build` takes lengths and codes (value
+  right-aligned, length 0 = unused) and optional symbols; `buildInOrder` assigns codes in the order given from lengths alone (the
+  canonical order FFmpeg's tables are stored in). `read` returns the symbol, or -1 for a code that is not in the table.
+- `InverseMdct(bits, scale)`: N = 2^bits coefficients; `half` gives the N middle samples, `full` all 2N, scaled by `scale` (a negative
+  scale flips the sign as FFmpeg's does). Portable C++ (radix-2 FFT over split real and imaginary arrays); one instance per decoder,
+  not shared between threads. `sineWindow(bits)` is the rising half of a sine window of 2^bits values (bits 5 to 13).
+- `wma::frameLengthBits(rate, version, flags)` (versions 1 to 3, the Pro flags included), `wma::largeValue`, `wma::runLevel` (the
+  run-level coefficient coder of WMA 1/2 and Pro, both escape versions) and the tables of `src/wma_tables.cpp`.
+- `PacketDecoder` (src/audio_codec.h) gained what the WMA decoders need from `AudioDecoder`:
+  - `counts(reader, track, frames)`: the exact number of frames each packet decodes to (the last packet includes what `finish` gives).
+    `AudioDecoder` then places packet `i` at the first packet's time plus the frames before it; container times after the first are
+    not used, so millisecond times (ASF, Matroska) do not move the sound.
+  - `skip`: frames at the start of the stream that FFmpeg's decoder hides (its decoder delay). `AudioDecoder` plays them as silence,
+    so sample `k` of the output stays at the track's start plus `k` and the rest equals FFmpeg's output. A container that states its
+    own start skip (`mediaStart` after the first packet, as Matroska's CodecDelay) replaces it, as in FFmpeg.
+  - `save` / `load`: the bitstream state that a restart a few packets back cannot rebuild (for WMA the noise generator's position,
+    the bit reservoir and the block sizes). `AudioDecoder` keeps one mark per 20-second run, taken while decoding passes it; a jump to
+    a run with no mark loads the nearest earlier one and brings the decoder forward with `skim`.
+  - `skim(packet)`: advance the state through a packet without making sound (WMA parses the packet and moves the noise generator but
+    skips the transforms).
+
+## Windows Media Audio 1 and 2 (`wma1`, `wma2`, `src/wma_decode.cpp`)
+
+- Sources: ASF (`wfex`, one sample per media object), AVI (`wfex` from `strf`, one sample per chunk, timescale = sample rate, times from
+  the byte position and the average bytes per second) and Matroska (`A_MS/ACM`, the CodecPrivate WAVEFORMATEX as `wfex`; WAVEFORMATEXTENSIBLE
+  is followed to its sub-format).
+- Based on FFmpeg's decoder (`docs/NOTICE.md`) and checked against it: float output, mono or stereo, 1 to 50,000 Hz, frames of 512,
+  1024 or 2048 samples, every block size, variable block lengths, bit reservoir across superframes, LSP and VLC exponents, noise
+  coding, mid/side stereo. Each packet is cut into `block_align` superframes; a shorter remainder is dropped, as in FFmpeg.
+- Frame counts: without the bit reservoir one frame per superframe; with it the count in each superframe's header (the first
+  superframe of the stream one fewer). `AudioDecoder` therefore reads every packet once when a reservoir stream is opened. The last
+  packet adds the final overlap (FFmpeg's end flush), so lengths equal FFmpeg's to the sample.
+- Start: the first two frames are silent (FFmpeg hides them); with a Matroska CodecDelay only that is hidden, as in FFmpeg.
+- Jumps restart the decoder three packets and at least two frames early; noise-coded streams also load a mark (see above), so every
+  read equals the straight decode bit for bit. A packet that fails to decode is silence of its own length.
+- On purpose unlike FFmpeg: a superframe whose header ends no frame (count 0) is added to the reservoir by its length in bytes
+  (FFmpeg adds eight times the length and loses the frame that continues there), and the first superframe after a restart that ends
+  no frame keeps its tail for the next one. Neither occurs in the sample files.

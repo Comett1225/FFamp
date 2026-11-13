@@ -1,6 +1,7 @@
 #include "soft_video.h"
 #include "vc1.h"
 #include <cstring>
+#include <thread>
 
 namespace absent {
 
@@ -210,6 +211,101 @@ bool Vc1::start(const uint8_t* config, size_t size, bool wmv3, int w, int h) {
     return codedWidth > 0 && codedHeight > 0 && codedWidth <= 4096 && codedHeight <= 4096;
 }
 
+namespace {
+
+template <typename P, typename V>
+void rebase(P*& pointer, const V& from, V& to) {
+    if (!pointer) return;
+    const auto offset = reinterpret_cast<const uint8_t*>(pointer) - reinterpret_cast<const uint8_t*>(from.data());
+    pointer = reinterpret_cast<P*>(reinterpret_cast<uint8_t*>(to.data()) + offset);
+}
+
+template <typename P, typename V>
+bool inside(const P* pointer, const V& vector) {
+    const auto* at = reinterpret_cast<const uint8_t*>(pointer);
+    const auto* begin = reinterpret_cast<const uint8_t*>(vector.data());
+    return at >= begin && at < begin + vector.size() * sizeof(vector[0]);
+}
+
+}
+
+void Vc1::copyFrom(const Vc1& o) {
+    *this = o;
+    pool.clear();
+    rebase(dcVal, o.dcValMemory, dcValMemory);
+    rebase(acVal, o.acValMemory, acValMemory);
+    rebase(codedBlock, o.codedBlockMemory, codedBlockMemory);
+    rebase(mbskipTable, o.mbskipMemory, mbskipMemory);
+    rebase(mvTypeMbPlane, o.planes, planes);
+    rebase(directMbPlane, o.planes, planes);
+    rebase(forwardMbPlane, o.planes, planes);
+    rebase(fieldtxPlane, o.planes, planes);
+    rebase(acpredPlane, o.planes, planes);
+    rebase(overFlagsPlane, o.planes, planes);
+    rebase(block, o.blockMemory, blockMemory);
+    rebase(cbpBase, o.cbpMemory, cbpMemory);
+    rebase(cbp, o.cbpMemory, cbpMemory);
+    rebase(ttblkBase, o.ttblkMemory, ttblkMemory);
+    rebase(ttblk, o.ttblkMemory, ttblkMemory);
+    rebase(isIntraBase, o.isIntraMemory, isIntraMemory);
+    rebase(isIntra, o.isIntraMemory, isIntraMemory);
+    rebase(lumaMvBase, o.lumaMvMemory, lumaMvMemory);
+    rebase(lumaMv, o.lumaMvMemory, lumaMvMemory);
+    rebase(mbType, o.mbTypeMemory, mbTypeMemory);
+    rebase(blkMvType, o.blkMvTypeMemory, blkMvTypeMemory);
+    for (uint8_t** list : {mvF, mvFNext}) {
+        for (int i = 0; i < 2; i++) {
+            if (inside(list[i], o.mvFMemory)) rebase(list[i], o.mvFMemory, mvFMemory);
+            else rebase(list[i], o.mvFNextMemory, mvFNextMemory);
+        }
+    }
+    auto lut = [&](uint8_t (*pointer)[256], uint8_t (*mine[3])[256], const uint8_t (*theirs[3])[256]) -> uint8_t (*)[256] {
+        for (int i = 0; i < 3; i++) {
+            if (pointer == theirs[i]) return mine[i];
+        }
+        return pointer;
+    };
+    uint8_t (*mineY[3])[256] = {lastLuty, nextLuty, auxLuty};
+    const uint8_t (*theirsY[3])[256] = {o.lastLuty, o.nextLuty, o.auxLuty};
+    uint8_t (*mineUv[3])[256] = {lastLutuv, nextLutuv, auxLutuv};
+    const uint8_t (*theirsUv[3])[256] = {o.lastLutuv, o.nextLutuv, o.auxLutuv};
+    currLuty = lut(currLuty, mineY, theirsY);
+    currLutuv = lut(currLutuv, mineUv, theirsUv);
+    currUseIc = o.currUseIc == &o.lastUseIc ? &lastUseIc : o.currUseIc == &o.nextUseIc ? &nextUseIc : &auxUseIc;
+}
+
+int Vc1::peekType(const uint8_t* data, size_t size) {
+    if (!size || size > (64u << 20)) return 0;
+    std::vector<uint8_t> head(Bits::kPadding + 64, 0);
+    if (profile == kProfileAdvanced) {
+        if (size >= 4 && (readBe32(data) & ~0xFFu) == 0x100) {
+            if (readBe32(data) != kCodeFrame) return 0;
+            data += 4;
+            size -= 4;
+        }
+        Bits bits;
+        bits.reset(head.data(), size_t(unescapeBuffer(data, int(std::min<size_t>(size, 64)), head.data())));
+        if (interlace && bits.decode012() == kIlaceField) return bits.bits(3) >= 4 ? kPictureB : kPictureI;
+        switch (bits.unary(0, 4)) {
+        case 1: return kPictureB;
+        case 3: return kPictureBI;
+        case 2: return kPictureI;
+        default: return kPictureP;
+        }
+    }
+    memcpy(head.data(), data, std::min<size_t>(size, 64));
+    Bits bits;
+    bits.reset(head.data(), std::min<size_t>(size, 64));
+    if (finterpflag) bits.skip(1);
+    bits.skip(2);
+    if (rangered) bits.skip(1);
+    if (bits.bit()) return kPictureP;
+    if (!maxBFrames || bits.bit()) return kPictureI;
+    int index = int(bits.bits(3));
+    if (index == 7) index = 7 + int(bits.bits(4));
+    return index == 22 ? kPictureBI : kPictureB;
+}
+
 bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
     struct Slice {
         std::vector<uint8_t> buf;
@@ -369,35 +465,67 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
 namespace {
 
 struct Vc1Decoder : SoftDecoder {
+    struct Job {
+        std::unique_ptr<vc1::Vc1> context;
+        std::vector<uint8_t> bytes;
+        std::thread thread;
+        int64_t stamp = 0;
+        bool ok = false;
+        bool busy = false;
+    };
+    static constexpr int kWorkers = 2;
     std::unique_ptr<vc1::Vc1> v;
+    Job jobs[kWorkers];
+    int oldest = 0;
     std::vector<uint8_t> config;
     std::vector<uint8_t> mapped[3];
     bool wmv3 = false;
+    bool parallel = true;
     int width = 0;
     int height = 0;
 
+    ~Vc1Decoder() override { settle(nullptr); }
     const char* name() const override { return "vc1"; }
 
     bool open() {
+        settle(nullptr);
         v = std::make_unique<vc1::Vc1>();
         return v->start(config.data(), config.size(), wmv3, width, height);
     }
 
     void reset() override { open(); }
 
-    bool decode(const uint8_t* data, size_t size, int64_t stamp, const PictureSink& shown) override {
-        if (!v->decodeFrame(data, size)) return false;
-        if (!v->curPic.ptr) return true;
+    bool finish(Job& job, const PictureSink* shown) {
+        if (!job.busy) return true;
+        job.thread.join();
+        job.busy = false;
+        if (job.ok && shown) emit(*job.context, job.stamp, *shown);
+        return job.ok;
+    }
+
+    bool settle(const PictureSink* shown) {
+        bool ok = true;
+        for (int i = 0; i < kWorkers; i++) {
+            Job& job = jobs[(oldest + i) % kWorkers];
+            ok = finish(job, shown) && ok;
+        }
+        return ok;
+    }
+
+    bool drain(const PictureSink& shown) override { return settle(&shown); }
+
+    void emit(vc1::Vc1& c, int64_t stamp, const PictureSink& shown) {
+        if (!c.curPic.ptr) return;
         Picture p;
         p.stamp = stamp;
-        p.width = std::min(width, v->codedWidth);
-        p.height = std::min(height, v->codedHeight);
+        p.width = std::min(width, c.codedWidth);
+        p.height = std::min(height, c.codedHeight);
         p.chromaWidth = (p.width + 1) / 2;
         p.chromaHeight = (p.height + 1) / 2;
         for (int i = 0; i < 3; i++) {
-            p.plane[i] = v->curPic.ptr->data[i];
-            p.stride[i] = size_t(v->curPic.ptr->linesize[i]);
-            const int factor = v->profile != vc1::kProfileAdvanced ? 0 : i ? (v->rangeMapuvFlag ? v->rangeMapuv + 9 : 0) : (v->rangeMapyFlag ? v->rangeMapy + 9 : 0);
+            p.plane[i] = c.curPic.ptr->data[i];
+            p.stride[i] = size_t(c.curPic.ptr->linesize[i]);
+            const int factor = c.profile != vc1::kProfileAdvanced ? 0 : i ? (c.rangeMapuvFlag ? c.rangeMapuv + 9 : 0) : (c.rangeMapyFlag ? c.rangeMapy + 9 : 0);
             if (!factor) continue;
             const int columns = i ? p.chromaWidth : p.width, rows = i ? p.chromaHeight : p.height;
             mapped[i].resize(size_t(columns) * size_t(rows));
@@ -410,6 +538,27 @@ struct Vc1Decoder : SoftDecoder {
             p.stride[i] = size_t(columns);
         }
         shown(p);
+    }
+
+    bool decode(const uint8_t* data, size_t size, int64_t stamp, const PictureSink& shown) override {
+        const int type = parallel && v->contextReady && v->lastPic.ptr ? v->peekType(data, size) : 0;
+        if (type == vc1::kPictureB || type == vc1::kPictureBI) {
+            Job& job = jobs[oldest];
+            finish(job, &shown);
+            oldest = (oldest + 1) % kWorkers;
+            if (!job.context) job.context = std::make_unique<vc1::Vc1>();
+            job.context->copyFrom(*v);
+            if (type == vc1::kPictureBI && v->profile != vc1::kProfileAdvanced) v->rnd = 1;
+            job.bytes.assign(data, data + size);
+            job.stamp = stamp;
+            job.busy = true;
+            vc1::Vc1* context = job.context.get();
+            Job* running = &job;
+            job.thread = std::thread([context, running] { running->ok = context->decodeFrame(running->bytes.data(), running->bytes.size()); });
+            return true;
+        }
+        if (!v->decodeFrame(data, size)) return false;
+        emit(*v, stamp, shown);
         return true;
     }
 };

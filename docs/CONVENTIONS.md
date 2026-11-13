@@ -220,12 +220,18 @@ list; `Sample.offset` is then free for the reader's use.
 - Complex profile streams with X8 intra pictures (`kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv`) are refused with `this VC-1 stream
   uses X8 intra pictures (Windows Media Video 9 Complex profile), which are not decoded yet`; Complex profile without X8 (the
   `sb-adv-q94.avi` sample) decodes, with the simple IDCT those streams ask for. Sprite streams (`WMVP`, `WVP2`) are refused.
-- Every sample's picture comes out as soon as it is decoded, with that sample's time: B-pictures need no reorder delay because the
-  reader's presentation times put them in order (`drain` has nothing to give). Output is 8-bit 4:2:0 at the coded size, cut to the
-  track size when the track is smaller.
+- Every sample's picture comes out with that sample's time: B-pictures need no reorder delay because the reader's presentation times
+  put them in order. Output is 8-bit 4:2:0 at the coded size, cut to the track size when the track is smaller.
+- Frame threads: a B or BI picture (nothing refers to it) is decoded on one of two worker threads, from a copy of the decoder state
+  and the shared reference pictures, while the caller's thread goes on with the next anchor. Its picture is handed to the sink at a
+  later `decode` (on the caller's thread) or at `drain`. A Simple or Main profile BI picture still sets the rounding control of the
+  anchors that follow, as in a straight decode. I and P pictures, and Advanced profile samples that carry a sequence header or entry
+  point, are decoded on the caller's thread. A jump waits for the workers and drops their pictures.
 - A B-picture with no earlier reference (right after a jump) and a picture that does not decode return `false`, so `VideoDecoder`
   shows the nearest earlier picture as FFmpeg's concealment does; a jump destroys the decoder state and starts again at a key frame.
 - Frame buffers come from a small pool owned by the decoder: a picture handed to the sink stays valid until the next `decode`.
+- Bits and VLC tables: the shared `BitReader` and `Vlc` of `src/bits.h` and `src/vlc.h` (the WMA framework), with the few VC-1
+  readers (unary, 0-1-2 codes) on top in `src/vc1.h`; the VC-1 tables are built from FFmpeg's code and length tables.
 
 ## Audio framework for the Windows Media family (`src/bits.h`, `src/vlc.h`, `src/mdct.h`, `src/wma.h`)
 

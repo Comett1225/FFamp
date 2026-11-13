@@ -377,7 +377,7 @@ multi-bitrate file is listed); ISO 639-2 language codes.
 
 # Windows Media step B: VC-1 (WMV3, WVC1, WMVA)
 
-FFamp's own VC-1 decoder (`src/vc1_*.cpp`, `src/video_bits.h`; backend `vc1`), based on FFmpeg's VC-1 decoder as the owner's rule of
+FFamp's own VC-1 decoder (`src/vc1_*.cpp`; backend `vc1`), based on FFmpeg's VC-1 decoder as the owner's rule of
 2026-11-13 allows: the FFmpeg C was turned into FFamp's C++ (one `Vc1` context in place of `VC1Context` and `MpegEncContext`, member
 functions, no comments), the tables were copied by script from FFmpeg's data headers, and every derived file is listed in
 `docs/NOTICE.md`. How it is driven is in `docs/CONVENTIONS.md`.
@@ -485,3 +485,41 @@ Test counts: `48_wma.sh` 84 checks with FFmpeg (17 more on the sample files), 27
 Not done: WMA Pro, Lossless and Voice (steps C, F and G); the AVI stream header's time base and length in probe (FFamp gives the
 length of the data and a sample-rate time base); reading only the superframe headers at open (it reads whole packets, which costs
 more on very large WMV files with a cold cache).
+
+Speed, whole program, best of three, decoding into memory (`ffamp bench --mode copy`; FFmpeg 9.0.2 `-f null`, which has no thread
+support for VC-1 and gives the same time with `-threads 1`), measured while another build ran on the same Mac:
+
+| File | Frames | FFamp | FFmpeg |
+|---|---|---|---|
+| `Robotica_1080.wmv`, 1440x1080 Main, P only | 480 | 536 fps | 576 fps |
+| `Robotica_720.wmv`, 1280x720 Main, P only | 480 | 812 fps | 833 fps |
+| `sample-wmv9-main-MP@LL.wmv`, 352x288 Main | 595 | 3,864 fps | 4,044 fps |
+| `ilaced_twomv`, 1920x1080 interlaced fields, 8 of 13 pictures B | 13 | 151 fps | 102 fps |
+| `SA10143`, 720x480 interlaced fields, half of the pictures B | 30 | 882 fps | 506 fps |
+| `480i30__codec_WVC1__...wmv`, 720x480 interlaced, B | 66 | 1,082 fps | 853 fps |
+
+The plan asked for at least 230 fps at 1440x1080; one core gives 536 (suite check: over 230). Since the merge with the WMA round
+the decoder reads its bits through the shared `BitReader` and `Vlc` (`src/bits.h`, `src/vlc.h`) of the audio framework; its own
+copies are gone, the pictures and the speed are unchanged. Most of the time goes to reading the
+coefficients (about 30 %), motion compensation and the inverse transforms. The bicubic motion compensation is written with the
+filter modes as template arguments so the compiler vectorises it; the chroma motion compensation uses NEON. With B-pictures on two
+worker threads (milestone 5) the interlaced files run 1.5 to 1.7 times faster than one thread and faster than FFmpeg; streams with
+no B-pictures (most WMV3) have nothing to overlap, because each P-picture needs the one before it.
+
+Seeking: a jump starts at the key frame at or before the frame asked for (from the container's key flags, or from the picture types
+in AVI) and decodes forward; every random frame tested equals the straight decode and FFmpeg's frame (16 per sample file, 10 per
+fixture, and runs of frames after jumps on two sample files).
+
+Fuzzing: the `vc1` target (the decoder fed raw sequence headers and pictures, seeded with `tests/fixtures/fuzz/vc1/`) ran 253,000
+inputs with undefined-behaviour checks without a find; 560 damaged copies of seven sample files under Guard Malloc (heap overruns
+and underruns trap) decoded or failed cleanly. AddressSanitizer hangs at start-up on this macOS, so it could not be used.
+
+
+Test counts after milestone 5 and the merge with the WMA round: `QUICK=1 tests/run.sh` 2,458 pass, 1 skipped (a real camera);
+`QUICK=1 NOFFMPEG=1 tests/run.sh` 1,569 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 75 checks (44 without FFmpeg),
+all pass.
+
+Not done: X8 intra pictures (Complex profile, plan step D), the mixed field/frame direct mode and the chroma pull-back FIXME of FFmpeg
+(no sample to check ST 421 against), old interlaced mode, multiresolution scaling, sprites, readers for raw `.vc1` and `.rcv` files,
+threads for streams without B-pictures (each P-picture needs the one before; slices are rare), hand-written NEON for the transforms
+and the loop filter.

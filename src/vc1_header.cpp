@@ -24,36 +24,47 @@ const int16_t kBfractionLut[23] = {128, 85, 170, 64, 192, 51, 102, 153, 204, 43,
 
 namespace {
 
+template <typename C, typename L>
+void made(Vlc& vlc, int bits, int count, const C* codes, size_t codeStep, const L* lengths, size_t lengthStep) {
+    std::vector<uint8_t> length(static_cast<size_t>(count));
+    std::vector<uint32_t> code(static_cast<size_t>(count));
+    for (size_t i = 0; i < size_t(count); i++) {
+        length[i] = uint8_t(lengths[i * lengthStep]);
+        code[i] = uint32_t(codes[i * codeStep]);
+    }
+    vlc.build(bits, size_t(count), length.data(), code.data());
+}
+
 Vlcs built() {
     Vlcs v;
-    v.norm2.build(3, 4, kNorm2Codes, 1, kNorm2Bits, 1);
-    v.norm6.build(9, 64, kNorm6Codes, 1, kNorm6Bits, 1);
-    v.imode.build(4, 7, kImodeCodes, 1, kImodeBits, 1);
+    made(v.norm2, 3, 4, kNorm2Codes, 1, kNorm2Bits, 1);
+    made(v.norm6, 9, 64, kNorm6Codes, 1, kNorm6Bits, 1);
+    made(v.imode, 4, 7, kImodeCodes, 1, kImodeBits, 1);
     for (int i = 0; i < 3; i++) {
-        v.ttmb[i].build(9, 16, kTtmbCodes[i], 1, kTtmbBits[i], 1);
-        v.ttblk[i].build(5, 8, kTtblkCodes[i], 1, kTtblkBits[i], 1);
-        v.subblkpat[i].build(6, 15, kSubblkpatCodes[i], 1, kSubblkpatBits[i], 1);
+        made(v.ttmb[i], 9, 16, kTtmbCodes[i], 1, kTtmbBits[i], 1);
+        made(v.ttblk[i], 5, 8, kTtblkCodes[i], 1, kTtblkBits[i], 1);
+        made(v.subblkpat[i], 6, 15, kSubblkpatCodes[i], 1, kSubblkpatBits[i], 1);
     }
     for (int i = 0; i < 4; i++) {
-        v.fourMvBlockPattern[i].build(6, 16, k4mvBlockPatternCodes[i], 1, k4mvBlockPatternBits[i], 1);
-        v.cbpcyP[i].build(9, 64, kCbpcyPCodes[i], 1, kCbpcyPBits[i], 1);
-        v.mvDiff[i].build(9, 73, kMvDiffCodes[i], 1, kMvDiffBits[i], 1);
-        v.intfr4mvMbmode[i].build(9, 15, kIntfr4mvMbmodeCodes[i], 1, kIntfr4mvMbmodeBits[i], 1);
-        v.intfrNon4mvMbmode[i].build(6, 9, kIntfrNon4mvMbmodeCodes[i], 1, kIntfrNon4mvMbmodeBits[i], 1);
-        v.oneRefMvdata[i].build(9, 72, k1refMvdataCodes[i], 1, k1refMvdataBits[i], 1);
-        v.twoMvBlockPattern[i].build(3, 4, k2mvBlockPatternCodes[i], 1, k2mvBlockPatternBits[i], 1);
+        made(v.fourMvBlockPattern[i], 6, 16, k4mvBlockPatternCodes[i], 1, k4mvBlockPatternBits[i], 1);
+        made(v.cbpcyP[i], 9, 64, kCbpcyPCodes[i], 1, kCbpcyPBits[i], 1);
+        made(v.mvDiff[i], 9, 73, kMvDiffCodes[i], 1, kMvDiffBits[i], 1);
+        made(v.intfr4mvMbmode[i], 9, 15, kIntfr4mvMbmodeCodes[i], 1, kIntfr4mvMbmodeBits[i], 1);
+        made(v.intfrNon4mvMbmode[i], 6, 9, kIntfrNon4mvMbmodeCodes[i], 1, kIntfrNon4mvMbmodeBits[i], 1);
+        made(v.oneRefMvdata[i], 9, 72, k1refMvdataCodes[i], 1, k1refMvdataBits[i], 1);
+        made(v.twoMvBlockPattern[i], 3, 4, k2mvBlockPatternCodes[i], 1, k2mvBlockPatternBits[i], 1);
     }
     for (int i = 0; i < 8; i++) {
-        v.ac[i].build(9, kAcSizes[i], &kAcTables[i][0][0], 2, &kAcTables[i][0][1], 2);
-        v.twoRefMvdata[i].build(9, 126, k2refMvdataCodes[i], 1, k2refMvdataBits[i], 1);
-        v.icbpcy[i].build(9, 63, kIcbpcyPCodes[i], 1, kIcbpcyPBits[i], 1);
-        v.ifMmvMbmode[i].build(5, 8, kIfMmvMbmodeCodes[i], 1, kIfMmvMbmodeBits[i], 1);
-        v.if1mvMbmode[i].build(5, 6, kIf1mvMbmodeCodes[i], 1, kIf1mvMbmodeBits[i], 1);
+        made(v.ac[i], 9, kAcSizes[i], &kAcTables[i][0][0], 2, &kAcTables[i][0][1], 2);
+        made(v.twoRefMvdata[i], 9, 126, k2refMvdataCodes[i], 1, k2refMvdataBits[i], 1);
+        made(v.icbpcy[i], 9, 63, kIcbpcyPCodes[i], 1, kIcbpcyPBits[i], 1);
+        made(v.ifMmvMbmode[i], 5, 8, kIfMmvMbmodeCodes[i], 1, kIfMmvMbmodeBits[i], 1);
+        made(v.if1mvMbmode[i], 5, 6, kIf1mvMbmodeCodes[i], 1, kIf1mvMbmodeBits[i], 1);
     }
     for (int i = 0; i < 2; i++) {
-        for (int j = 0; j < 2; j++) v.dc[i][j].build(9, 120, &kDcTables[i][j][0][0], 2, &kDcTables[i][j][0][1], 2);
+        for (int j = 0; j < 2; j++) made(v.dc[i][j], 9, 120, &kDcTables[i][j][0][0], 2, &kDcTables[i][j][0][1], 2);
     }
-    v.mbI.build(9, 64, &kMbITable[0][0], 2, &kMbITable[0][1], 2);
+    made(v.mbI, 9, 64, &kMbITable[0][0], 2, &kMbITable[0][1], 2);
     return v;
 }
 

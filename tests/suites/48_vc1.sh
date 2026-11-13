@@ -18,6 +18,9 @@ done
 check "make.py writes the committed fixtures again byte for byte" vc_remade
 check "B-pictures in AVI get their shown order from the picture types" vc_shown
 check "six threads decoding the B-picture fixture at once each get the straight decode" vc_threads $VC/main_bframes.avi
+if command -v leaks > /dev/null; then
+    check "jumping around the B-picture fixture leaks nothing (B-pictures go to worker threads)" eval "leaks --atExit -- $A frames $VC/main_bframes.avi --list 9,3,11,0,6,2,10,1 2> /dev/null | LC_ALL=C grep -aq ': 0 leaks for 0 total leaked bytes'"
+fi
 if have_ffmpeg; then
     for f in main_bframes.avi simple.avi; do
         check "decode $f bit-exact against ffmpeg" python3 vc1_check.py ordered $VC/$f

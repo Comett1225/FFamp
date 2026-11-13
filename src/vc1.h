@@ -1,5 +1,6 @@
 #pragma once
-#include "video_bits.h"
+#include "bits.h"
+#include "vlc.h"
 #include "vc1_tables.h"
 #include <cstddef>
 #include <cstdint>
@@ -9,6 +10,26 @@
 #include <vector>
 
 namespace absent::vc1 {
+
+struct Bits : BitReader {
+    static constexpr size_t kPadding = 32;
+    using BitReader::BitReader;
+    void reset(const uint8_t* data, size_t bytes) { static_cast<BitReader&>(*this) = BitReader(data, bytes); }
+    uint32_t show(int n) const { return peek(n); }
+    uint32_t bits(int n) { return read(n); }
+    int bit() { return int(read(1)); }
+    int left() const { return int(BitReader::left()); }
+    int count() const { return int(position()); }
+    int unary(int stop, int length) {
+        int i = 0;
+        while (i < length && bit() != stop) ++i;
+        return i;
+    }
+    int decode012() { return bit() ? bit() + 1 : 0; }
+    int decode210() { return bit() ? 0 : 2 - bit(); }
+    int vlc(const Vlc& table) { return table.read(*this); }
+    int vlc(const Vlc* table) { return table->read(*this); }
+};
 
 constexpr int kQuantFrameImplicit = 0, kQuantFrameExplicit = 1, kQuantNonUniform = 2, kQuantUniform = 3;
 constexpr int kDqprofileFourEdges = 0, kDqprofileDoubleEdges = 1, kDqprofileSingleEdge = 2, kDqprofileAllMbs = 3;
@@ -341,6 +362,8 @@ struct Vc1 {
     void grey(Frame& f);
     bool frameStart();
     bool start(const uint8_t* config, size_t size, bool wmv3, int w, int h);
+    void copyFrom(const Vc1& o);
+    int peekType(const uint8_t* data, size_t size);
     bool decodeFrame(const uint8_t* buf, size_t size);
 };
 

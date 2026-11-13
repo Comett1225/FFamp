@@ -1,6 +1,7 @@
 #include "absent/audio.h"
 #include "absent/media.h"
 #include "absent/probe.h"
+#include "audio_codec.h"
 #include "soft_video.h"
 #include <algorithm>
 #include <cmath>
@@ -159,6 +160,36 @@ void mpeg4(const uint8_t* data, size_t size) {
     }
     decoder->decode(data + start, size - start, stamp, look);
     decoder->drain(look);
+}
+
+void wma(const uint8_t* data, size_t size) {
+    if (size < 18) return;
+    const size_t head = std::min<size_t>(size, 18 + size_t(data[16] | data[17] << 8));
+    Track t;
+    t.kind = Kind::Audio;
+    t.codec = (data[0] | data[1] << 8) == 0x160 ? fourcc("wma1") : fourcc("wma2");
+    t.configType = fourcc("wfex");
+    t.config.assign(data, data + head);
+    auto decoder = openWmaAudio(t, nullptr);
+    if (!decoder) return;
+    const size_t align = size_t(data[12] | data[13] << 8);
+    std::vector<uint8_t> packet, state;
+    std::vector<float> out;
+    size_t turn = 0;
+    for (size_t at = head; at < size; ++turn) {
+        const size_t take = std::min(size - at, align * (1 + turn % 3));
+        packet.assign(data + at, data + at + take);
+        at += take;
+        if (turn % 7 == 3) decoder->skim(packet);
+        else decoder->feed(packet, out);
+        if (turn % 11 == 5) {
+            decoder->save(state);
+            decoder->reset();
+            decoder->load(state);
+        }
+        if (out.size() > (1u << 20)) out.clear();
+    }
+    decoder->finish(out);
 }
 
 void resample(const uint8_t* data, size_t size) {

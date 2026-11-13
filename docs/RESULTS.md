@@ -374,3 +374,69 @@ Not done: the Windows Media decoders themselves (plan and order in the private n
 payload extension data past the standard 8 replicated bytes; Stream Bitrate Properties; mutual exclusion (every stream of a
 multi-bitrate file is listed); ISO 639-2 language codes.
 
+
+# Windows Media round 2: Windows Media Audio 1 and 2, and the audio framework for the family
+
+`src/wma_decode.cpp` decodes Windows Media Audio 1 (`0x0160`) and 2 (`0x0161`) from ASF, AVI and Matroska behind `AudioDecoder`. It is
+based on FFmpeg's decoder (files and holders in `docs/NOTICE.md`), rewritten in FFamp's style on a small framework the later WMA
+rounds share: a bit reader, multi-level VLC tables, an inverse MDCT of any power-of-two size with sine windows, the WMA run-level
+coder and tables, and four additions to `PacketDecoder` (exact frame counts, a hidden start, state marks, parse-only skimming). Rules
+in `docs/CONVENTIONS.md`.
+
+Suite `tests/suites/48_wma.sh`, fixtures in `tests/fixtures/wma` (7 files, 63 KB, made by `make.sh` with FFmpeg) plus the three WMA
+files of `tests/fixtures/asf`. Judge: FFmpeg 9.0.2's `wmav1`/`wmav2` decoders, float output.
+
+| Check | Result |
+|---|---|
+| 10 fixtures: WMA 1 and 2, 11,025 to 48,000 Hz, noise coding, mid/side, in ASF, AVI and Matroska | 137.3 to 139.7 dB; lengths equal to the sample |
+| 19 encoder settings made at test time: both versions, 8,000 to 48,000 Hz (12,000 and 24,000 too), mono and stereo, 24 to 320 kbit/s, noise coding on and off, all three coefficient tables, frames of 512, 1,024 and 2,048 | 137.0 to 138.5 dB; lengths equal |
+| Matroska and AVI written by FFmpeg directly (Matroska with its CodecDelay start skip) | 137.3 and 137.7 dB; lengths equal |
+| 7 Microsoft-made files (WMA 1 at 44.1 kHz; WMA 2 at 8, 16, 22.05, 44.1 and 48 kHz with bit reservoir, variable block sizes, LSP exponents and noise coding; up to 280 s) | 137.2 to 138.5 dB, a silent one bit-exact; lengths equal |
+| Random reads (single frames, odd chunk sizes, reads before the start and past the end) on every file | identical to the straight decode, noise-coded files included |
+| One stream in ASF, AVI and Matroska | identical samples |
+| Fuzzing with undefined-behaviour checks: `fuzz_wma` (format header and packets, with resets, marks and skims) and `fuzz_audio` on WMA files | 16,277 and 117,353 runs; one find (below) |
+
+Why not bit-exact: FFmpeg's inverse MDCT runs its own FFT (NEON on this Mac) and FFamp a portable radix-2 one, so float rounding
+differs: the largest difference is 1.5e-7 to 3.6e-7 of full scale (about one step of 24-bit sound), everything else follows
+FFmpeg's arithmetic operation for operation (the same float and double steps in the exponent, noise and window code).
+
+Timing: FFmpeg hides the decoder's first two frames (its `delay`) and FFamp plays them as silence, so every later sample is the same
+and stays at the same time; a Matroska CodecDelay replaces the two frames in both. Packets are placed by the frame counts in the
+superframe headers, not by the container's millisecond times: in the Microsoft-made files the packet times do not always match the
+counts (the first packet is one frame short in three files, the times wander by a few milliseconds in another), while FFmpeg's
+decoded samples, like FFamp's, follow the counts.
+
+Seeking: jumps restart three packets early and need no state for streams without noise coding. Noise coding draws from a generator
+whose position depends on every block before, so FFmpeg's own seek gives different noise than its straight decode; FFamp keeps a mark
+per 20-second run and parses forward from the nearest one (no transforms): a first jump to the end of a 20-minute noise-coded file
+takes 0.06 s, later jumps nothing extra. Opening a bit-reservoir stream reads each packet once for the frame counts (0.01 s for the
+138-second `kelsy_300.wmv`).
+
+What the tests found:
+
+- FFmpeg's `wmav1`/`wmav2` decoders skip two frames at the start that its encoder did not add (the encoder primes one frame), so
+  FFmpeg's own round trip loses one frame of sound; FFamp keeps the samples FFmpeg shows and plays the two frames as silence.
+- In FFmpeg's decoder a superframe that ends no frame adds eight times its length to the reservoir length (bits where bytes are
+  meant); FFamp adds bytes. No sample file has such a superframe.
+- Fuzzing: a huge average byte rate in the format header overflowed a float-to-int conversion (FFmpeg has the same); now refused.
+
+Speed, best of three, whole files through the command line (`ffamp adecode` against `ffmpeg -threads 1 ... -f f32le`):
+
+| File | FFamp | FFmpeg, one thread | FFamp / FFmpeg |
+|---|---|---|---|
+| WMA 2, 128 kbit/s stereo, 44.1 kHz, 600 s (tone and pink noise) | 0.277 s (2,170 times real time) | 0.264 s | 1.05 |
+| WMA 2, 32 kbit/s stereo, 44.1 kHz, noise coding, 600 s | 0.234 s | 0.217 s | 1.08 |
+| WMA 1, 48 kbit/s stereo, 22.05 kHz, 600 s | 0.131 s | 0.154 s | 0.85 |
+| `nintendothemesacappellax.wmv`: WMA 2, 16 kbit/s mono, 16 kHz, reservoir, LSP, noise coding, 280 s | 0.036 s | 0.051 s | 0.71 |
+| `kelsy_300.wmv`: WMA 2, 64 kbit/s stereo, 48 kHz, 139 s (the video is not decoded) | 0.065 s | 0.063 s | 1.03 |
+| `wandue_project_-_king_of_my_castle.asf`: WMA 1, 64 kbit/s stereo, 44.1 kHz, 101 s | 0.045 s | 0.058 s | 0.78 |
+
+Both columns include starting the program, reading the file and writing the samples to a pipe. The suite checks the 128 and 32 kbit/s
+cases (180 s with `QUICK=1`) and the three sample files against a limit of 1.5.
+
+Test counts: `48_wma.sh` 84 checks with FFmpeg (17 more on the sample files), 27 without; `QUICK=1 tests/run.sh` 2,435 pass, 1 skipped
+(a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh` 1,550 pass, 91 skipped.
+
+Not done: WMA Pro, Lossless and Voice (steps C, F and G); the AVI stream header's time base and length in probe (FFamp gives the
+length of the data and a sample-rate time base); reading only the superframe headers at open (it reads whole packets, which costs
+more on very large WMV files with a cold cache).

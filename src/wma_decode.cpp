@@ -102,7 +102,9 @@ struct WmaAudio : PacketDecoder {
         int normal = rate;
         if (version == 2) normal = rate >= 44100 ? 44100 : rate >= 22050 ? 22050 : rate >= 16000 ? 16000 : rate >= 11025 ? 11025 : rate >= 8000 ? 8000 : rate;
         const float bps = float(bitRate) / float(count * rate);
-        byteOffsetBits = floorLog2(unsigned(int(bps * float(frameLength) / 8.0 + 0.5))) + 2;
+        const double frameBytes = bps * float(frameLength) / 8.0 + 0.5;
+        if (!(frameBytes < 2147483647.0)) return false;
+        byteOffsetBits = floorLog2(unsigned(int(frameBytes))) + 2;
         if (byteOffsetBits + 3 > 25) return false;
         float bps1 = bps;
         if (count == 2) bps1 = float(bps * 1.6);
@@ -620,8 +622,12 @@ std::unique_ptr<PacketDecoder> openWmaAudio(const Track& track, std::string* err
     const int rate = int(le32(w.data() + 4));
     const int64_t bitRate = int64_t(le32(w.data() + 8)) * 8;
     audio->blockAlign = int(le16(w.data() + 12));
-    const size_t extra = w.size() >= 18 ? std::min<size_t>(le16(w.data() + 16), w.size() - 18) : 0;
+    size_t extra = w.size() >= 18 ? std::min<size_t>(le16(w.data() + 16), w.size() - 18) : 0;
     const uint8_t* e = w.data() + 18;
+    if (le16(w.data()) == 0xFFFE && extra >= 22) {
+        e += 22;
+        extra -= 22;
+    }
     unsigned flags = 0;
     if (audio->version == 1 && extra >= 4) flags = le16(e + 2);
     else if (audio->version == 2 && extra >= 6) flags = le16(e + 4);

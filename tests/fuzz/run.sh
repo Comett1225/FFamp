@@ -3,7 +3,7 @@ set -u
 cd "$(dirname "$0")"
 seconds=${1:?usage: run.sh <seconds per target> [target...]   (JOBS=n processes per target, default 1; FUZZ_ARGS=more options for every target; GUARD=1 runs under guard malloc, which traps heap overruns)}
 shift
-targets=${*:-open packets probe audio video resample}
+targets=${*:-open packets probe audio video resample mpeg4}
 jobs=${JOBS:-1}
 build=../../build-fuzz
 [ -x $build/fuzz_open ] || ./build.sh || exit 1

@@ -25,6 +25,14 @@ def times(a, b):
     return x is not None and len(x) > 0 and x == y
 
 
+def frame_times(path):
+    ours = subprocess.run([AMEDIA, "decode", path, "--times"], capture_output=True, text=True).stdout.split()
+    theirs = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time", "-of", "csv=p=0", path],
+                            capture_output=True, text=True).stdout.split()
+    print(f"{os.path.basename(path)}: {len(ours)} decoded frame times against ffprobe's {len(theirs)}, {'equal' if ours == theirs else 'different'}")
+    return len(ours) > 0 and ours == theirs
+
+
 def layout(path, pan, channels, least):
     run = subprocess.run([AMEDIA, "adecode", path], capture_output=True)
     got = numpy.frombuffer(run.stdout, dtype=numpy.float32)
@@ -133,7 +141,9 @@ def concealed(path, width, height, lost):
 
 if __name__ == "__main__":
     kind, rest = sys.argv[1], sys.argv[2:]
-    if kind == "times":
+    if kind == "frametimes":
+        ok = frame_times(rest[0])
+    elif kind == "times":
         ok = times(rest[0], rest[1])
     elif kind == "layout":
         ok = layout(rest[0], rest[1], int(rest[2]), float(rest[3]))

@@ -3,7 +3,7 @@ FZ=$O/fuzz
 rm -rf $FZ
 mkdir -p $FZ/seeds
 find fixtures -type f ! -name '*.sh' ! -name '*.py' ! -name '*.md5' ! -name '*.txt' ! -name '*.json' ! -name '*.means' ! -path 'fixtures/fuzz/*' -exec cp -f {} $FZ/seeds/ \;
-for target in open packets probe audio video resample; do
+for target in open packets probe audio video resample mpeg4; do
     kept=(fixtures/fuzz/$target/*)
     if [ -e "${kept[0]}" ]; then
         check "$target: ${#kept[@]} kept inputs replay without a crash" env TMPDIR=$FZ ../build/fuzz_$target "${kept[@]}"

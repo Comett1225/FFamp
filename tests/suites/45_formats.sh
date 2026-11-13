@@ -4,12 +4,18 @@ FC="python3 formats_check.py"
 FA_AUDIO="ac3_51.ac3 eac3_51.eac3 ac3_stereo.mp4 eac3_51.mp4 ac3_51.mov ac3_mono.mka ac3_21.ac3 amr_nb.amr amr_wb.amr amr_nb.3gp amr_wb.3gp caf_s16be.caf caf_s24le.caf caf_f32le.caf caf_aac.caf caf_he_aac.caf caf_alac.caf caf_flac.caf caf_opus.caf caf_ac3.caf caf_mp3.caf caf_amr.caf avi_mpeg4_mp3.avi avi_asp_ac3.avi avi_mjpeg_pcm.avi avi_mjpeg422_pcm.avi avi_mpeg2_mp2.avi avi_mpeg1_pcm.avi avi_dv_pcm.avi"
 FA_VIDEO="mpeg4.mp4 mpeg4.mkv mjpeg.mov mjpeg422.mov mjpeg444.mkv mpeg2.mp4 mpeg2.mov mpeg2.mkv mpeg1.mov mpeg1.mkv dv_pal.mov dv_ntsc.mov h263.3gp avi_mpeg4_mp3.avi avi_mjpeg_pcm.avi avi_mjpeg422_pcm.avi avi_h264_mp3.avi avi_mpeg2_mp2.avi avi_mpeg1_pcm.avi avi_dv_pcm.avi"
 listed() { [ "$("${@:3}" 2> /dev/null | md5)" = "$(grep " $2\$" $FX/$1.md5 | cut -d' ' -f1)" ]; }
+FX_XVID=
+$A videoinfo $FX/mpeg4.mp4 2> /dev/null | grep -q "backend xvid" && FX_XVID=xvid_
 for f in $(cut -d' ' -f3 $FX/packets.md5); do
     check "packets of $f match the checked table" listed packets $f $A packets $FX/$f
     check "probe of $f matches the checked output" listed probe $f $A probe --json $FX/$f
 done
 for f in $FA_AUDIO; do check "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
-for f in $FA_VIDEO; do check "$f pictures decode to the checked checksum" listed pictures $f $A decode $FX/$f; done
+for f in $FA_VIDEO; do
+    table=pictures
+    case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; esac
+    check "$f pictures decode to the checked checksum" listed $table $f $A decode $FX/$f
+done
 
 echo "== formats: known signals, random access, the same stream in different wrappings (no FFmpeg)"
 while read f rate channels seconds least; do
@@ -47,8 +53,14 @@ check "a DivX packed bitstream is unpacked to the times of the same stream in MP
 check "AVI with B-frames has the times of the same stream in MP4" $FC times $FX/avi_asp_ac3.avi $FX/mpeg4_asp.mp4
 check "the packed bitstream has one packet for each picture" [ "$($A packets $FX/avi_packed.avi | grep -cE '^-?[0-9]')" = 20 ]
 refuses_with() { ! $A decode $1 > /dev/null 2> $O/fx_refused.txt && grep -q "$2" $O/fx_refused.txt; }
-check "MPEG-4 Advanced Simple Profile is refused with its own message" refuses_with $FX/mpeg4_asp.mp4 "Advanced Simple Profile"
-check "the packed AVI is refused with the same message" refuses_with $FX/avi_packed.avi "Advanced Simple Profile"
+if [ -n "$FX_XVID" ]; then
+    fx_asp() { [ "$($A decode $FX/$1 | md5)" = "$($A decode $FX/mpeg4_asp.mp4 | md5)" ] && [ "$($A decode $FX/$1 | wc -c)" -eq 576000 ]; }
+    check "MPEG-4 Advanced Simple Profile plays through Xvid: the AVI gives the MP4 file's pictures" fx_asp avi_asp_ac3.avi
+    check "and the packed AVI too" fx_asp avi_packed.avi
+else
+    check "MPEG-4 Advanced Simple Profile is refused with its own message" refuses_with $FX/mpeg4_asp.mp4 "Advanced Simple Profile"
+    check "the packed AVI is refused with the same message" refuses_with $FX/avi_packed.avi "Advanced Simple Profile"
+fi
 printf '\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c' > $O/fx_wma.bin
 head -c 3000 /dev/zero >> $O/fx_wma.bin
 check "a Windows Media file is refused with a message" refuses_with $O/fx_wma.bin "Windows Media"

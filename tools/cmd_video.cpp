@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 namespace cli {
 
@@ -42,23 +43,47 @@ int probe(const Args& args) {
     return 0;
 }
 
-int decode(const Args& args) {
-    if (args.plain.empty()) return fail("decode needs a file");
+std::string decodeAll(const Args& args, FILE* out, std::vector<uint8_t>* kept) {
     std::string error;
     auto reader = Reader::open(args.plain[0], &error);
-    if (!reader) return fail(error);
+    if (!reader) return error;
     const Track* track = reader->first(Kind::Video);
-    if (!track) return fail("no video track");
+    if (!track) return "no video track";
     auto decoder = VideoDecoder::open(*reader, *track, &error, args.has("software"));
-    if (!decoder) return fail(error);
+    if (!decoder) return error;
     std::vector<uint8_t> picture;
     uint32_t count = decoder->frames();
     for (uint32_t n = 0; n < count; ++n) {
         Frame frame = decoder->frame(n);
-        if (!frame || !pictureBytes(args, frame, picture)) return fail("frame " + std::to_string(n) + " did not decode");
-        if (fwrite(picture.data(), 1, picture.size(), stdout) != picture.size()) return fail("output closed");
+        if (!frame || !pictureBytes(args, frame, picture)) return "frame " + std::to_string(n) + " did not decode";
+        if (args.has("times")) {
+            if (fprintf(out, "%.6f\n", double(frame.pts - track->mediaStart + track->delay) / track->timescale) < 0) return "output closed";
+        } else if (kept) {
+            kept->insert(kept->end(), picture.begin(), picture.end());
+        } else if (fwrite(picture.data(), 1, picture.size(), out) != picture.size()) {
+            return "output closed";
+        }
     }
-    return 0;
+    return "";
+}
+
+int decode(const Args& args) {
+    if (args.plain.empty()) return fail("decode needs a file");
+    const size_t threads = size_t(std::clamp<long>(args.number("threads", 1), 1, 64));
+    if (threads == 1) {
+        std::string error = decodeAll(args, stdout, nullptr);
+        return error.empty() ? 0 : fail(error);
+    }
+    std::vector<std::vector<uint8_t>> pictures(threads);
+    std::vector<std::string> errors(threads);
+    std::vector<std::thread> crew;
+    for (size_t t = 0; t < threads; ++t) crew.emplace_back([&, t] { errors[t] = decodeAll(args, nullptr, &pictures[t]); });
+    for (std::thread& worker : crew) worker.join();
+    for (size_t t = 0; t < threads; ++t) {
+        if (!errors[t].empty()) return fail("thread " + std::to_string(t) + ": " + errors[t]);
+        if (pictures[t] != pictures[0]) return fail("thread " + std::to_string(t) + " decoded different pictures");
+    }
+    return fwrite(pictures[0].data(), 1, pictures[0].size(), stdout) == pictures[0].size() ? 0 : fail("output closed");
 }
 
 int frames(const Args& args) {

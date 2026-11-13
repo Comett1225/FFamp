@@ -64,6 +64,7 @@ std::unique_ptr<SoftEncoder> openSvtAv1(const EncodeSpec& spec, std::string* err
 std::unique_ptr<SoftEncoder> openVpxEncoder(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftEncoder> openApvEncoder(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftDecoder> openApvDecoder(std::string* error);
+std::unique_ptr<SoftDecoder> openXvid(const std::vector<uint8_t>& esds, int width, int height);
 
 bool vp9Shape(const uint8_t* frame, size_t size, StreamShape& shape);
 std::vector<uint8_t> vp9Config(const StreamShape& shape, double fps, int bitrate);

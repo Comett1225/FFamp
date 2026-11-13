@@ -10,6 +10,7 @@ import numpy
 HERE = os.path.dirname(os.path.abspath(__file__))
 AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+JUDGE = []
 
 
 def info(path, extra):
@@ -25,7 +26,7 @@ def info(path, extra):
 
 
 def reference(path, pix_fmt, more=()):
-    return subprocess.Popen([FFMPEG, "-nostdin", "-v", "error", "-noautorotate", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough", *more,
+    return subprocess.Popen([FFMPEG, "-nostdin", "-v", "error", "-noautorotate", *JUDGE, "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough", *more,
                              "-pix_fmt", pix_fmt, "-f", "rawvideo", "-"], stdout=subprocess.PIPE)
 
 
@@ -380,7 +381,9 @@ if __name__ == "__main__":
     kind = sys.argv[1]
     rest = sys.argv[2:]
     extra = ["--software"] if "--software" in rest else []
-    rest = [r for r in rest if r != "--software"]
+    if "--xvid-idct" in rest:
+        JUDGE = ["-idct", "xvid"]
+    rest = [r for r in rest if r not in ("--software", "--xvid-idct")]
     if kind == "decode":
         ok = decode(rest[0], float(rest[1]) if len(rest) > 1 else 0, extra)
     elif kind == "seek":

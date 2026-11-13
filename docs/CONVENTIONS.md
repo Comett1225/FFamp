@@ -119,8 +119,9 @@ list; `Sample.offset` is then free for the reader's use.
 - AC-3 and E-AC-3 decode to the channel order above. Layouts that have no place in it (2.1, 2/1, 2/2 and any other layout with a
   low-frequency channel short of 5.1) are decoded as 5.1 with silent channels where the stream has none.
 - AMR and AC-3 output is moved to where FFmpeg's decoders put it (Apple's decoders give it 40, 95 and 256 frames later).
-- MPEG-4 part 2 is decoded by the system, which only knows Simple Profile. A stream that uses B-frames, quarter-pixel motion or custom
-  matrices is read and probed but `VideoDecoder::open` fails with a message that says so.
+- MPEG-4 part 2 without `ABSENT_XVID` is decoded by the system, which only knows Simple Profile. A stream that uses B-frames,
+  quarter-pixel motion or custom matrices is read and probed but `VideoDecoder::open` fails with a message that says so. With
+  `ABSENT_XVID` every MPEG-4 part 2 stream goes through Xvid (next section).
 - JPEG pictures that are not 4:2:0 are refused by VideoToolbox; they are decoded through ImageIO and come out as 8-bit 4:4:4 BT.709
   limited-range frames (backend `imageio`).
 - Windows Media (ASF: WMA, WMV) is recognised and refused with its own message; nothing on a Mac decodes it.
@@ -133,3 +134,25 @@ list; `Sample.offset` is then free for the reader's use.
   asked frame's time, as FFmpeg's concealment shows a repeat.
 - A Matroska video codec no decoder here knows is kept as a track named by its VFW fourcc or the first letters of its codec ID, so
   probe reports its name, start and length; `VideoDecoder::open` fails with `video codec not supported by this decoder`.
+
+## MPEG-4 part 2 through Xvid (`ABSENT_XVID`, `src/opt/xvid_decode.cpp`)
+
+- Built when xvidcore is found (FFAMP_DEPS from `third_party/build_mac.sh`, or Homebrew's `xvid` for developer builds). Then every
+  `mp4v` track with an `esds`, Simple and Advanced Simple Profile alike, is decoded by Xvid (backend `xvid`): one decoder, one look.
+  B-frames, quarter-pixel motion, GMC (S-VOPs), MPEG and custom quantiser matrices, interlaced field DCT and field motion in P-VOPs.
+- The decoder is opened with the track's width and height; the VOL headers come from the `esds` DecoderSpecificInfo (MP4, and the
+  descriptor the Matroska and AVI readers build). Each sample goes in as stored; DivX packed samples are already split by the AVI
+  reader.
+- Xvid runs in its low-delay packed mode (a DivX user data marker fed after the headers switches it on; DivX markers inside the
+  stream are renamed in the copy it reads so they cannot switch it off). In that mode every VOP comes out when it is decoded, so a
+  picture always carries the time of its own sample, nothing is held back (`drain` has nothing to give) and a jump needs no flush.
+  B-VOPs right after the key frame a jump starts from can lack a reference and come out wrong or not at all; they are shown before
+  that key frame, so they are never the frame asked for (a jump to one of them starts at the key frame before).
+- A jump destroys the Xvid instance; the next sample starts a new one with the headers again.
+- In a packed AVI an N-VOP that follows no packed pair (Xvid's encoder writes one at the end when it was flushed with B-frames
+  waiting) is a slot with no picture: the picture before it lasts longer, as FFmpeg shows it.
+- `xvid_global(XVID_GBL_INIT)` runs once per process (`std::call_once`); instances share nothing else.
+- Each sample is copied into a buffer with 64 zero bytes behind it: Xvid's bit reader (built with its default
+  `XVID_SAFE_BS_TAIL`) stops at the end of the stated length but still reads the next two words.
+- Xvid takes a stream without an `XviD` user data string as bug free; FFmpeg's workarounds for old Xvid builds (no user data and
+  the `XVID` fourcc) and for DivX 5 quarter-pixel chroma before build 1814 are not applied.

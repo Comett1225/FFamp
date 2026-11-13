@@ -797,6 +797,10 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         return std::move(decoder);
     };
     if (vp8 || apv || (vp9 && track.alpha) || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
+    if (part2 && (d.soft = openXvid(config, track.width, track.height))) {
+        d.backend = d.soft->name();
+        return decoder;
+    }
 
     CMVideoCodecType type = h264 ? kCMVideoCodecType_H264 : hevc ? kCMVideoCodecType_HEVC : vp9 ? kCMVideoCodecType_VP9 : av1 ? kCMVideoCodecType_AV1 : codec;
     if (vp9 || av1) VTRegisterSupplementalVideoDecoderIfAvailable(type);

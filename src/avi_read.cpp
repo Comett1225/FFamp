@@ -592,9 +592,12 @@ public:
                     }
                     checked = true;
                     if (packedStream && f.type >= 0) {
-                        if (placeholders > 0 && c.size - first <= 8) {
-                            --placeholders;
-                            continue;
+                        if (c.size - first <= 8) {
+                            if (placeholders > 0) {
+                                --placeholders;
+                                continue;
+                            }
+                            f.empty = true;
                         }
                         size_t second = 0;
                         int next = vopType(p, c.size, first + 4, &second);

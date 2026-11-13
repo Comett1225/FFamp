@@ -274,3 +274,52 @@ Not possible on a Mac without writing or bundling a codec:
 
 Not built: MPEG-2 in transport streams and MPEG program streams (.mpg, .vob); neither is on the app's list.
 
+
+# DivX and Xvid round: MPEG-4 Advanced Simple Profile through Xvid's decoder
+
+xvidcore 1.3.7 (GPL-2.0-or-later) is an optional library like the others (`ABSENT_XVID`); `third_party/build_mac.sh` builds it static
+for macOS 11 (C only on both architectures: `libxvidcore.a` is 673,400 bytes for arm64 and 778,904 bytes for x86_64). With it every
+MPEG-4 part 2 track, Simple Profile included, is decoded by `src/opt/xvid_decode.cpp` (backend `xvid`); how it is driven is in
+`docs/CONVENTIONS.md`. Without it the system decoder plays Simple Profile and Advanced Simple Profile is refused as before.
+
+Suite `tests/suites/46_mpeg4.sh`, fixtures in `tests/fixtures/asp` (made by `make.sh`: FFmpeg's encoder for the `lavc_` files,
+Xvid's own encoder through `xvid_encode.c` for GMC and the `xvid_` files, because FFmpeg cannot write S-VOPs). Every file has
+30 frames, 160x120 or 176x144.
+
+| File | Tools | Against FFmpeg 9.0.2 |
+|---|---|---|
+| `lavc_qpel.mp4`, `.mkv`, `.avi` | 2 B-frames, quarter-pixel, 4 vectors, `-mbd 2`, trellis | bit-exact with `-idct xvid`; 63.8 dB with FFmpeg's own IDCT |
+| `lavc_packed.avi` | the same stream as a DivX packed AVI (`DivX503b1393p`) | same pictures and frame times as the MP4; bit-exact against `-bug 0 -idct xvid` |
+| `lavc_matrix.mkv` | MPEG quantiser with custom intra and inter matrices, B-frames | bit-exact with `-idct xvid`; 62.8 dB |
+| `lavc_interlaced.mp4` | field DCT, alternate scan, quarter-pixel, B-frames | bit-exact with `-idct xvid`; 64.0 dB |
+| `lavc_fields.mkv` | field DCT and field motion vectors (P-frames) | bit-exact with `-idct xvid`; 60.4 dB |
+| `xvid_gmc.avi` | Xvid packed AVI: GMC S-VOPs, quarter-pixel, 2 B-frames | 26 of 30 frames bit-exact, the others 85.7 dB (one level apart on 2 to 5 pixels of one S-VOP and the B-frames that use it) |
+| `xvid_interlaced.avi` | Xvid packed AVI: interlaced, custom matrices, 2 B-frames | bit-exact |
+
+FFmpeg picks Xvid's IDCT by itself for streams with Xvid's user data; for its own streams it uses its simple IDCT, which is
+where the 60 to 64 dB come from. The existing formats fixtures (Simple Profile in MP4, Matroska and AVI, B-frames in MP4 and AVI,
+the hand-packed AVI) measure 61.3 and 63.1 dB against FFmpeg's simple IDCT and are bit-exact with `-idct xvid`.
+
+Also checked: frame counts and decoded frame times against ffprobe (MP4 and Matroska), the same pictures and times from MP4,
+Matroska, plain AVI and the packed AVI, random frames against the straight decode and against FFmpeg, ten threads decoding one file
+at once (each gets the straight decode), no leaks after random jumps (`leaks --atExit`), damaged copies, and the new fuzz target
+`fuzz_mpeg4` (the raw stream cut at each VOP, with jumps): 137,730 runs under guard malloc and the undefined-behaviour checks,
+nothing found. The FFmpeg mode and the no-FFmpeg mode of the suite both pass, and a build without xvidcore still refuses Advanced
+Simple Profile with its message.
+
+Speed, 1280x720, best of three on this Mac: an FFmpeg-made ASP file (quarter-pixel, 2 B-frames, 2.5 Mbit/s, 600 frames) decodes into
+memory at 1,167 frames a second (0.51 s; FFmpeg 0.24 s on one thread, 0.08 s with its frame threads); an Xvid-made packed AVI with
+GMC and quarter-pixel (300 frames) at 714 frames a second (0.42 s; FFmpeg 0.33 s, which cannot thread a packed stream either).
+Xvid's decoder is plain C on both architectures and runs on one thread; that is fast enough for DivX-sized video, so nothing more
+was done.
+
+The AVI reader now treats a packed N-VOP that follows no packed pair (Xvid's encoder writes one when it is flushed with B-frames
+waiting) as a slot with no picture, as FFmpeg does, instead of a frame that repeats the one before.
+
+Still not decoded right, because Xvid's decoder does not do it:
+
+- B-frames with field motion vectors (FFmpeg's `-flags +ilme` with B-frames): Xvid reads one vector per direction where the stream
+  has two, so those B-frames come out broken (18.6 dB). Xvid's own encoder never writes them.
+- Field motion vectors together with quarter-pixel motion (FFmpeg's `+ilme+qpel`): the P-frames differ from FFmpeg's decode.
+- DivX 5 files made with quarter-pixel motion by builds before 1814, and Xvid files from before Xvid wrote its user data: FFmpeg
+  imitates those encoders' rounding bugs, Xvid decodes them as correct streams.

@@ -1,6 +1,7 @@
 #include "absent/audio.h"
 #include "absent/media.h"
 #include "absent/probe.h"
+#include "soft_video.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -16,6 +17,7 @@ using namespace absent;
 const size_t kPacketLimit = 8u << 20;
 const uint32_t kPacketsPerTrack = 4000;
 const int64_t kPictureLimit = 4096 * 2304;
+uint64_t picturesSeen = 0;
 
 const std::string& scratch() {
     static const std::string path = [] {
@@ -133,6 +135,30 @@ void video(const uint8_t* data, size_t size) {
             decoder->frame(count);
         }
     }
+}
+
+void mpeg4(const uint8_t* data, size_t size) {
+    if (size < 2) return;
+    static const int sizes[4][2] = {{160, 120}, {176, 144}, {161, 121}, {32, 32}};
+    const int* shape = sizes[(data[0] ^ data[1]) & 3];
+    auto decoder = openXvid({}, shape[0], shape[1]);
+    if (!decoder) return;
+    PictureSink look = [&](const Picture& p) {
+        for (int i = 0; i < 3; ++i) {
+            const int rows = i ? p.chromaHeight : p.height, columns = i ? p.chromaWidth : p.width;
+            picturesSeen += p.plane[i][0] + p.plane[i][size_t(rows - 1) * p.stride[i] + size_t(columns - 1)];
+        }
+    };
+    size_t start = 2;
+    int64_t stamp = 0;
+    for (size_t at = start + 1; at + 4 <= size; ++at) {
+        if (data[at] || data[at + 1] || data[at + 2] != 1 || data[at + 3] != 0xB6) continue;
+        decoder->decode(data + start, at - start, stamp++, look);
+        start = at;
+        if ((stamp & 15) == 9) decoder->reset();
+    }
+    decoder->decode(data + start, size - start, stamp, look);
+    decoder->drain(look);
 }
 
 void resample(const uint8_t* data, size_t size) {

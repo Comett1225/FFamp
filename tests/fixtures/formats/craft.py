@@ -47,8 +47,11 @@ def packed(source, target):
     while at < len(frames):
         if at + 1 < len(frames) and kind(frames[at]) != 2 and kind(frames[at + 1]) == 2:
             out.append(frames[at] + frames[at + 1])
-            out.append(b"\x00\x00\x01\xb6\x50\x00\x00")
             at += 2
+            while at < len(frames) and kind(frames[at]) == 2:
+                out.append(frames[at])
+                at += 1
+            out.append(b"\x00\x00\x01\xb6\x50\x00\x00")
         else:
             out.append(frames[at])
             at += 1
@@ -63,8 +66,21 @@ def renamed(source, target, names):
     open(target, "wb").write(data)
 
 
+def wrapped(source, target, width, height, rate):
+    data = open(source, "rb").read()
+    frames = []
+    at = 0
+    while at + 5 <= len(data):
+        size = struct.unpack("<I", data[at:at + 4])[0]
+        frames.append(data[at + 5:at + 5 + size])
+        at += 5 + size
+    open(target, "wb").write(avi(frames, width, height, rate, b"XVID"))
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "packed":
         packed(sys.argv[2], sys.argv[3])
+    elif sys.argv[1] == "wrap":
+        wrapped(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]))
     else:
         renamed(sys.argv[2], sys.argv[3], sys.argv[4:])

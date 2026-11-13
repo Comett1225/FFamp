@@ -88,7 +88,13 @@ ninja -C out install >/dev/null
 fetch https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.3.0/SVT-AV1-v4.3.0.tar.bz2 9223ce06e6172ad41357ed23b3b00f036e03794b86b0e20ea9ccb3f648b8955d svtav1
 with_cmake -DBUILD_APPS=OFF -DBUILD_TESTING=OFF -DSVT_AV1_LTO=OFF
 
-for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc; do
+fetch https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.bz2 aeeaae952d4db395249839a3bd03841d6844843f5a4f84c271ff88f7aa1acff7 xvid
+cd build/generic
+CC="clang" CFLAGS="$FLAGS" LDFLAGS="$FLAGS" ./configure --host="$HOST" --prefix="$PREFIX" --disable-assembly >/dev/null
+make -j"$JOBS" >/dev/null
+make install >/dev/null
+
+for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore; do
     file="$PREFIX/lib/lib$lib.a"
     [ -f "$file" ] || { echo "missing $file" >&2; exit 1; }
     lipo -archs "$file" | grep -qx "$ARCH" || { echo "$file is not $ARCH only" >&2; exit 1; }

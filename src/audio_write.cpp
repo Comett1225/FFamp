@@ -196,7 +196,7 @@ struct FlacTarget : Target {
             h.push_back(uint8_t(point.frames >> 8));
             h.push_back(uint8_t(point.frames));
         }
-        const char vendor[] = "absent-media";
+        const char vendor[] = "FFamp";
         const uint32_t n = sizeof(vendor) - 1;
         h.insert(h.end(), {0x84, 0, 0, uint8_t(8 + n), uint8_t(n), 0, 0, 0});
         h.insert(h.end(), vendor, vendor + n);

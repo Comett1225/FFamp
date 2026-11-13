@@ -6,7 +6,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHIM = os.path.join(HERE, "..", "build", "shim")
-AMEDIA = os.path.join(HERE, "..", "build", "amedia")
+AMEDIA = os.path.join(HERE, "..", "build", "ffamp")
 REAL = {"ffmpeg": os.environ.get("FFMPEG", "ffmpeg"), "ffprobe": os.environ.get("FFPROBE", "ffprobe")}
 
 

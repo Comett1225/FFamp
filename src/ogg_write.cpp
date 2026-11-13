@@ -108,7 +108,7 @@ public:
         decoded = 0;
         packet(head.data(), head.size());
         page(0, 2);
-        const char vendor[] = "absent-media";
+        const char vendor[] = "FFamp";
         std::vector<uint8_t> tags = {'O', 'p', 'u', 's', 'T', 'a', 'g', 's', uint8_t(sizeof(vendor) - 1), 0, 0, 0};
         tags.insert(tags.end(), vendor, vendor + sizeof(vendor) - 1);
         tags.insert(tags.end(), 4, 0);

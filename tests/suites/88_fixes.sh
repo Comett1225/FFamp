@@ -1,4 +1,4 @@
-echo "== fixes: one check per reviewed finding, made and read back by amedia itself (no FFmpeg), then FFmpeg as the judge when present"
+echo "== fixes: one check per reviewed finding, made and read back by ffamp itself (no FFmpeg), then FFmpeg as the judge when present"
 FX=$O/fixes
 rm -rf $FX
 mkdir -p $FX

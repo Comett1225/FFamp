@@ -4,7 +4,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "amedia"))
+AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 QUIET = [FFMPEG, "-nostdin", "-hide_banner", "-v", "error", "-y"]
 SAME = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"

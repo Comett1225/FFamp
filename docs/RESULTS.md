@@ -130,15 +130,15 @@ through every target and runs a short burst of mutated inputs per target.
 
 `experiments/absentmotion/run_zero.sh` runs the desktop app's own import and export of one real project (13.5 s, 1080 x 1080, 60 fps,
 three H.264 clips) with two stand-in programs in place of `ffmpeg` and `ffprobe`, a second engine library that decodes the clips with
-absent-media, and every real FFmpeg program and library on the machine denied by a sandbox for the whole process tree.
+FFamp, and every real FFmpeg program and library on the machine denied by a sandbox for the whole process tree.
 
 | Check | Result |
 |---|---|
 | FFmpeg command lines the app runs for one import and export | 10 calls of 9 kinds; all answered by the stand-ins, none refused |
 | Real FFmpeg programs and libraries tried from inside the sandbox | 36 of 36 blocked |
 | Frames, length | 811 and 13.5167 s on both paths |
-| Checksum of every rendered frame, FFmpeg decoder against absent-media | 811 of 811 identical |
-| The app's audio mix (clip sound decoded by FFmpeg against absent-media) | same length to the sample (596,055); 99.6 % of sample values identical, largest difference 2 of 32,768, 110 dB |
+| Checksum of every rendered frame, FFmpeg decoder against FFamp | 811 of 811 identical |
+| The app's audio mix (clip sound decoded by FFmpeg against FFamp) | same length to the sample (596,055); 99.6 % of sample values identical, largest difference 2 of 32,768, 110 dB |
 | The clip's sound alone, with the app's two exact decode commands | same length to the sample, 136 dB |
 | The app's own check of the exported file | passed |
 | Export time, middle of three after a warm-up | 3,017 ms against 3,484 ms with FFmpeg (13 % less) |
@@ -244,4 +244,4 @@ AV1 size at a 6 Mbit/s target (22.5 MB for this clip):
 The earlier comparison set our 30-frame groups against FFmpeg's 150-frame default; with the same spacing the two were equal. The
 one-pass rate control of SVT-AV1 falls short of the target with short groups, and it cannot be steered while it runs (a bitrate
 change is only accepted in its low-delay constant-rate mode). On two other clips the new setting gave 77 % and 100 % of the target
-with 30-frame groups (66 % and 100 % before) and 95 % and 102 % with 150-frame groups. `amedia transcode` takes `--gop`.
+with 30-frame groups (66 % and 100 % before) and 95 % and 102 % with 150-frame groups. `ffamp transcode` takes `--gop`.

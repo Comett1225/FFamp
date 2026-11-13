@@ -88,7 +88,7 @@ each platform's back end is replaced when its tests pass. A setting keeps the ol
 
 ## Probe (stands in for ffprobe)
 
-`absent::probeJson(path, packets, &error)` (`include/absent/probe.h`) and `amedia probe --json [--packets] <file>` give the JSON the app
+`absent::probeJson(path, packets, &error)` (`include/absent/probe.h`) and `ffamp probe --json [--packets] <file>` give the JSON the app
 parses today from `ffprobe -show_streams -show_format [-show_packets] -of json`: the same key names, the same value formats (strings for
 times and rates, numbers for sizes and indexes), the same spellings of codec, profile, pixel format and colour names. It uses only the
 `Reader` / `Track` interface, so every container a reader exists for is covered.
@@ -117,7 +117,7 @@ Deliberate differences from ffprobe (all checked in `tests/suites/40_probe.sh`):
 `include/absent/capture.h` holds `FrameReader`, `FrameWriter`, `convertSpeech` / `shapeSpeech`, `captureDevices`, `captureAccess` and
 `CaptureSession`. The commands print or read the same raw bytes the app pipes today, so each call site changes its command line only.
 
-| Today in the app | With amedia |
+| Today in the app | With ffamp |
 |---|---|
 | `-ss S -noautorotate -i f -t L -vf fps=R[,scale=W:H] -pix_fmt rgb24 -f rawvideo -` (AI video, matte) | `frames-out f --no-rotate --start S --length L --fps R [--size WxH] --format rgb24` |
 | `-ss S -noautorotate -i f -frames:v N -fps_mode passthrough -pix_fmt yuv420p -f rawvideo -` (frame reader) | `frames-out f --no-rotate --start S --count N --format i420` |

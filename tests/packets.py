@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "amedia"))
+AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 
@@ -57,7 +57,7 @@ def payload(command):
 def compare(path, tolerance):
     mine = ours(path)
     if mine is None:
-        print(f"packets {os.path.basename(path)}: amedia cannot open it")
+        print(f"packets {os.path.basename(path)}: ffamp cannot open it")
         return False
     reference = theirs(path)
     good = len(mine) == len(reference) and len(mine) > 0
@@ -123,7 +123,7 @@ def compare(path, tolerance):
 def pcm(path):
     mine = ours(path)
     if not mine or len(mine) != 1 or mine[0]["codec"] != "lpcm":
-        print(f"pcm {os.path.basename(path)}: amedia does not give one PCM track")
+        print(f"pcm {os.path.basename(path)}: ffamp does not give one PCM track")
         return False
     track = mine[0]
     frame = track["frame"]
@@ -146,7 +146,7 @@ def pcm(path):
 def granules(path):
     mine = ours(path)
     if not mine or len(mine) != 1:
-        print(f"granules {os.path.basename(path)}: amedia does not give one track")
+        print(f"granules {os.path.basename(path)}: ffamp does not give one track")
         return False
     track = mine[0]
     packets = track["packets"]

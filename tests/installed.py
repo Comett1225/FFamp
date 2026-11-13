@@ -5,7 +5,7 @@ import sys
 
 import numpy
 
-AMEDIA = "../build/amedia"
+AMEDIA = "../build/ffamp"
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 VLC = "/Applications/VLC.app/Contents/MacOS/VLC"
 PACKET = 188

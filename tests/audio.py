@@ -10,7 +10,7 @@ import numpy
 numpy.seterr(all="ignore")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "amedia"))
+AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 
 
@@ -58,7 +58,7 @@ def ours(args):
     run = subprocess.run([AMEDIA] + args, capture_output=True)
     note = run.stderr.decode().strip()
     if run.returncode != 0:
-        print("amedia failed:", note)
+        print("ffamp failed:", note)
         return None, 0, 0
     parts = note.split(",")
     rate, channels = int(parts[0].split()[0]), int(parts[1].split()[0])

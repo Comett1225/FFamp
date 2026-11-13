@@ -16,5 +16,5 @@ LIBS=$(sed -n "$((LINE + 1)),$((LINE + 8))p" "$TREE/build.ninja" | grep ' LINK_L
 EXTRA=$(grep -E '^[A-Z0-9]+_LIBRARY:FILEPATH=/' "$MEDIA/build/CMakeCache.txt" | cut -d= -f2 | tr '\n' ' ')
 cd "$TREE"
 clang++ -arch arm64 -dynamiclib -Wl,-headerpad_max_install_names -o "$OUT/libamdesktop.dylib" -install_name @rpath/libamdesktop.dylib \
-    $OBJECTS "$OUT/video_absent.o" $LIBS "$MEDIA/build/libabsentmedia.a" $EXTRA -framework VideoToolbox -framework CoreMedia -framework AudioToolbox -framework AVFoundation -framework ImageIO
+    $OBJECTS "$OUT/video_absent.o" $LIBS "$MEDIA/build/libffamp.a" $EXTRA -framework VideoToolbox -framework CoreMedia -framework AudioToolbox -framework AVFoundation -framework ImageIO
 otool -L "$OUT/libamdesktop.dylib" | grep -c -i -e libav -e libsw || true

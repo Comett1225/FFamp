@@ -6,7 +6,7 @@ import time
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "amedia"))
+AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 
 
 def make(path, codec, count, width=1920, height=1080):

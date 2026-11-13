@@ -292,8 +292,8 @@ bool MkvWriter::finish(std::string* error) {
     Bytes info;
     size_t at = start(info, kInfo);
     number(info, kTimestampScale, 1000000);
-    text(info, kMuxingApp, "absent-media");
-    text(info, kWritingApp, "absent-media");
+    text(info, kMuxingApp, "FFamp");
+    text(info, kWritingApp, "FFamp");
     real(info, kDuration, duration);
     stop(info, at);
 

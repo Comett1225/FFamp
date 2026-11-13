@@ -9,10 +9,10 @@ import numpy as np
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.path.join(HERE, "..", "build", "amedia")
+AMEDIA = os.path.join(HERE, "..", "build", "ffamp")
 
 
-def amedia(*arguments):
+def ffamp(*arguments):
     return subprocess.run([AMEDIA] + [str(a) for a in arguments], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
 
 
@@ -188,21 +188,21 @@ def luma(grey, planar, width, height, least):
 
 
 def randomly(path, size, layout, rate):
-    whole = amedia("frames-out", path, "--size", size, "--format", layout)
-    total = int(amedia("frames-out", path, "--info").split()[7])
+    whole = ffamp("frames-out", path, "--size", size, "--format", layout)
+    total = int(ffamp("frames-out", path, "--info").split()[7])
     if total < 4 or len(whole) % total:
         return False
     step = len(whole) // total
     rng = random.Random(5)
     for n in [0, total - 1] + [rng.randrange(total) for _ in range(8)]:
         wanted = whole[n * step:(n + 3) * step]
-        if amedia("frames-out", path, "--size", size, "--format", layout, "--frame", n, "--count", 3) != wanted:
+        if ffamp("frames-out", path, "--size", size, "--format", layout, "--frame", n, "--count", 3) != wanted:
             print("      frame", n, "differs when asked for by number")
             return False
-        if amedia("frames-out", path, "--size", size, "--format", layout, "--start", "%.6f" % (n / float(rate)), "--count", 3) != wanted:
+        if ffamp("frames-out", path, "--size", size, "--format", layout, "--start", "%.6f" % (n / float(rate)), "--count", 3) != wanted:
             print("      frame", n, "differs when asked for by time")
             return False
-        if n and amedia("frames-out", path, "--size", size, "--format", layout, "--start", "%.6f" % ((n - 0.7) / float(rate)), "--count", 1) != wanted[:step]:
+        if n and ffamp("frames-out", path, "--size", size, "--format", layout, "--start", "%.6f" % ((n - 0.7) / float(rate)), "--count", 1) != wanted[:step]:
             print("      a time before frame", n, "did not give that frame")
             return False
     return True
@@ -210,10 +210,10 @@ def randomly(path, size, layout, rate):
 
 def steady(path, timescale, step_ticks, fps, start, length, filled):
     timescale, step_ticks, fps, start, length = int(timescale), int(step_ticks), float(fps), float(start), float(length)
-    whole = amedia("frames-out", path, "--format", "i420")
-    total = int(amedia("frames-out", path, "--info").split()[7])
+    whole = ffamp("frames-out", path, "--format", "i420")
+    total = int(ffamp("frames-out", path, "--info").split()[7])
     step = len(whole) // total
-    got = amedia("frames-out", path, "--format", "i420", "--fps", fps, "--start", start, "--length", length)
+    got = ffamp("frames-out", path, "--format", "i420", "--fps", fps, "--start", start, "--length", length)
     cut = int(np.floor(start * timescale + 0.5))
     ticks = [n * step_ticks - cut for n in range(total + 1)]
     nearest = lambda t: int(np.floor(abs(t) * fps / timescale + 0.5)) * (1 if t >= 0 else -1)
@@ -252,13 +252,13 @@ def sound_like(first, second, least):
 
 
 def sync(path, least_frames, least_seconds):
-    info = amedia("frames-out", path, "--info").split()
+    info = ffamp("frames-out", path, "--info").split()
     total, length = int(info[7]), float(info[11])
-    pictures = np.frombuffer(amedia("frames-out", path, "--size", "32x18", "--format", "i420"), dtype=np.uint8)
+    pictures = np.frombuffer(ffamp("frames-out", path, "--size", "32x18", "--format", "i420"), dtype=np.uint8)
     if total == 0 or pictures.size != total * 864:
         return False
     bright = pictures.reshape(total, 864)[:, :576].mean(axis=1) > 150
-    sound = np.frombuffer(amedia("pcm", path, "--rate", 48000, "--channels", 1, "--format", "s16le"), dtype="<i2").astype(np.float64) / 32768
+    sound = np.frombuffer(ffamp("pcm", path, "--rate", 48000, "--channels", 1, "--format", "s16le"), dtype="<i2").astype(np.float64) / 32768
     loud = np.abs(sound) > 0.1
     flashes = [n / 30 for n in range(1, total) if bright[n] and not bright[n - 1]]
     edges = np.nonzero(loud)[0]
@@ -305,7 +305,7 @@ def wav(path, rate):
 
 def paced(least, most, *arguments):
     began = time.time()
-    amedia(*arguments)
+    ffamp(*arguments)
     spent = time.time() - began
     print("      took %.2f s (wanted %s to %s)" % (spent, least, most))
     return float(least) <= spent <= float(most)

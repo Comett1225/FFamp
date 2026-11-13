@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "amedia"))
+AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 
 
 def variants(data, count, rng):
@@ -60,7 +60,7 @@ def main():
                 said = b"timeout"
             runs += 1
             opened += code == 0
-            if code not in (0, 1) or (code == 1 and b"amedia: " not in said):
+            if code not in (0, 1) or (code == 1 and b"ffamp: " not in said):
                 bad.append(f"{os.path.basename(path)} variant {n} exit {code}")
                 if os.environ.get("KEEP"):
                     with open(f"{target}.{os.path.basename(path)}.{n}", "wb") as out:

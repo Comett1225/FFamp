@@ -1,7 +1,7 @@
 #!/bin/bash
 set -eu
 cd "$(dirname "$0")/../.."
-A=../build/amedia
+A=../build/ffamp
 PX=fixtures/probe
 mkdir -p $PX/expected
 : > $PX/checksums.txt

@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "amedia"))
+AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 
 STREAM_FIELDS = ["codec_name", "codec_type", "profile", "width", "height", "pix_fmt", "color_range", "color_space", "color_transfer",
@@ -70,7 +70,7 @@ def rotation(stream):
 def compare(path, allow):
     a, b = ours(path), theirs(path)
     if a is None:
-        print(f"probe {os.path.basename(path)}: amedia cannot open it")
+        print(f"probe {os.path.basename(path)}: ffamp cannot open it")
         return False
     wrong, extra, checked = [], [], 0
     kept = [s for s in b.get("streams", []) if s.get("codec_type") in ("video", "audio")]
@@ -113,7 +113,7 @@ def compare(path, allow):
 def packets(path, allow):
     a, b = ours(path, True), theirs(path, True)
     if a is None:
-        print(f"packets {os.path.basename(path)}: amedia cannot open it")
+        print(f"packets {os.path.basename(path)}: ffamp cannot open it")
         return False
     kept = [s["index"] for s in b.get("streams", []) if s.get("codec_type") in ("video", "audio")]
     good = True

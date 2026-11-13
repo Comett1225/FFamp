@@ -80,7 +80,7 @@ check "Matroska tags are read" has_tags $RX/h264_aac.mkv "title=Test Title;"
 echo "== readers: broken files"
 READER_FUZZ=60
 [ -n "${QUICK:-}" ] && READER_FUZZ=12
-refused() { ! $A probe "$1" > /dev/null 2> $O/rd_refused.txt && grep -q '^amedia: ' $O/rd_refused.txt; }
+refused() { ! $A probe "$1" > /dev/null 2> $O/rd_refused.txt && grep -q '^ffamp: ' $O/rd_refused.txt; }
 : > $O/rd_empty.bin
 printf 'This is a text file, not a media file.\n' > $O/rd_text.bin
 head -c 3000 /dev/urandom > $O/rd_noise.bin

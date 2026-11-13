@@ -8,7 +8,7 @@ import time
 import numpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "amedia"))
+AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 
 
@@ -243,7 +243,7 @@ def race(raw, folder, frames):
         subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", "1920x1080", "-r", "30", "-i", raw, "-frames:v", str(frames),
                         *theirs, "-b:v", str(bitrate), "-g", "30", other], env=dict(os.environ, SVT_LOG="1"), check=True)
         their_time = time.time() - start
-        for name, path, spent in (("absent-media", ours, own_time), ("ffmpeg", other, their_time)):
+        for name, path, spent in (("FFamp", ours, own_time), ("ffmpeg", other, their_time)):
             count, level = luma_psnr(path, raw, 1920, 1080)
             rows.append(f"race {codec} 1080p {name}: {count} frames in {spent:.2f} s ({count / spent:.1f} fps), {os.path.getsize(path) * 8 / (count / 30) / 1000:.0f} kbit/s for a {bitrate // 1000} kbit/s target, luma PSNR {level:.2f} dB")
     print("\n".join(rows))

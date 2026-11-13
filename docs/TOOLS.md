@@ -1,6 +1,6 @@
 # File tools without FFmpeg
 
-`include/absent/tools.h` and the `amedia` commands in `tools/cmd_tools.cpp` replace what the desktop app starts `ffmpeg` for in
+`include/absent/tools.h` and the `ffamp` commands in `tools/cmd_tools.cpp` replace what the desktop app starts `ffmpeg` for in
 `DeskCompress.kt`, `DeskTools.kt`, `DeskReverse.kt`, `DeskGifVideo.kt` and `DeskVideoDownloader.kt`. No other program is started.
 
 ## Shared behaviour
@@ -12,7 +12,7 @@
   `false` to stop.
 - **Stopping**: SIGINT or SIGTERM stops at the next frame or packet group. Data is written to `<output>.part` and only becomes
   `<output>` when the file is complete, so a stopped or failed run leaves no output file, no `.part` file and no scratch file. The
-  exit code is 130 and the message is `amedia: cancelled`. Other failures exit with 1 and one line on standard error.
+  exit code is 130 and the message is `ffamp: cancelled`. Other failures exit with 1 and one line on standard error.
 - **Output files start at zero** and keep picture and sound in step: a track that starts later than the other gets a leading empty
   edit in MP4/MOV, later block times in Matroska.
 - A result line (for `reverse`, `gif-video`, `gif-info`, and `output <path>` when the command chose the extension) is printed on
@@ -36,7 +36,7 @@
 
 What the app's command does and what ours does:
 
-| | App's FFmpeg command | absent-media |
+| | App's FFmpeg command | FFamp |
 |---|---|---|
 | Cut | `-ss start` before the input (exact: frames before it are decoded and dropped), `-t end-start` | the same frames: first frame at or after the start, last frame before start + length |
 | A span with no frame in it | the app looks for the frame shown before the start and seeks there | the same: that one frame is shown |

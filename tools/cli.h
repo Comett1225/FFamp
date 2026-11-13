@@ -46,7 +46,7 @@ inline Args parse(int argc, char** argv) {
 }
 
 inline int fail(const std::string& text) {
-    fprintf(stderr, "amedia: %s\n", text.c_str());
+    fprintf(stderr, "ffamp: %s\n", text.c_str());
     return 1;
 }
 

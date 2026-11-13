@@ -1,7 +1,7 @@
 FFMPEG="${FFMPEG:-ffmpeg}"
 FFPROBE="${FFPROBE:-ffprobe}"
 export FFMPEG FFPROBE
-A=../build/amedia
+A=../build/ffamp
 O=out
 F="$FFMPEG -nostdin -hide_banner -v error -y"
 failed=0

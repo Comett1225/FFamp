@@ -1,6 +1,6 @@
-# absent-media
+# FFamp
 
-A small media layer for AbsentMotion's desktop apps that does not use FFmpeg: its own container code, written from the public
+Fast Forward Absent Multimedia Project: a small media layer for AbsentMotion's desktop apps that does not use FFmpeg: its own container code, written from the public
 specifications, on top of the codecs the operating system already has.
 
 This is a prototype. It proves the riskiest part on macOS; nothing here is used by the app yet.
@@ -13,7 +13,7 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 - H.264 and HEVC decoding through VideoToolbox, frames stay on the GPU (IOSurface, Metal-ready).
 - Frame-exact seeking to any frame.
 - H.264 and HEVC encoding through VideoToolbox, AAC through AudioToolbox, Opus through libopus when it is installed.
-- `amedia`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
+- `ffamp`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
 - File tools (`docs/TOOLS.md`): `compress`, `trim`, `extract-audio`, `reverse`, `gif-video`, `merge`, `strip-audio`, `rewrap`, with progress
   lines and a clean stop; `docs/YTDLP.md` describes the downloader without FFmpeg.
 
@@ -34,7 +34,7 @@ is linked or copied.
     src/mkv_write.cpp        Matroska and WebM writer (RFC 8794, RFC 9559)
     src/opus_encode.cpp      Opus through libopus (BSD), built only when the library is found
     src/mac/                 VideoToolbox and AudioToolbox back end
-    tools/amedia.cpp         command-line tool
+    tools/ffamp.cpp         command-line tool
     tests/                   comparison against FFmpeg and against AVFoundation
     docs/                    results and the proposal for how AbsentMotion would call this
 

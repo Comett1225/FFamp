@@ -34,7 +34,7 @@ double startedAt = 0;
 void note(const std::string& text) {
     const char* path = getenv("ABSENT_SHIM_LOG");
     if (!path || !*path) return;
-    std::string line = "absent-media stand-in " + role + " pid " + std::to_string(getpid()) + " (" + self + ") " + text + "\n";
+    std::string line = "FFamp stand-in " + role + " pid " + std::to_string(getpid()) + " (" + self + ") " + text + "\n";
     int file = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (file < 0) return;
     (void)!write(file, line.data(), line.size());
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
     note("called with" + shown(given));
     int code = role == "ffprobe" ? asProbe() : role == "ffmpeg" ? asEncoder() : -1;
     if (code < 0) {
-        fprintf(stderr, "absent-media stand-in %s: this command line is not one it knows, nothing was done:%s\n", role.c_str(), shown(given).c_str());
+        fprintf(stderr, "FFamp stand-in %s: this command line is not one it knows, nothing was done:%s\n", role.c_str(), shown(given).c_str());
         note("REFUSED, not a known command line");
         return done(kRefused);
     }

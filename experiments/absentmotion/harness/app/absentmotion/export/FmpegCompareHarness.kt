@@ -135,9 +135,9 @@ class FmpegCompareHarness {
         val engine = EngineThread(0xff000000.toInt(), Desk.context)
         try {
             engine.effects.first { it.definitions.isNotEmpty() }
-            val amedia = env("FM_AMEDIA")
+            val ffamp = env("FM_AMEDIA")
             val absent = { pcm: File, result: File ->
-                listOf(amedia!!, "encode", result.path, "--video", "-", "--format", "rgb0", "--size", "${width}x$height", "--fps", "${s.fps}", "--codec", "h264",
+                listOf(ffamp!!, "encode", result.path, "--video", "-", "--format", "rgb0", "--size", "${width}x$height", "--fps", "${s.fps}", "--codec", "h264",
                     "--bitrate", "$bitrate", "--gop", "${s.fps}") + (if (env("FM_REORDER") == null) listOf("--no-reorder") else emptyList()) +
                     listOf("--audio", pcm.path, "--rate", "${s.audio.effectiveRate}", "--channels", "2", "--abitrate", "${s.audio.bitrateKbps * 1000}")
             }

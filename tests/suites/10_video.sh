@@ -1,3 +1,15 @@
+echo "== fixtures: decode, transcode and remux without FFmpeg"
+FX=fixtures/video
+fixture_decode() { [ "$($A decode "$FX/$1" | md5)" = "$(grep " $1\$" $FX/decoded.md5 | cut -d' ' -f1)" ]; }
+for f in h264_270p.mp4 hevc_270p.mp4; do
+    check "decode $f matches the checked checksum" fixture_decode $f
+    $A transcode $FX/$f $O/fx_transcode_$f --codec hevc --bitrate 1000000 2> /dev/null
+    check "transcode $f opens in AVFoundation" ../build/avcheck $O/fx_transcode_$f
+    $A remux $FX/$f $O/fx_remux_$f
+    check "remux $f opens in AVFoundation" ../build/avcheck $O/fx_remux_$f
+    check "remux $f decodes to the same frames" [ "$($A decode $O/fx_remux_$f | md5)" = "$($A decode $FX/$f | md5)" ]
+done
+have_ffmpeg || return 0
 echo "== decode: every frame against ffmpeg"
 for f in h264_720.mp4 hevc_720.mp4 frag_h264.mp4 hevc_720.mov h264_1080_60s.mp4 hevc_1080_60s.mp4; do check "decode $f" python3 compare.py decode $O/$f; done
 

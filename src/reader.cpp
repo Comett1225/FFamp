@@ -14,7 +14,7 @@ Sniffed sniff(const uint8_t* b, size_t n) {
     if (at(4, "ftyp") || at(4, "moov") || at(4, "mdat") || at(4, "free") || at(4, "wide") || at(4, "skip")) return Sniffed::Mp4;
     if (n >= 4 && b[0] == 0x1A && b[1] == 0x45 && b[2] == 0xDF && b[3] == 0xA3) return Sniffed::Matroska;
     if (at(0, "OggS")) return Sniffed::Ogg;
-    if ((at(0, "RIFF") || at(0, "RF64")) && at(8, "WAVE")) return Sniffed::Wave;
+    if ((at(0, "RIFF") || at(0, "RF64") || at(0, "BW64")) && at(8, "WAVE")) return Sniffed::Wave;
     if (at(0, "FORM") && (at(8, "AIFF") || at(8, "AIFC"))) return Sniffed::Wave;
     if (n >= 189 && b[0] == 0x47 && b[188] == 0x47 && (n < 377 || b[376] == 0x47)) return Sniffed::TransportStream;
     if (n >= 389 && b[4] == 0x47 && b[196] == 0x47 && b[388] == 0x47) return Sniffed::TransportStream;
@@ -54,6 +54,7 @@ std::unique_ptr<Reader> Reader::open(const std::string& path, std::string* error
         case Sniffed::TransportStream: return openTransportStream(path, error);
         case Sniffed::Unknown: break;
     }
+    if (auto reader = openRawAudio(path, nullptr)) return reader;
     if (error) *error = "file format not recognised";
     return nullptr;
 }

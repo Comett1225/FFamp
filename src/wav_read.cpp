@@ -1,10 +1,245 @@
+#include "read_common.h"
 #include "readers.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 
 namespace absent {
 
-std::unique_ptr<Reader> openWave(const std::string&, std::string* error) {
-    if (error) *error = "WAV and AIFF files are not supported yet";
-    return nullptr;
+namespace {
+
+const uint32_t kPacketFrames = 4096;
+
+class WaveReader : public FileReader {
+public:
+    bool flipSign = false;
+
+    bool read(const Track& track, uint32_t index, uint8_t* out) override {
+        if (!FileReader::read(track, index, out)) return false;
+        if (flipSign) for (uint32_t i = 0; i < track.samples[index].size; ++i) out[i] ^= 0x80;
+        return true;
+    }
+};
+
+struct Layout {
+    int channels = 0;
+    double rate = 0;
+    int bytes = 0;
+    bool floating = false;
+    bool bigEndian = false;
+    uint64_t mask = 0;
+    uint64_t dataAt = 0;
+    uint64_t dataSize = 0;
+    uint64_t frames = ~0ull;
+    bool described = false;
+    bool located = false;
+    const char* refused = nullptr;
+};
+
+std::string chunkText(Source& source, uint64_t at, uint64_t size) {
+    std::vector<uint8_t> text;
+    if (!source.load(at, size, text, 1 << 16)) return {};
+    std::string out(text.begin(), std::find(text.begin(), text.end(), uint8_t(0)));
+    while (!out.empty() && (out.back() == ' ' || out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    return out;
+}
+
+void keep(Tags& tags, const char* key, const std::string& value) {
+    if (!value.empty() && !tags.count(key)) tags[key] = value;
+}
+
+void infoList(Source& source, uint64_t at, uint64_t size, Tags& tags) {
+    static const char* const names[][2] = {{"INAM", "title"}, {"IART", "artist"}, {"IPRD", "album"}, {"ICRD", "date"}, {"IGNR", "genre"},
+        {"ICMT", "comment"}, {"ISFT", "encoder"}, {"ITRK", "track"}, {"IPRT", "track"}, {"ICOP", "copyright"}};
+    uint64_t end = at + size;
+    while (end - at >= 8) {
+        const uint8_t* h = source.view(at, 8);
+        if (!h) return;
+        uint64_t length = le32(h + 4);
+        char id[5] = {char(h[0]), char(h[1]), char(h[2]), char(h[3]), 0};
+        at += 8;
+        if (length > end - at) return;
+        for (const auto& name : names) if (strcmp(id, name[0]) == 0) keep(tags, name[1], chunkText(source, at, length));
+        at += length + (length & 1);
+        if (at > end) return;
+    }
+}
+
+void riff(Source& source, Layout& w, Tags& tags) {
+    const uint64_t total = source.size();
+    uint64_t wideData = 0;
+    uint64_t at = 12;
+    while (total - at >= 8) {
+        const uint8_t* h = source.view(at, 8);
+        if (!h) break;
+        uint32_t id = be32(h);
+        uint64_t size = le32(h + 4);
+        uint64_t body = at + 8;
+        uint64_t left = total - body;
+        if (id == fourcc("ds64") && size >= 28 && left >= 28) {
+            const uint8_t* d = source.view(body, 28);
+            if (d) wideData = le64(d + 8);
+        } else if (id == fourcc("fmt ") && size >= 16 && left >= 16 && !w.described) {
+            size_t have = size_t(std::min<uint64_t>({size, left, 40}));
+            const uint8_t* f = source.view(body, have);
+            if (!f) break;
+            uint32_t tag = le16(f);
+            w.channels = int(le16(f + 2));
+            w.rate = le32(f + 4);
+            uint32_t align = le16(f + 12), bits = le16(f + 14);
+            if (tag == 0xFFFE && have >= 40) {
+                static const uint8_t base[14] = {0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71};
+                w.mask = le32(f + 20);
+                tag = memcmp(f + 26, base, 14) == 0 ? le16(f + 24) : 0;
+            }
+            w.bytes = w.channels > 0 && align % uint32_t(w.channels) == 0 && align ? int(align) / w.channels : int(bits + 7) / 8;
+            w.floating = tag == 3;
+            w.described = true;
+            if (tag != 1 && tag != 3) w.refused = "this WAV file holds compressed sound, only PCM is supported";
+        } else if (id == fourcc("data") && !w.located) {
+            w.dataAt = body;
+            w.dataSize = size == 0xFFFFFFFF && wideData ? wideData : size;
+            if (size == 0xFFFFFFFF || size == 0 || w.dataSize > left) w.dataSize = left;
+            w.located = true;
+            size = w.dataSize;
+        } else if (id == fourcc("LIST") && size >= 4 && left >= size) {
+            const uint8_t* kind = source.view(body, 4);
+            if (kind && be32(kind) == fourcc("INFO")) infoList(source, body + 4, size - 4, tags);
+        } else if ((id == fourcc("id3 ") || id == fourcc("ID3 ")) && left >= size) {
+            id3v2(source, body, tags);
+        }
+        if (size > left) break;
+        at = body + size;
+        if ((size & 1) && at < total) ++at;
+    }
+}
+
+double extended(const uint8_t* p) {
+    int exponent = int(be16(p) & 0x7FFF);
+    double value = std::ldexp(double(be64(p + 2)), exponent - 16383 - 63);
+    return std::isfinite(value) ? value : 0;
+}
+
+void aiff(Source& source, bool compressed, Layout& w, Tags& tags, bool& flip) {
+    const uint64_t total = source.size();
+    uint64_t at = 12;
+    w.bigEndian = true;
+    while (total - at >= 8) {
+        const uint8_t* h = source.view(at, 8);
+        if (!h) break;
+        uint32_t id = be32(h);
+        uint64_t size = be32(h + 4);
+        uint64_t body = at + 8;
+        uint64_t left = total - body;
+        if (id == fourcc("COMM") && size >= 18 && left >= 18 && !w.described) {
+            size_t have = size_t(std::min<uint64_t>({size, left, 22}));
+            const uint8_t* c = source.view(body, have);
+            if (!c) break;
+            w.channels = int(be16(c));
+            w.frames = be32(c + 2);
+            int bits = int(be16(c + 6));
+            w.rate = extended(c + 8);
+            w.bytes = (bits + 7) / 8;
+            w.described = true;
+            flip = w.bytes == 1;
+            uint32_t kind = compressed && have >= 22 ? be32(c + 18) : fourcc("NONE");
+            if (kind == fourcc("sowt")) {
+                w.bigEndian = false;
+            } else if (kind == fourcc("fl32") || kind == fourcc("FL32")) {
+                w.floating = true;
+                w.bytes = 4;
+            } else if (kind == fourcc("fl64") || kind == fourcc("FL64")) {
+                w.floating = true;
+                w.bytes = 8;
+            } else if (kind == fourcc("in24")) {
+                w.bytes = 3;
+            } else if (kind == fourcc("in32")) {
+                w.bytes = 4;
+            } else if (kind == fourcc("raw ")) {
+                flip = false;
+            } else if (kind != fourcc("NONE") && kind != fourcc("twos")) {
+                w.refused = "this AIFF file holds compressed sound, only PCM is supported";
+            }
+        } else if (id == fourcc("SSND") && left >= 8 && !w.located) {
+            const uint8_t* d = source.view(body, 8);
+            if (!d) break;
+            uint64_t skip = be32(d);
+            uint64_t available = left - 8;
+            uint64_t content = size >= 8 && size - 8 <= available ? size - 8 : available;
+            if (skip <= content) {
+                w.dataAt = body + 8 + skip;
+                w.dataSize = content - skip;
+                w.located = true;
+            }
+        } else if (id == fourcc("NAME")) {
+            keep(tags, "title", chunkText(source, body, std::min(size, left)));
+        } else if (id == fourcc("AUTH")) {
+            keep(tags, "artist", chunkText(source, body, std::min(size, left)));
+        } else if (id == fourcc("ANNO")) {
+            keep(tags, "comment", chunkText(source, body, std::min(size, left)));
+        } else if (id == fourcc("(c) ")) {
+            keep(tags, "copyright", chunkText(source, body, std::min(size, left)));
+        } else if (id == fourcc("ID3 ") && left >= size) {
+            id3v2(source, body, tags);
+        }
+        if (size > left) break;
+        at = body + size;
+        if ((size & 1) && at < total) ++at;
+    }
+}
+
+}
+
+std::unique_ptr<Reader> openWave(const std::string& path, std::string* error) {
+    auto fail = [&](const char* text) {
+        if (error) *error = text;
+        return nullptr;
+    };
+    auto reader = std::make_unique<WaveReader>();
+    Source& source = reader->source;
+    if (!source.open(path)) return fail("cannot open file");
+    const uint8_t* head = source.view(0, 12);
+    if (!head) return fail("file is too short");
+    Layout w;
+    if (memcmp(head, "FORM", 4) == 0) {
+        reader->name = "aiff";
+        aiff(source, memcmp(head + 8, "AIFC", 4) == 0, w, reader->found, reader->flipSign);
+    } else {
+        reader->name = "wav";
+        riff(source, w, reader->found);
+    }
+    if (!w.described) return fail("no sound format description in this file");
+    if (w.refused) return fail(w.refused);
+    if (!w.located) return fail("no sound data in this file");
+    const bool sized = w.floating ? w.bytes == 4 || w.bytes == 8 : w.bytes >= 1 && w.bytes <= 4;
+    if (w.channels < 1 || w.channels > 255 || !sized || !(w.rate >= 1 && w.rate <= 16777216)) return fail("unsupported PCM layout");
+    const uint64_t frameBytes = uint64_t(w.channels) * w.bytes;
+    const uint64_t frames = std::min(w.frames, w.dataSize / frameBytes);
+    Track track;
+    track.id = 1;
+    track.kind = Kind::Audio;
+    track.codec = fourcc("lpcm");
+    track.sampleRate = int(std::lround(w.rate));
+    track.timescale = uint32_t(track.sampleRate);
+    track.channels = w.channels;
+    track.bits = w.bytes * 8;
+    track.floating = w.floating;
+    track.bigEndian = w.bigEndian && w.bytes > 1;
+    track.channelMask = w.mask;
+    track.samples.reserve(size_t((frames + kPacketFrames - 1) / kPacketFrames));
+    for (uint64_t done = 0; done < frames; done += kPacketFrames) {
+        Sample s;
+        uint64_t count = std::min<uint64_t>(kPacketFrames, frames - done);
+        s.offset = w.dataAt + done * frameBytes;
+        s.size = uint32_t(count * frameBytes);
+        s.pts = s.dts = int64_t(done);
+        s.duration = uint32_t(count);
+        s.sync = true;
+        track.samples.push_back(s);
+    }
+    indexTrack(track);
+    reader->list.push_back(std::move(track));
+    return reader;
 }
 
 }

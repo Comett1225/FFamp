@@ -17,7 +17,7 @@ one() {
     local target=$1 job=$2 stop=$(($(date +%s) + seconds)) left
     mkdir -p corpus/$target findings/$target
     local seeds="$TMPDIR/seeds"
-    [ $target = resample ] && seeds=../fixtures/fuzz/resample
+    [ $target = resample ] && { mkdir -p ../fixtures/fuzz/resample; seeds=../fixtures/fuzz/resample; }
     mkdir -p "$seeds"
     while left=$((stop - $(date +%s))) && [ $left -gt 0 ]; do
         ${guard[@]+"${guard[@]}"} $build/fuzz_$target ${FUZZ_ARGS:-} -max_total_time=$left -artifact_prefix=findings/$target/ corpus/$target "$seeds" >> logs/$target.$job.log 2>&1

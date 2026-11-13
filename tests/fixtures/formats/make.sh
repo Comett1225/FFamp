@@ -63,4 +63,11 @@ $F $V $A -c:v libx264 -preset fast -bf 2 -g 10 -pix_fmt yuv420p -c:a libmp3lame 
 $F $V $A -c:v mpeg2video -q:v 4 -g 10 -bf 2 -c:a mp2 -b:a 128k avi_mpeg2_mp2.avi
 $F $V $A -c:v mpeg1video -q:v 4 -g 10 -bf 2 -c:a pcm_s24le avi_mpeg1_pcm.avi
 $F $D -f lavfi -i sine=frequency=440:sample_rate=48000:duration=0.08 -c:v dvvideo -pix_fmt yuv420p -c:a pcm_s16le avi_dv_pcm.avi
+G="-f lavfi -i testsrc2=size=160x120:rate=25:duration=0.4,format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='255*X/W'"
+$F $G -frames:v 3 -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le alpha_prores.mov
+$F $G -c:v libvpx-vp9 -pix_fmt yuva420p -b:v 500k -g 5 alpha_vp9.webm
+$F $G -c:v libvpx -pix_fmt yuva420p -b:v 500k -g 5 -auto-alt-ref 0 alpha_vp8.webm
+$F -f lavfi -i testsrc2=size=160x120:rate=30:duration=4 -c:v libx264 -preset fast -g 60 -pix_fmt yuv420p $T/clean.mp4
+$F -i $T/clean.mp4 -c copy -bsf:v "noise=amount=if(eq(n\,117)\,3\,0)" bad_sample.mp4
+$F -f lavfi -i testsrc2=size=160x120:rate=25:duration=0.4 -c:v ffv1 unknown_codec.mkv
 rm -r $T

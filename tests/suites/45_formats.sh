@@ -59,6 +59,19 @@ for f in avi_mpeg4_mp3.avi avi_asp_ac3.avi avi_mjpeg_pcm.avi avi_h264_mp3.avi av
     check "$f read without any index gives the same packets" [ "$($A packets $O/fx_walk.avi | md5)" = "$($A packets $FX/$f | md5)" ]
 done
 
+echo "== formats: alpha, one undecodable sample, unknown codecs (no FFmpeg)"
+for f in alpha_prores.mov alpha_vp9.webm alpha_vp8.webm; do
+    check "$f decodes with its alpha plane, at full and at half size" $FC veil $FX/$f 160 120
+    check "$f as BGRA decodes to the checked checksum" listed veiled $f $A decode $FX/$f --bgra
+    check "random frames of $f equal the straight decode" python3 comparex.py selfseek $FX/$f 10 5
+done
+check "probe names the alpha pixel formats" [ "$($A probe --json $FX/alpha_prores.mov | grep -c yuva444p12le)$($A probe --json $FX/alpha_vp9.webm | grep -c yuva420p)$($A probe --json $FX/alpha_vp8.webm | grep -c yuva420p)" = 111 ]
+check "a file with one undecodable sample still gives every frame, the lost ones as the frame before" $FC concealed $FX/bad_sample.mp4 160 120 115 117 119
+check "bad_sample.mp4 decodes to the checked checksum" listed pictures bad_sample.mp4 $A decode $FX/bad_sample.mp4
+names_unknown() { $A probe --json $FX/unknown_codec.mkv | grep -q '"codec_name":"ffv1".*"start_time":"0.000000".*"duration":"0.400000"'; }
+check "a video codec nothing here decodes is still named and timed by probe" names_unknown
+check "and its decoder says it is not supported" refuses_with $FX/unknown_codec.mkv "video codec not supported"
+
 echo "== formats: damaged files never crash (no FFmpeg)"
 FX_FUZZ=30
 [ -n "${QUICK:-}" ] && FX_FUZZ=6
@@ -119,6 +132,15 @@ avi_dv_pcm.avi 33
 TABLE
 check "decode avi_h264_mp3.avi (B-frames put in order) frame-exact" python3 comparex.py decode $FX/avi_h264_mp3.avi
 for f in mjpeg422.mov mjpeg444.mkv avi_mjpeg422_pcm.avi; do check "decode $f through ImageIO (as BGRA; the judge fills in 4:2:2 colour with another filter)" $FC bgra $FX/$f 30; done
+
+check "alpha_prores.mov alpha against ffmpeg" $FC veil $FX/alpha_prores.mov 160 120 -an
+check "alpha_vp9.webm alpha against ffmpeg with libvpx" $FC veil $FX/alpha_vp9.webm 160 120 -c:v libvpx-vp9
+check "alpha_vp8.webm alpha against ffmpeg with libvpx" $FC veil $FX/alpha_vp8.webm 160 120 -c:v libvpx
+check "decode alpha_prores.mov colour" python3 comparex.py decode $FX/alpha_prores.mov 50
+check "decode alpha_vp9.webm colour" python3 comparex.py decode $FX/alpha_vp9.webm
+check "decode alpha_vp8.webm colour" python3 comparex.py decode $FX/alpha_vp8.webm
+check "fields of unknown_codec.mkv" python3 probe_check.py compare $FX/unknown_codec.mkv stream0.pix_fmt stream0.color_range stream0.bit_rate
+check "fields of alpha_prores.mov" python3 probe_check.py compare $FX/alpha_prores.mov
 
 echo "== formats: probe fields against ffprobe"
 for f in ac3_stereo.mp4 eac3_51.mp4 ac3_51.mov ac3_mono.mka amr_nb.3gp amr_wb.3gp mpeg4.mp4 mpeg4_asp.mp4 mjpeg.mov mjpeg422.mov dv_pal.mov dv_ntsc.mov h263.3gp; do

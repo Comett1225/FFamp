@@ -303,6 +303,11 @@ void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, in
             row[3] = 255;
         }
     }
+    for (int y = from; p.alpha && y < to; ++y) {
+        const uint8_t* mask = p.alpha + size_t(y) * p.alphaStride;
+        uint8_t* row = out + size_t(y) * stride;
+        for (int x = 0; x < p.width; ++x) row[4 * x + 3] = mask[x];
+    }
 }
 
 bool pictureToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst) {

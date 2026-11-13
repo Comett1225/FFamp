@@ -50,6 +50,7 @@ struct Track {
     bool bigEndian = false;
     uint64_t channelMask = 0;
     bool interlaced = false;
+    bool alpha = false;
     int64_t mediaEnd = -1;
     int64_t delay = 0;
     std::string language;
@@ -70,6 +71,7 @@ public:
     virtual const char* format() const = 0;
     virtual const std::vector<Track>& tracks() const = 0;
     virtual bool read(const Track& track, uint32_t index, uint8_t* out) = 0;
+    virtual bool readAlpha(const Track& track, uint32_t index, std::vector<uint8_t>& out);
     virtual const std::map<std::string, std::string>& tags() const;
     virtual double statedSeconds() const;
     const Track* first(Kind kind) const;

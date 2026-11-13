@@ -119,6 +119,7 @@ struct Lane {
     VorbisModes modes;
     int64_t discard = 0;
     std::vector<uint8_t> firstBytes;
+    std::vector<std::pair<uint64_t, uint32_t>> masks;
 };
 
 bool starts(const std::string& value, const char* prefix) { return value.rfind(prefix, 0) == 0; }
@@ -217,8 +218,16 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
                 t.configType = fourcc("esds");
                 t.config = mpeg4Descriptor(secret.data() + 40, secret.size() - 40);
             }
-            if (!t.codec || t.codec == fourcc("avc1")) lane.usable = false;
-        } else lane.usable = false;
+            if (!t.codec || t.codec == fourcc("avc1")) {
+                t.codec = be32(secret.data() + 16);
+                t.configType = 0;
+                t.config.clear();
+            }
+        } else {
+            char name[4] = {' ', ' ', ' ', ' '};
+            for (size_t i = 0; i < 4 && i + 2 < id.size(); ++i) name[i] = id[i + 2];
+            t.codec = be32(reinterpret_cast<const uint8_t*>(name));
+        }
         if ((t.codec == fourcc("avc1") || t.codec == fourcc("hvc1") || t.codec == fourcc("av01")) && t.config.empty()) lane.usable = false;
         return;
     }
@@ -290,6 +299,16 @@ public:
     uint64_t scale = 1000000;
     double length = -1;
     bool haveTracks = false;
+    uint64_t maskAt = 0;
+    uint64_t maskSize = 0;
+
+    bool readAlpha(const Track& track, uint32_t index, std::vector<uint8_t>& out) override {
+        for (const Lane& l : lanes) {
+            if (l.track.id != track.id) continue;
+            return index < l.masks.size() && l.masks[index].second && source.load(l.masks[index].first, l.masks[index].second, out, 64u << 20);
+        }
+        return false;
+    }
 
     double statedSeconds() const override { return length > 0 ? length * double(scale) / kBillion : -1; }
 
@@ -456,6 +475,12 @@ public:
         t.samples.push_back(s);
         lane.times.push_back(time);
         lane.spans.push_back(span);
+        if (maskSize && maskSize < (64u << 20) && (t.codec == fourcc("vp08") || t.codec == fourcc("vp09"))) {
+            lane.masks.resize(t.samples.size());
+            lane.masks.back() = {maskAt, uint32_t(maskSize)};
+            t.alpha = true;
+        }
+        maskSize = 0;
     }
 
     void block(uint64_t at, uint64_t size, int64_t clusterTime, bool simple, bool key, int64_t span, int64_t discard) {
@@ -523,6 +548,32 @@ public:
         }
     }
 
+    void additions(uint64_t at, uint64_t end, int depth) {
+        uint64_t kind = 1, foundAt = 0, foundSize = 0;
+        while (end - at >= 2) {
+            size_t have = size_t(std::min<uint64_t>(end - at, 12));
+            const uint8_t* p = source.view(at, have);
+            Element e;
+            if (!p || !element(p, have, e)) break;
+            uint64_t body = at + e.head;
+            if (e.open || e.size > end - body) break;
+            if (e.id == 0xA6 && depth == 0) {
+                additions(body, body + e.size, 1);
+            } else if (e.id == 0xEE && e.size <= 8 && depth == 1) {
+                const uint8_t* value = source.view(body, size_t(e.size));
+                if (value) kind = number(View{value, size_t(e.size)});
+            } else if (e.id == 0xA5 && depth == 1) {
+                foundAt = body;
+                foundSize = e.size;
+            }
+            at = body + e.size;
+        }
+        if (depth == 1 && kind == 1 && foundSize) {
+            maskAt = foundAt;
+            maskSize = foundSize;
+        }
+    }
+
     void group(uint64_t at, uint64_t end, int64_t clusterTime) {
         uint64_t blockAt = 0, blockSize = 0;
         bool reference = false;
@@ -545,10 +596,13 @@ public:
                 View v{value, size_t(e.size)};
                 if (e.id == kBlockDuration) span = int64_t(std::min<uint64_t>({number(v), 1ull << 40, uint64_t((int64_t(1) << 62) / int64_t(scale))})) * int64_t(scale);
                 else discard = signedNumber(v);
+            } else if (e.id == kBlockAdditions) {
+                additions(body, body + e.size, 0);
             }
             at = body + e.size;
         }
         if (blockAt) block(blockAt, blockSize, clusterTime, false, !reference, span, discard);
+        maskSize = 0;
     }
 
     uint64_t cluster(uint64_t at, uint64_t end, bool open) {

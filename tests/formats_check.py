@@ -94,6 +94,43 @@ def late(path, count, seed, least):
     return frames == judge and worst >= least
 
 
+def veil(path, width, height, judge):
+    frame = width * height * 4
+    got = numpy.frombuffer(subprocess.run([AMEDIA, "decode", path, "--bgra"], capture_output=True).stdout, dtype=numpy.uint8).reshape(-1, 4)
+    half = numpy.frombuffer(subprocess.run([AMEDIA, "frames-out", path, "--size", f"{width // 2}x{height // 2}", "--format", "rgba", "--count", "1"],
+                                           capture_output=True).stdout, dtype=numpy.uint8).reshape(-1, 4)
+    if len(got) < width * height or len(half) != width * height // 4:
+        print(f"{os.path.basename(path)}: no pictures")
+        return False
+    first = got[:width * height, 3].reshape(height, width).astype(numpy.float64)
+    small = half[:, 3].reshape(height // 2, width // 2).astype(numpy.float64)
+    ramp = numpy.floor(255.0 * numpy.arange(width) / width)
+    off = float(numpy.abs(first - ramp).max())
+    off_small = float(numpy.abs(small - first[0::2, 0::2]).max())
+    text = f"{os.path.basename(path)}: {len(got) * 4 // frame} frames, alpha off its left-to-right ramp by at most {off:.0f}, half-size frame by {off_small:.0f}"
+    ok = off <= 6 and off_small <= 6
+    if judge is not None:
+        want = numpy.frombuffer(subprocess.run([FFMPEG, "-nostdin", "-v", "error"] + judge + ["-i", path, "-pix_fmt", "bgra", "-f", "rawvideo", "-"],
+                                               capture_output=True).stdout, dtype=numpy.uint8).reshape(-1, 4)
+        same = len(want) == len(got) and numpy.array_equal(want[:, 3], got[:, 3])
+        text += f", alpha of every frame {'equal to' if same else 'different from'} the judge's"
+        ok = ok and same
+    print(text)
+    return ok
+
+
+def concealed(path, width, height, lost):
+    size = width * height * 3 // 2
+    whole = subprocess.run([AMEDIA, "decode", path], capture_output=True).stdout
+    frames = len(whole) // size
+    picks = [n for k in lost for n in (k + 1, k, k - 1) if n < frames]
+    run = subprocess.run([AMEDIA, "frames", path, "--list", ",".join(str(n) for n in picks)], capture_output=True).stdout
+    same = sum(run[i * size:(i + 1) * size] == whole[n * size:(n + 1) * size] for i, n in enumerate(picks))
+    held = sum(whole[n * size:(n + 1) * size] == whole[(n - 1) * size:n * size] for n in range(1, frames))
+    print(f"{os.path.basename(path)}: {frames} frames decode, {held} repeat the frame before, {same}/{len(picks)} picked around the damage equal the straight decode")
+    return frames > max(lost) and same == len(picks) and 0 < held <= 8
+
+
 if __name__ == "__main__":
     kind, rest = sys.argv[1], sys.argv[2:]
     if kind == "times":
@@ -104,6 +141,10 @@ if __name__ == "__main__":
         ok = bgra(rest[0], float(rest[1]))
     elif kind == "late":
         ok = late(rest[0], int(rest[1]), int(rest[2]), float(rest[3]))
+    elif kind == "veil":
+        ok = veil(rest[0], int(rest[1]), int(rest[2]), rest[3:] if len(rest) > 3 else None)
+    elif kind == "concealed":
+        ok = concealed(rest[0], int(rest[1]), int(rest[2]), [int(n) for n in rest[3:]])
     else:
         ok = False
     sys.exit(0 if ok else 1)

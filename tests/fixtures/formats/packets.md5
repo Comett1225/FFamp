@@ -3,6 +3,9 @@ fae19db662489f3d3f455aa60cf91866  ac3_51.ac3
 13d6f6e77aa74f368903db03b941d3bc  ac3_51.mov
 7ba375ce289b84b34eb050a646785099  ac3_mono.mka
 91a30db75aaa7a31682d2b6462893654  ac3_stereo.mp4
+84542d4c7dc0fde585d3a786b7f43bf0  alpha_prores.mov
+80cd2204e9d9773c4ecfa8a401f2a16b  alpha_vp8.webm
+8d81fb2805733a054c4dc6f3ee40317e  alpha_vp9.webm
 869f0fce052f0b75742f4c2585625287  amr_nb.3gp
 ee6414f8c878b8e3a2361f9f04d7b4d4  amr_nb.amr
 3ef08fed8d8e3672b35e5a19ac290af7  amr_wb.3gp
@@ -16,6 +19,7 @@ c477e30019c4de1ce71d8722e87058de  avi_mjpeg_pcm.avi
 52f483d0e668ff46d32a599e37a52518  avi_mpeg2_mp2.avi
 db94337cd24668314ace74c15cc61747  avi_mpeg4_mp3.avi
 ea9cdb9bbede0896d21ee6f2b1de0ca0  avi_packed.avi
+b50a8e964c6d7398531aa9159926b55b  bad_sample.mp4
 8d953f3a8d7b8f2fe1782ea1607bc1f5  caf_aac.caf
 b59308f52f32506f86920647e04dd813  caf_ac3.caf
 f688843ce4a175be0accdbfddbad436d  caf_alac.caf
@@ -43,3 +47,4 @@ ea30c9fad7f0cb2a767ad4c02742b223  mpeg2.mov
 4a4fdcf9f2f2fc5d2a848683c572cec9  mpeg4.mkv
 d1b68718769489342a58fc9adeb36c7f  mpeg4.mp4
 d1aa78e5387d679a23a39726682307a5  mpeg4_asp.mp4
+6fecd26823dad676964f4eb3d38ff1aa  unknown_codec.mkv

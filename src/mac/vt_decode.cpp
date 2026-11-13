@@ -20,6 +20,7 @@ std::unique_ptr<SoftDecoder> openStillDecoder(std::string* error);
 namespace {
 
 const uint32_t kNone = 0xFFFFFFFFu;
+const CFStringRef kAlphaKey = CFSTR("absent.alpha");
 
 void number(CFMutableDictionaryRef dict, CFStringRef key, int32_t value) {
     CFNumberRef n = CFNumberCreate(nullptr, kCFNumberSInt32Type, &value);
@@ -185,7 +186,13 @@ bool withPixelBuffer(void* pixelBuffer, const std::function<bool(const Picture&)
         p.plane[i] = static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, size_t(i)));
         p.stride[i] = CVPixelBufferGetBytesPerRowOfPlane(buffer, size_t(i));
     }
+    CFTypeRef veil = CVBufferCopyAttachment(buffer, kAlphaKey, nullptr);
+    if (veil && CFGetTypeID(veil) == CFDataGetTypeID() && size_t(CFDataGetLength(static_cast<CFDataRef>(veil))) == size_t(p.width) * size_t(p.height)) {
+        p.alpha = CFDataGetBytePtr(static_cast<CFDataRef>(veil));
+        p.alphaStride = size_t(p.width);
+    }
     bool ok = p.plane[0] && p.plane[1] && use(p);
+    if (veil) CFRelease(veil);
     CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
     return ok;
 }
@@ -259,8 +266,32 @@ struct VideoDecoder::Impl {
     int64_t kept = INT64_MIN;
     struct Job {
         std::vector<uint8_t> bytes;
+        std::vector<uint8_t> mask;
         int64_t stamp = 0;
     };
+    std::unique_ptr<SoftDecoder> softMask;
+    std::vector<uint8_t> veil;
+    int64_t veilStamp = INT64_MIN;
+
+    bool decodeSoft(const Job& job) {
+        veilStamp = INT64_MIN;
+        if (softMask && !job.mask.empty()) {
+            softMask->decode(job.mask.data(), job.mask.size(), job.stamp, [&](const Picture& m) {
+                if (m.bits != 8 || m.interleaved || !m.plane[0] || m.width <= 0 || m.height <= 0) return;
+                veil.resize(size_t(m.width) * size_t(m.height));
+                for (int y = 0; y < m.height; ++y) memcpy(veil.data() + size_t(y) * size_t(m.width), m.plane[0] + size_t(y) * m.stride[0], size_t(m.width));
+                veilStamp = m.stamp;
+            });
+        }
+        return soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) {
+            Picture seen = p;
+            if (veilStamp == p.stamp && veil.size() == size_t(p.width) * size_t(p.height)) {
+                seen.alpha = veil.data();
+                seen.alphaStride = size_t(p.width);
+            }
+            store(seen);
+        });
+    }
     std::condition_variable arrived, queued;
     std::deque<Job> jobs;
     bool busy = false;
@@ -282,8 +313,28 @@ struct VideoDecoder::Impl {
     };
     std::vector<Shown> list;
     std::vector<uint32_t> keys;
+    int concealing = 0;
+    std::vector<bool> lost;
+
+    Frame concealed(VideoDecoder& owner, uint32_t index) {
+        uint32_t earlier = index;
+        while (earlier > 0 && lost[earlier]) --earlier;
+        if (lost[earlier] || concealing >= 30) return {};
+        ++concealing;
+        if (soft) next = kNone;
+        Frame shown = owner.frame(earlier);
+        --concealing;
+        last = index;
+        if (shown) {
+            const Shown item = list[index];
+            shown.pts = track->samples[item.first].pts;
+            shown.duration = int64_t(track->samples[item.first].duration) + (item.second != kNone ? int64_t(track->samples[item.second].duration) : 0);
+        }
+        return shown;
+    }
     std::mutex converting;
     std::vector<uint8_t> loose[3];
+    std::vector<uint8_t> cover;
 
     void planar(CVImageBufferRef image, int64_t stamp) {
         std::lock_guard<std::mutex> hold(converting);
@@ -303,6 +354,29 @@ struct VideoDecoder::Impl {
             const uint8_t* from = static_cast<const uint8_t*>(CVPixelBufferGetBaseAddress(image));
             const size_t stride = CVPixelBufferGetBytesPerRow(image);
             const size_t width = size_t(p.width), height = size_t(p.height), half = width / 2;
+            if (CVPixelBufferGetPixelFormatType(image) == kCVPixelFormatType_4444AYpCbCr16) {
+                for (auto& plane : loose) plane.resize(width * height * 2);
+                cover.resize(width * height);
+                for (size_t y = 0; from && y < height; ++y) {
+                    const uint16_t* row = reinterpret_cast<const uint16_t*>(from + y * stride);
+                    for (size_t x = 0; x < width; ++x) {
+                        cover[y * width + x] = uint8_t(row[4 * x] >> 8);
+                        for (size_t k = 0; k < 3; ++k) reinterpret_cast<uint16_t*>(loose[k].data())[y * width + x] = uint16_t(row[4 * x + 1 + k] >> 6);
+                    }
+                }
+                for (int i = 0; i < 3; ++i) {
+                    p.plane[i] = from ? loose[i].data() : nullptr;
+                    p.stride[i] = width * 2;
+                }
+                p.bits = 10;
+                p.chromaWidth = p.width;
+                p.chromaHeight = p.height;
+                p.alpha = cover.data();
+                p.alphaStride = width;
+                if (p.plane[0]) store(p, image);
+                CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
+                return;
+            }
             loose[0].resize(width * height);
             loose[1].resize(half * height);
             loose[2].resize(half * height);
@@ -433,6 +507,7 @@ struct VideoDecoder::Impl {
             arrived.wait(hold, [&] { return !busy; });
             hold.unlock();
             soft->reset();
+            if (softMask) softMask->reset();
         }
         clear();
         kept = INT64_MIN;
@@ -448,6 +523,12 @@ struct VideoDecoder::Impl {
         CVPixelBufferRef buffer = surfaceFor(p);
         if (!buffer) return;
         if (labels) CVBufferPropagateAttachments(labels, buffer);
+        if (p.alpha) {
+            CFMutableDataRef kept = CFDataCreateMutable(nullptr, 0);
+            for (int y = 0; y < p.height; ++y) CFDataAppendBytes(kept, p.alpha + size_t(y) * p.alphaStride, p.width);
+            CVBufferSetAttachment(buffer, kAlphaKey, kept, kCVAttachmentMode_ShouldNotPropagate);
+            CFRelease(kept);
+        }
         {
             std::lock_guard<std::mutex> hold(lock);
             auto found = ready.find(p.stamp);
@@ -466,7 +547,7 @@ struct VideoDecoder::Impl {
             jobs.pop_front();
             busy = true;
             hold.unlock();
-            soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) { store(p); });
+            decodeSoft(job);
             hold.lock();
             busy = false;
             arrived.notify_all();
@@ -526,8 +607,9 @@ struct VideoDecoder::Impl {
         job.bytes.resize(s.size);
         job.stamp = s.pts;
         if (!file->read(*track, index, job.bytes.data())) return false;
+        if (softMask) file->readAlpha(*track, index, job.mask);
         ++fed;
-        if (!queue) return soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) { store(p); });
+        if (!queue) return decodeSoft(job);
         if (!worker.joinable()) worker = std::thread([this] { work(); });
         {
             std::lock_guard<std::mutex> hold(lock);
@@ -703,6 +785,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (h264 || hevc || !track.color.known) d.shape.color.full = fromStream.full;
 
     auto softly = [&]() -> std::unique_ptr<VideoDecoder> {
+        if (track.alpha && (vp8 || vp9)) d.softMask = openVpxDecoder(vp8, nullptr);
         d.soft = jpeg ? openStillDecoder(error) : apv ? openApvDecoder(error) : av1 ? openDav1d(int(d.ahead), error) : openVpxDecoder(vp8, error);
         if (!d.soft) return nullptr;
         if (av1) d.ahead += d.ahead / 2;
@@ -713,7 +796,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.backend = d.soft->name();
         return std::move(decoder);
     };
-    if (vp8 || apv || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
+    if (vp8 || apv || (vp9 && track.alpha) || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
 
     CMVideoCodecType type = h264 ? kCMVideoCodecType_H264 : hevc ? kCMVideoCodecType_HEVC : vp9 ? kCMVideoCodecType_VP9 : av1 ? kCMVideoCodecType_AV1 : codec;
     if (vp9 || av1) VTRegisterSupplementalVideoDecoderIfAvailable(type);
@@ -737,7 +820,12 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (status != noErr) return fail("cannot describe the video stream");
 
     CFMutableDictionaryRef picture = dictionary();
-    const OSType asked = part2 || (older && !jpeg) ? (d.shape.chromaY ? kCVPixelFormatType_420YpCbCr8Planar : kCVPixelFormatType_422YpCbCr8) : pixelFormat(d.shape);
+    bool veiled = false;
+    if (codec == fourcc("ap4h") || codec == fourcc("ap4x")) {
+        std::vector<uint8_t> first(track.samples[0].size);
+        veiled = first.size() >= 26 && file.read(track, 0, first.data()) && (first[25] & 15);
+    }
+    const OSType asked = veiled ? kCVPixelFormatType_4444AYpCbCr16 : part2 || (older && !jpeg) ? (d.shape.chromaY ? kCVPixelFormatType_420YpCbCr8Planar : kCVPixelFormatType_422YpCbCr8) : pixelFormat(d.shape);
     number(picture, kCVPixelBufferPixelFormatTypeKey, int32_t(asked));
     CFMutableDictionaryRef surface = dictionary();
     CFDictionarySetValue(picture, kCVPixelBufferIOSurfacePropertiesKey, surface);
@@ -765,6 +853,7 @@ Frame VideoDecoder::frame(uint32_t index) {
     Impl& d = *impl;
     const Track& track = *d.track;
     if (index >= d.list.size()) return {};
+    if (index < d.lost.size() && d.lost[index]) return d.concealed(*this, index);
     const Impl::Shown item = d.list[index];
     const bool pair = item.second != kNone;
     const uint32_t target = pair ? item.second : item.first;
@@ -776,7 +865,8 @@ Frame VideoDecoder::frame(uint32_t index) {
     d.last = index;
     auto present = [&] { return d.has(pts) && d.has(later); };
     if (!present() && d.next != kNone && d.next > target && d.floor >= d.kept) d.settle(pts, later);
-    if (!present()) {
+    const bool missed = !d.soft && following && d.next != kNone && d.next > target && d.floor >= d.kept;
+    if (!present() && !missed) {
         const uint32_t key = d.keyFor(item.first);
         if (d.next == kNone || d.next < key || d.next > item.first) {
             d.restart();
@@ -807,7 +897,11 @@ Frame VideoDecoder::frame(uint32_t index) {
     } else {
         buffer = d.take(pts);
     }
-    if (!buffer) return {};
+    if (!buffer) {
+        if (d.lost.size() < d.list.size()) d.lost.resize(d.list.size(), false);
+        d.lost[index] = true;
+        return d.concealed(*this, index);
+    }
     d.kept = d.floor;
     Frame frame;
     frame.native = std::shared_ptr<void>(buffer, [](void* p) { CFRelease(p); });

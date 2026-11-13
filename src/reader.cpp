@@ -36,6 +36,8 @@ const std::map<std::string, std::string>& Reader::tags() const { return kNoTags;
 
 double Reader::statedSeconds() const { return -1; }
 
+bool Reader::readAlpha(const Track&, uint32_t, std::vector<uint8_t>&) { return false; }
+
 const Track* Reader::first(Kind kind) const {
     for (const Track& t : tracks()) if (t.kind == kind && !t.samples.empty()) return &t;
     return nullptr;

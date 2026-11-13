@@ -215,7 +215,20 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
     const auto lumaAcross = tapsFor(p.width, width), lumaDown = tapsFor(p.height, height);
     const auto chromaAcross = tapsFor(p.chromaWidth, chromaWidth), chromaDown = tapsFor(p.chromaHeight, chromaHeight);
     const bool direct = layout == PixelLayout::Bgra || layout == PixelLayout::Rgba;
+    static thread_local std::vector<uint8_t> mask;
+    Picture cover;
+    if (p.alpha && !planar) {
+        mask.resize(size_t(width) * size_t(height));
+        cover.plane[0] = p.alpha;
+        cover.stride[0] = p.alphaStride;
+        cover.width = p.width;
+        cover.height = p.height;
+        ready.alpha = mask.data();
+        ready.alphaStride = size_t(width);
+    }
+    uint8_t* const veil = ready.alpha ? mask.data() : nullptr;
     inParallel(height, [&](int from, int to) {
+        if (veil) scaleRows(cover, 0, veil, width, 1, 255, *lumaAcross, *lumaDown, from, to);
         scaleRows(p, 0, scaled.data(), width, bytes, top, *lumaAcross, *lumaDown, from, to);
         const int chromaFrom = int(int64_t(from) * chromaHeight / height), chromaTo = int(int64_t(to) * chromaHeight / height);
         for (int plane = 1; plane <= 2; ++plane) {

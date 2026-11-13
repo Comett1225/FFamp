@@ -14,6 +14,8 @@ struct Picture {
     int bits = 8;
     int shift = 0;
     bool interleaved = false;
+    const uint8_t* alpha = nullptr;
+    size_t alphaStride = 0;
     int64_t stamp = 0;
     Color color;
 };

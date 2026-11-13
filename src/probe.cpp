@@ -326,7 +326,7 @@ Look lookOf(Reader& reader, const Track& t) {
                     look.rangeKnown = true;
                     if (spaces[space] != 2) look.matrix = spaces[space];
                     look.profile = "Profile " + std::to_string(profile);
-                    look.pixels = space == 7 ? (depth == 8 ? "gbrp" : "gbrp" + std::to_string(depth) + "le") : pixelName(chroma, depth, false);
+                    look.pixels = space == 7 ? (depth == 8 ? "gbrp" : "gbrp" + std::to_string(depth) + "le") : pixelName(chroma, depth, false, t.alpha);
                 }
             }
         } else if (t.config.size() >= 7) {
@@ -336,7 +336,7 @@ Look lookOf(Reader& reader, const Track& t) {
         }
     } else if (c == fourcc("vp08")) {
         look.codec = "vp8";
-        look.pixels = "yuv420p";
+        look.pixels = t.alpha ? "yuva420p" : "yuv420p";
         std::vector<uint8_t> packet = firstPacket(reader, t);
         if (!packet.empty()) look.profile = std::to_string((packet[0] >> 1) & 7);
     } else if ((c >> 16) == 0x6170) {

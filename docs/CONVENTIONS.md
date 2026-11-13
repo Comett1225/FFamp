@@ -124,4 +124,12 @@ list; `Sample.offset` is then free for the reader's use.
 - JPEG pictures that are not 4:2:0 are refused by VideoToolbox; they are decoded through ImageIO and come out as 8-bit 4:4:4 BT.709
   limited-range frames (backend `imageio`).
 - Windows Media (ASF: WMA, WMV) is recognised and refused with its own message; nothing on a Mac decodes it.
-
+- Alpha: `Track.alpha` is set for VP8 and VP9 in Matroska/WebM whose blocks carry an alpha picture (BlockAdditional 1);
+  `Reader::readAlpha` gives that picture's packet. `VideoDecoder` decodes both with libvpx and, for ProRes 4444 with an alpha channel,
+  asks VideoToolbox for it. The frame's pixel buffer stays the usual two-plane YCbCr buffer; the 8-bit alpha plane rides on it as the
+  `absent.alpha` attachment, `Picture.alpha` points at it, and BGRA/RGBA output (`copyBGRA`, `frames-out`) carries it, straight
+  (not premultiplied), scaled with the picture. I420 and RGB24 output have no alpha.
+- A sample the decoder rejects does not end the stream: `VideoDecoder::frame` returns the nearest earlier frame that decoded, with the
+  asked frame's time, as FFmpeg's concealment shows a repeat.
+- A Matroska video codec no decoder here knows is kept as a track named by its VFW fourcc or the first letters of its codec ID, so
+  probe reports its name, start and length; `VideoDecoder::open` fails with `video codec not supported by this decoder`.

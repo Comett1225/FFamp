@@ -148,15 +148,24 @@ struct Frame {
     int width = 0;
     int height = 0;
     int64_t pts = 0;
+    int64_t duration = 0;
+    int bits = 8;
+    int chromaWidth = 0;
+    int chromaHeight = 0;
+    Color color;
     explicit operator bool() const { return native != nullptr; }
 };
 
 bool copyI420(const Frame& frame, std::vector<uint8_t>& out);
+bool copyYuv(const Frame& frame, std::vector<uint8_t>& out);
+bool copyBGRA(const Frame& frame, std::vector<uint8_t>& out);
+void bgraToI420(const uint8_t* pixels, size_t stride, int width, int height, uint8_t* out, bool redFirst = false);
 
 class VideoDecoder {
 public:
-    static std::unique_ptr<VideoDecoder> open(Reader& file, const Track& track, std::string* error = nullptr);
+    static std::unique_ptr<VideoDecoder> open(Reader& file, const Track& track, std::string* error = nullptr, bool software = false);
     ~VideoDecoder();
+    const char* backend() const;
     uint32_t frames() const;
     Frame frame(uint32_t index);
     uint64_t run(bool async);
@@ -187,6 +196,8 @@ struct EncodeSpec {
     bool hevc = false;
     bool reorder = true;
     bool bgra = false;
+    uint32_t codec = 0;
+    int speed = -1;
 };
 
 class VideoEncoder {
@@ -196,6 +207,9 @@ public:
     bool encodeI420(const uint8_t* data, int64_t pts, int64_t duration);
     bool encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration, bool redFirst = false);
     bool encode(const Frame& frame, int64_t pts, int64_t duration);
+    bool encodePixelBuffer(void* pixelBuffer, int64_t pts, int64_t duration);
+    bool encodeSurface(void* surface, int64_t pts, int64_t duration);
+    const char* backend() const;
     bool finish();
     bool take(Packet& out);
     uint32_t configType() const;

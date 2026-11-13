@@ -3,7 +3,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -88,6 +90,17 @@ struct Copier {
         return true;
     }
 };
+
+inline bool pictureBytes(const Args& args, const Frame& frame, std::vector<uint8_t>& out) {
+    return args.has("bgra") ? copyBGRA(frame, out) : copyYuv(frame, out);
+}
+
+inline uint32_t videoCodec(const Args& args) {
+    const std::string name = args.get("codec", "h264");
+    return name == "h264" ? fourcc("avc1") : name == "hevc" ? fourcc("hvc1") : name == "av1" ? fourcc("av01") : name == "vp9" ? fourcc("vp09") : 0;
+}
+
+std::unique_ptr<Writer> openOutput(const std::string& path, std::string* error);
 
 using Command = int (*)(const Args&);
 

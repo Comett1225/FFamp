@@ -34,13 +34,13 @@ int decode(const Args& args) {
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
-    auto decoder = VideoDecoder::open(*reader, *track, &error);
+    auto decoder = VideoDecoder::open(*reader, *track, &error, args.has("software"));
     if (!decoder) return fail(error);
     std::vector<uint8_t> picture;
     uint32_t count = decoder->frames();
     for (uint32_t n = 0; n < count; ++n) {
         Frame frame = decoder->frame(n);
-        if (!frame || !copyI420(frame, picture)) return fail("frame " + std::to_string(n) + " did not decode");
+        if (!frame || !pictureBytes(args, frame, picture)) return fail("frame " + std::to_string(n) + " did not decode");
         if (fwrite(picture.data(), 1, picture.size(), stdout) != picture.size()) return fail("output closed");
     }
     return 0;
@@ -53,7 +53,7 @@ int frames(const Args& args) {
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
-    auto decoder = VideoDecoder::open(*reader, *track, &error);
+    auto decoder = VideoDecoder::open(*reader, *track, &error, args.has("software"));
     if (!decoder) return fail(error);
     std::vector<uint8_t> picture;
     std::vector<double> times;
@@ -67,7 +67,7 @@ int frames(const Args& args) {
         uint64_t before = decoder->fed();
         double start = now();
         Frame frame = decoder->frame(n);
-        if (!frame || !copyI420(frame, picture)) return fail("frame " + std::to_string(n) + " did not decode");
+        if (!frame || !pictureBytes(args, frame, picture)) return fail("frame " + std::to_string(n) + " did not decode");
         double spent = (now() - start) * 1000;
         times.push_back(spent);
         fprintf(stderr, "seek %u ms %.2f fed %llu\n", n, spent, (unsigned long long)(decoder->fed() - before));
@@ -89,7 +89,7 @@ int bench(const Args& args) {
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
-    auto decoder = VideoDecoder::open(*reader, *track, &error);
+    auto decoder = VideoDecoder::open(*reader, *track, &error, args.has("software"));
     if (!decoder) return fail(error);
     std::string mode = args.get("mode", "async");
     double start = now();
@@ -98,7 +98,7 @@ int bench(const Args& args) {
         std::vector<uint8_t> picture;
         for (uint32_t n = 0; n < decoder->frames(); ++n) {
             Frame frame = decoder->frame(n);
-            if (!frame || !copyI420(frame, picture)) return fail("frame " + std::to_string(n) + " did not decode");
+            if (!frame || !pictureBytes(args, frame, picture)) return fail("frame " + std::to_string(n) + " did not decode");
             ++count;
         }
     } else if (mode == "frames") {
@@ -134,7 +134,8 @@ int encode(const Args& args) {
         fseeko(video, 0, SEEK_SET);
     }
     long total = std::min(available, args.number("frames", available));
-    bool hevc = args.get("codec", "h264") == "hevc";
+    uint32_t codec = videoCodec(args);
+    if (!codec) return fail("--codec is h264, hevc, av1 or vp9");
 
     std::string error;
     EncodeSpec spec;
@@ -144,17 +145,18 @@ int encode(const Args& args) {
     spec.fps = double(num) / den;
     spec.bitrate = int(args.number("bitrate", 8000000));
     spec.keyInterval = int(args.number("gop", long(spec.fps + 0.5)));
-    spec.hevc = hevc;
+    spec.codec = codec;
+    spec.speed = int(args.number("speed", -1));
     spec.reorder = !args.has("no-reorder");
     spec.bgra = bgra;
     auto encoder = VideoEncoder::open(spec, &error);
     if (!encoder) return fail(error);
-    auto writer = Writer::open(args.plain[0], &error);
+    auto writer = openOutput(args.plain[0], &error);
     if (!writer) return fail(error);
 
     TrackSpec picture;
     picture.kind = Kind::Video;
-    picture.codec = hevc ? fourcc("hvc1") : fourcc("avc1");
+    picture.codec = codec;
     picture.timescale = uint32_t(num);
     picture.width = width;
     picture.height = height;
@@ -290,9 +292,10 @@ int transcode(const Args& args) {
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
-    auto decoder = VideoDecoder::open(*reader, *track, &error);
+    auto decoder = VideoDecoder::open(*reader, *track, &error, args.has("software"));
     if (!decoder) return fail(error);
-    bool hevc = args.get("codec", "h264") == "hevc";
+    uint32_t codec = videoCodec(args);
+    if (!codec) return fail("--codec is h264, hevc, av1 or vp9");
     EncodeSpec spec;
     spec.width = track->width;
     spec.height = track->height;
@@ -300,14 +303,15 @@ int transcode(const Args& args) {
     spec.fps = track->rate();
     spec.bitrate = int(args.number("bitrate", 8000000));
     spec.keyInterval = int(spec.fps + 0.5);
-    spec.hevc = hevc;
+    spec.codec = codec;
+    spec.speed = int(args.number("speed", -1));
     auto encoder = VideoEncoder::open(spec, &error);
     if (!encoder) return fail(error);
-    auto writer = Writer::open(args.plain[1], &error);
+    auto writer = openOutput(args.plain[1], &error);
     if (!writer) return fail(error);
     TrackSpec picture;
     picture.kind = Kind::Video;
-    picture.codec = hevc ? fourcc("hvc1") : fourcc("avc1");
+    picture.codec = codec;
     picture.timescale = track->timescale;
     picture.width = track->width;
     picture.height = track->height;
@@ -332,10 +336,9 @@ int transcode(const Args& args) {
     for (uint32_t n = 0; n < count; ++n) {
         Frame frame = decoder->frame(n);
         if (!frame) return fail("frame " + std::to_string(n) + " did not decode");
-        const Sample& s = track->samples[track->order[n]];
-        if (!encoder->encode(frame, s.pts - track->mediaStart, s.duration)) return fail("the encoder refused a frame");
+        if (!encoder->encode(frame, frame.pts - track->mediaStart, frame.duration)) return fail("the encoder refused a frame");
         drain();
-        if (copier && !copier->until(double(s.pts - track->mediaStart) / track->timescale)) return fail("copying audio failed");
+        if (copier && !copier->until(double(frame.pts - track->mediaStart) / track->timescale)) return fail("copying audio failed");
     }
     if (!encoder->finish()) return fail("the encoder failed");
     drain();

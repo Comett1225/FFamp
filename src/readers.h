@@ -9,5 +9,23 @@ std::unique_ptr<Reader> openWave(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openRawAudio(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openTransportStream(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openIvf(const std::string& path, std::string* error);
+std::unique_ptr<Reader> openAvi(const std::string& path, std::string* error);
+std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error);
+
+struct DolbyFrame {
+    uint32_t codec = 0;
+    int rate = 0;
+    int channels = 0;
+    int mode = 0;
+    bool lfe = false;
+    bool dependent = false;
+    uint32_t bytes = 0;
+    uint32_t samples = 0;
+};
+
+bool dolbyFrame(const uint8_t* header, DolbyFrame& out);
+uint32_t amrFrameBytes(bool wide, uint8_t first);
+std::vector<uint8_t> mpeg4Descriptor(const uint8_t* headers, size_t size);
+uint32_t videoFourcc(uint32_t handler, int height);
 
 }

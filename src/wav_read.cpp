@@ -6,6 +6,8 @@
 
 namespace absent {
 
+void riffInfo(Source& source, uint64_t at, uint64_t size, Tags& tags);
+
 namespace {
 
 const uint32_t kPacketFrames = 4096;
@@ -48,7 +50,9 @@ void keep(Tags& tags, const char* key, const std::string& value) {
     if (!value.empty() && !tags.count(key)) tags[key] = value;
 }
 
-void infoList(Source& source, uint64_t at, uint64_t size, Tags& tags) {
+}
+
+void riffInfo(Source& source, uint64_t at, uint64_t size, Tags& tags) {
     static const char* const names[][2] = {{"INAM", "title"}, {"IART", "artist"}, {"IPRD", "album"}, {"ICRD", "date"}, {"IGNR", "genre"},
         {"ICMT", "comment"}, {"ISFT", "encoder"}, {"ITRK", "track"}, {"IPRT", "track"}, {"ICOP", "copyright"}};
     uint64_t end = at + size;
@@ -64,6 +68,8 @@ void infoList(Source& source, uint64_t at, uint64_t size, Tags& tags) {
         if (at > end) return;
     }
 }
+
+namespace {
 
 void riff(Source& source, Layout& w, Tags& tags) {
     const uint64_t total = source.size();
@@ -104,7 +110,7 @@ void riff(Source& source, Layout& w, Tags& tags) {
             size = w.dataSize;
         } else if (id == fourcc("LIST") && size >= 4 && left >= size) {
             const uint8_t* kind = source.view(body, 4);
-            if (kind && be32(kind) == fourcc("INFO")) infoList(source, body + 4, size - 4, tags);
+            if (kind && be32(kind) == fourcc("INFO")) riffInfo(source, body + 4, size - 4, tags);
         } else if ((id == fourcc("id3 ") || id == fourcc("ID3 ")) && left >= size) {
             id3v2(source, body, tags);
         }

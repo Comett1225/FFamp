@@ -247,55 +247,16 @@ bool mpegAudioHeader(const uint8_t* h, AudioFrame& f) {
 }
 
 bool dolbyHeader(const uint8_t* h, AudioFrame& f) {
-    static const int rates[3] = {48000, 44100, 32000};
-    static const int kilobits[19] = {32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640};
-    static const int fronts[8] = {2, 1, 2, 3, 3, 4, 4, 5};
-    if (h[0] != 0x0B || h[1] != 0x77) return false;
-    int version = h[5] >> 3;
-    BitReader r{h, 8};
-    r.skip(16);
+    DolbyFrame d;
+    if (!dolbyFrame(h, d)) return false;
     f.strip = 0;
-    f.joins = false;
-    if (version <= 10) {
-        r.skip(16);
-        int rateCode = int(r.bits(2));
-        int sizeCode = int(r.bits(6));
-        if (rateCode == 3 || sizeCode >= 38) return false;
-        int rate = kilobits[sizeCode >> 1];
-        f.rate = rates[rateCode];
-        uint32_t words = rateCode == 0 ? uint32_t(rate * 2) : rateCode == 2 ? uint32_t(rate * 3) : uint32_t(rate * 320 / 147 + (sizeCode & 1));
-        f.bytes = words * 2;
-        r.skip(8);
-        int mode = int(r.bits(3));
-        if ((mode & 1) && mode != 1) r.skip(2);
-        if (mode & 4) r.skip(2);
-        if (mode == 2) r.skip(2);
-        f.channels = fronts[mode] + int(r.bit());
-        f.samples = 1536;
-        f.codec = fourcc("ac-3");
-        return true;
-    }
-    if (version > 16) return false;
-    static const int blocks[4] = {1, 2, 3, 6};
-    int kind = int(r.bits(2));
-    r.skip(3);
-    f.bytes = (r.bits(11) + 1) * 2;
-    int rateCode = int(r.bits(2));
-    int count = 6;
-    if (rateCode == 3) {
-        int half = int(r.bits(2));
-        if (half == 3) return false;
-        f.rate = rates[half] / 2;
-    } else {
-        count = blocks[r.bits(2)];
-        f.rate = rates[rateCode];
-    }
-    int mode = int(r.bits(3));
-    f.channels = fronts[mode] + int(r.bit());
-    f.samples = uint32_t(256 * count);
-    f.codec = fourcc("ec-3");
-    f.joins = kind == 1;
-    return f.bytes >= 8;
+    f.rate = d.rate;
+    f.bytes = d.bytes;
+    f.channels = d.channels;
+    f.samples = d.samples;
+    f.codec = d.codec;
+    f.joins = d.dependent;
+    return true;
 }
 
 struct Chunk {

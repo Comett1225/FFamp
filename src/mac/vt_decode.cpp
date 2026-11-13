@@ -15,6 +15,8 @@
 
 namespace absent {
 
+std::unique_ptr<SoftDecoder> openStillDecoder(std::string* error);
+
 namespace {
 
 const uint32_t kNone = 0xFFFFFFFFu;
@@ -280,6 +282,48 @@ struct VideoDecoder::Impl {
     };
     std::vector<Shown> list;
     std::vector<uint32_t> keys;
+    std::mutex converting;
+    std::vector<uint8_t> loose[3];
+
+    void planar(CVImageBufferRef image, int64_t stamp) {
+        std::lock_guard<std::mutex> hold(converting);
+        if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
+        Picture p;
+        p.stamp = stamp;
+        p.width = int(CVPixelBufferGetWidth(image));
+        p.height = int(CVPixelBufferGetHeight(image));
+        if (CVPixelBufferGetPlaneCount(image) == 3) {
+            for (size_t i = 0; i < 3; ++i) {
+                p.plane[i] = static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(image, i));
+                p.stride[i] = CVPixelBufferGetBytesPerRowOfPlane(image, i);
+            }
+            p.chromaWidth = int(CVPixelBufferGetWidthOfPlane(image, 1));
+            p.chromaHeight = int(CVPixelBufferGetHeightOfPlane(image, 1));
+        } else {
+            const uint8_t* from = static_cast<const uint8_t*>(CVPixelBufferGetBaseAddress(image));
+            const size_t stride = CVPixelBufferGetBytesPerRow(image);
+            const size_t width = size_t(p.width), height = size_t(p.height), half = width / 2;
+            loose[0].resize(width * height);
+            loose[1].resize(half * height);
+            loose[2].resize(half * height);
+            for (size_t y = 0; from && y < height; ++y) {
+                const uint8_t* row = from + y * stride;
+                for (size_t x = 0; x < width; ++x) loose[0][y * width + x] = row[2 * x + 1];
+                for (size_t x = 0; x < half; ++x) {
+                    loose[1][y * half + x] = row[4 * x];
+                    loose[2][y * half + x] = row[4 * x + 2];
+                }
+            }
+            for (int i = 0; i < 3; ++i) {
+                p.plane[i] = from ? loose[i].data() : nullptr;
+                p.stride[i] = i ? half : width;
+            }
+            p.chromaWidth = int(half);
+            p.chromaHeight = p.height;
+        }
+        if (p.plane[0] && p.plane[1] && p.plane[2] && p.chromaWidth > 0) store(p, image);
+        CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
+    }
 
     void pairFields(const H264Layout& layout) {
         const auto& samples = track->samples;
@@ -394,7 +438,7 @@ struct VideoDecoder::Impl {
         kept = INT64_MIN;
     }
 
-    void store(const Picture& p) {
+    void store(const Picture& p, CVBufferRef labels = nullptr) {
         ++shown;
         if (p.color.known) {
             std::lock_guard<std::mutex> hold(lock);
@@ -403,6 +447,7 @@ struct VideoDecoder::Impl {
         if (!keep || p.stamp < floor) return;
         CVPixelBufferRef buffer = surfaceFor(p);
         if (!buffer) return;
+        if (labels) CVBufferPropagateAttachments(labels, buffer);
         {
             std::lock_guard<std::mutex> hold(lock);
             auto found = ready.find(p.stamp);
@@ -501,6 +546,10 @@ struct VideoDecoder::Impl {
     static void output(void* self, void*, OSStatus status, VTDecodeInfoFlags, CVImageBufferRef image, CMTime pts, CMTime) {
         auto* d = static_cast<Impl*>(self);
         if (status != noErr || !image) return;
+        if (CVPixelBufferGetPlaneCount(image) != 2) {
+            d->planar(image, pts.value);
+            return;
+        }
         ++d->shown;
         if (!d->keep || pts.value < d->floor) return;
         std::lock_guard<std::mutex> hold(d->lock);
@@ -577,7 +626,11 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool prores = codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco") || codec == fourcc("ap4h") || codec == fourcc("ap4x");
     const bool h264 = track.configType == fourcc("avcC"), hevc = track.configType == fourcc("hvcC");
     const bool apv = codec == fourcc("apv1");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv) return fail("video codec not supported by this decoder");
+    const bool part2 = codec == fourcc("mp4v") && track.configType == fourcc("esds");
+    const bool jpeg = codec == fourcc("jpeg");
+    const bool tape = (codec >> 16) == 0x6476;
+    const bool older = jpeg || tape || codec == fourcc("mp1v") || codec == fourcc("mp2v") || codec == fourcc("h263");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv && !part2 && !older) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -600,6 +653,23 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.chromaX = chroma == 2 ? 1 : 0;
         d.shape.chromaY = 0;
         if (chroma != 2 && chroma != 3) return fail("this APV picture format is not supported");
+    } else if (jpeg) {
+        std::vector<uint8_t> first(track.samples[0].size);
+        if (!file.read(track, 0, first.data())) return fail("cannot read the first picture");
+        d.shape.color.full = true;
+        d.shape.chromaX = d.shape.chromaY = 0;
+        for (size_t i = 2; i + 3 < first.size() && first[i] == 0xFF;) {
+            const size_t length = (size_t(first[i + 2]) << 8) | first[i + 3];
+            if (first[i + 1] >= 0xC0 && first[i + 1] <= 0xC2 && i + 14 < first.size() && first[i + 9] >= 3) {
+                d.shape.chromaX = (first[i + 11] >> 4) == 2 * (first[i + 14] >> 4) ? 1 : 0;
+                d.shape.chromaY = (first[i + 11] & 15) == 2 * (first[i + 14] & 15) ? 1 : 0;
+                break;
+            }
+            if (first[i + 1] == 0xDA) break;
+            i += 2 + length;
+        }
+    } else if (part2 || older) {
+        d.shape.chromaY = tape && codec != fourcc("dvcp") ? 0 : 1;
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
         config.clear();
     }
@@ -633,21 +703,25 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (h264 || hevc || !track.color.known) d.shape.color.full = fromStream.full;
 
     auto softly = [&]() -> std::unique_ptr<VideoDecoder> {
-        d.soft = apv ? openApvDecoder(error) : av1 ? openDav1d(int(d.ahead), error) : openVpxDecoder(vp8, error);
+        d.soft = jpeg ? openStillDecoder(error) : apv ? openApvDecoder(error) : av1 ? openDav1d(int(d.ahead), error) : openVpxDecoder(vp8, error);
         if (!d.soft) return nullptr;
         if (av1) d.ahead += d.ahead / 2;
+        if (jpeg) {
+            d.shape.color = Color();
+            d.shape.color.known = true;
+        }
         d.backend = d.soft->name();
         return std::move(decoder);
     };
-    if (vp8 || apv || (software && (vp9 || av1))) return softly();
+    if (vp8 || apv || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
 
     CMVideoCodecType type = h264 ? kCMVideoCodecType_H264 : hevc ? kCMVideoCodecType_HEVC : vp9 ? kCMVideoCodecType_VP9 : av1 ? kCMVideoCodecType_AV1 : codec;
     if (vp9 || av1) VTRegisterSupplementalVideoDecoderIfAvailable(type);
     CFMutableDictionaryRef extensions = dictionary();
-    if (!prores) {
+    if (!prores && !older) {
         CFMutableDictionaryRef atoms = dictionary();
         CFDataRef data = CFDataCreate(nullptr, config.data(), CFIndex(config.size()));
-        CFDictionarySetValue(atoms, h264 ? CFSTR("avcC") : hevc ? CFSTR("hvcC") : vp9 ? CFSTR("vpcC") : CFSTR("av1C"), data);
+        CFDictionarySetValue(atoms, h264 ? CFSTR("avcC") : hevc ? CFSTR("hvcC") : vp9 ? CFSTR("vpcC") : part2 ? CFSTR("esds") : CFSTR("av1C"), data);
         CFRelease(data);
         CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms);
         CFRelease(atoms);
@@ -663,7 +737,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (status != noErr) return fail("cannot describe the video stream");
 
     CFMutableDictionaryRef picture = dictionary();
-    number(picture, kCVPixelBufferPixelFormatTypeKey, int32_t(pixelFormat(d.shape)));
+    const OSType asked = part2 || (older && !jpeg) ? (d.shape.chromaY ? kCVPixelFormatType_420YpCbCr8Planar : kCVPixelFormatType_422YpCbCr8) : pixelFormat(d.shape);
+    number(picture, kCVPixelBufferPixelFormatTypeKey, int32_t(asked));
     CFMutableDictionaryRef surface = dictionary();
     CFDictionarySetValue(picture, kCVPixelBufferIOSurfacePropertiesKey, surface);
     CFRelease(surface);
@@ -674,6 +749,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (status != noErr) {
         d.session = nullptr;
         if (vp9 || av1) return softly();
+        if (part2) return fail("this MPEG-4 video uses Advanced Simple Profile tools (B-frames, quarter-pixel motion or custom matrices) that the system decoder cannot play");
         return fail("the system video decoder refused this stream");
     }
     return decoder;

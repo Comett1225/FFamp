@@ -1,5 +1,6 @@
 #include "../aac_config.h"
 #include "../audio_codec.h"
+#include "../readers.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <algorithm>
 #include <alloca.h>
@@ -23,6 +24,8 @@ struct SystemAudio : PacketDecoder {
     float* scratch = nullptr;
     bool ending = false;
     AudioStreamPacketDescription description{};
+    int speech = 0;
+    std::vector<uint8_t> piece;
 
     ~SystemAudio() override {
         if (converter) AudioConverterDispose(converter);
@@ -96,8 +99,18 @@ struct SystemAudio : PacketDecoder {
     void reset() override { build(); }
 
     void feed(const std::vector<uint8_t>& packet, std::vector<float>& out) override {
-        waiting = &packet;
-        pull(out);
+        if (!speech) {
+            waiting = &packet;
+            pull(out);
+            return;
+        }
+        for (size_t at = 0; at < packet.size();) {
+            size_t size = std::min<size_t>(amrFrameBytes(speech == 2, packet[at]), packet.size() - at);
+            piece.assign(packet.begin() + long(at), packet.begin() + long(at + size));
+            waiting = &piece;
+            pull(out);
+            at += size;
+        }
     }
 
     void finish(std::vector<float>& out) override {
@@ -211,6 +224,25 @@ std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::ve
         from.mChannelsPerFrame = ((info[12] >> 1) & 7) + 1;
         from.mFormatFlags = losslessFlag((((info[12] & 1) << 4) | (info[13] >> 4)) + 1);
         decoder->stateless = true;
+    } else if (track.codec == fourcc("ac-3") || track.codec == fourcc("ec-3")) {
+        DolbyFrame frame;
+        if (firstPacket.size() < 8 || !dolbyFrame(firstPacket.data(), frame)) return fail("AC-3 frame header not understood");
+        from.mFormatID = frame.codec == fourcc("ac-3") ? kAudioFormatAC3 : kAudioFormatEnhancedAC3;
+        from.mSampleRate = frame.rate;
+        const bool usual = frame.lfe ? frame.mode == 7 : frame.mode != 4 && frame.mode != 6;
+        from.mChannelsPerFrame = usual ? UInt32(frame.channels) : 6;
+        from.mFramesPerPacket = frame.samples;
+        decoder->prerollPackets = 2;
+        decoder->lead = -256;
+    } else if (track.codec == fourcc("samr") || track.codec == fourcc("sawb")) {
+        const bool wide = track.codec == fourcc("sawb");
+        from.mFormatID = wide ? kAudioFormatAMR_WB : kAudioFormatAMR;
+        from.mSampleRate = wide ? 16000 : 8000;
+        from.mChannelsPerFrame = 1;
+        from.mFramesPerPacket = wide ? 320 : 160;
+        decoder->speech = wide ? 2 : 1;
+        decoder->prerollPackets = 25;
+        decoder->lead = wide ? -95 : -40;
     } else {
         return fail("audio codec not supported");
     }

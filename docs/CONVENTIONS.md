@@ -13,14 +13,19 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | VP8 | `vp08` | `vpcC` (may be empty) | as VP9 |
 | APV | `apv1` | `apvC` | the `apvC` box body: 4 zero bytes, then the APVDecoderConfigurationRecord. Each sample is one access unit with its 4-byte size in front, then the `aPv1` signature (what FFmpeg stores in MP4) |
 | ProRes | the ProRes fourcc as found (`apch`, `apcn`, `apcs`, `apco`, `ap4h`, `ap4x`) | 0 | empty |
-| MPEG-4 part 2 | `mp4v` | `esds` | esds body |
+| MPEG-4 part 2 | `mp4v` | `esds` | esds body (Matroska and AVI readers build one around the stream's own headers) |
 | AAC (any profile) | `mp4a` | `esds` (from MP4) or `ASC ` (raw AudioSpecificConfig, from Matroska, ADTS, TS) | as named |
 | MP3 / MP2 | `.mp3` / `.mp2` | 0 | empty |
 | Opus | `Opus` | `OpHd` | OpusHead exactly as in Ogg (starts with "OpusHead", little-endian fields); MP4 dOps is converted to this |
 | FLAC | `fLaC` | `fLaC` | the 34-byte STREAMINFO block body |
 | ALAC | `alac` | `alac` | the 24-byte ALACSpecificConfig (magic cookie) |
 | Vorbis | `vorb` | `vorb` | the three header packets in Xiph lacing (as Matroska CodecPrivate); decoded by libvorbis, the first packet of a run gives no sound |
-| AC-3 / E-AC-3 | `ac-3` / `ec-3` | 0 | empty (no decoder; probe only) |
+| AC-3 / E-AC-3 | `ac-3` / `ec-3` | 0 | empty; a dependent E-AC-3 frame is part of the packet of the frame it extends |
+| AMR-NB / AMR-WB | `samr` / `sawb` | 0 | empty; each frame starts with its one-byte frame type header, as in an .amr file |
+| MPEG-1 / MPEG-2 video | `mp1v` / `mp2v` | 0 | empty; sequence headers stay inside the samples |
+| Motion JPEG | `jpeg` | 0 | empty; one whole JPEG picture per sample |
+| DV | `dvc ` (NTSC), `dvcp` (PAL), `dv5n`, `dv5p`, or the QuickTime fourcc as found | 0 | empty |
+| H.263 | `h263` | 0 | empty |
 | PCM | `lpcm` | 0 | empty; `bits` (8, 16, 24, 32, 64), `floating`, `bigEndian` describe it; 8-bit is unsigned, others signed |
 
 ## Timing
@@ -100,3 +105,23 @@ list; `Sample.offset` is then free for the reader's use.
   the same length, so the sound after them stays at its own time.
 - `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
 - `Mp4Writer` writes version 1 (64-bit) `mvhd`, `tkhd`, `mdhd` and `elst` boxes when a length does not fit in 32 bits.
+
+## AVI, CAF, AC-3, AMR and older video (formats round)
+
+- `Reader::format()` is `avi`, `caf`, `amr`, `ac3` or `eac3` for the new readers.
+- AVI video: timescale and frame step come from the stream header (`dwRate`/`dwScale`, reduced). Chunks are found through the OpenDML
+  indexes when there are any, else `idx1`, else by walking the `movi` lists. Empty chunks are not samples; the picture before them
+  lasts longer. MPEG-1, MPEG-2 and MPEG-4 pictures get their shown order from their picture types, H.264 from its picture order
+  count; `dts` is moved back so it never passes `pts`. A DivX packed bitstream (marked by the `DivX...p` user data) is split into one
+  sample per picture and its placeholder chunks are dropped. H.264 samples are converted from start codes to 4-byte lengths.
+- AVI sound: MP3, MP2, AC-3 and PCM are read as one byte stream across the chunks and cut into their own frames, so chunk borders
+  and AVI block timing do not matter. `Sample.offset` is the place in that stream.
+- AC-3 and E-AC-3 decode to the channel order above. Layouts that have no place in it (2.1, 2/1, 2/2 and any other layout with a
+  low-frequency channel short of 5.1) are decoded as 5.1 with silent channels where the stream has none.
+- AMR and AC-3 output is moved to where FFmpeg's decoders put it (Apple's decoders give it 40, 95 and 256 frames later).
+- MPEG-4 part 2 is decoded by the system, which only knows Simple Profile. A stream that uses B-frames, quarter-pixel motion or custom
+  matrices is read and probed but `VideoDecoder::open` fails with a message that says so.
+- JPEG pictures that are not 4:2:0 are refused by VideoToolbox; they are decoded through ImageIO and come out as 8-bit 4:4:4 BT.709
+  limited-range frames (backend `imageio`).
+- Windows Media (ASF: WMA, WMV) is recognised and refused with its own message; nothing on a Mac decodes it.
+

@@ -245,3 +245,32 @@ The earlier comparison set our 30-frame groups against FFmpeg's 150-frame defaul
 one-pass rate control of SVT-AV1 falls short of the target with short groups, and it cannot be steered while it runs (a bitrate
 change is only accepted in its low-delay constant-rate mode). On two other clips the new setting gave 77 % and 100 % of the target
 with 30-frame groups (66 % and 100 % before) and 95 % and 102 % with 150-frame groups. `ffamp transcode` takes `--gop`.
+
+# Formats round: what the Mac app still needed FFmpeg for
+
+Suite `tests/suites/45_formats.sh`, fixtures in `tests/fixtures/formats` (made by `make.sh` with FFmpeg, afconvert and, for AMR,
+opencore-amr and vo-amrwbenc).
+
+| Input | Opens through | Against FFmpeg's decode |
+|---|---|---|
+| AC-3, E-AC-3 in .ac3/.eac3, MP4/MOV, Matroska, CAF, AVI, transport streams | AudioToolbox | 50 to 78 dB; length equal to the sample |
+| AMR-NB, AMR-WB in .amr, 3GP/MP4, CAF | AudioToolbox | 32 to 35 dB (two different decoders of a speech codec) |
+| CAF: PCM, AAC, HE-AAC, ALAC, FLAC, Opus (1-2 channels), MP3, AC-3, AMR | own reader | PCM, ALAC, FLAC bit-exact; AAC, Opus 135 dB; MP3 88 dB |
+| AVI: H.264 | VideoToolbox | frame-exact, B-frames included |
+| MPEG-4 part 2 Simple Profile in MP4/MOV, Matroska, AVI | VideoToolbox | 49 dB or more |
+| MPEG-1, MPEG-2 in MP4/MOV, Matroska, AVI | VideoToolbox | 52 dB or more |
+| Motion JPEG 4:2:0 | VideoToolbox (hardware) | 67 dB or more |
+| Motion JPEG 4:2:2, 4:4:4 | ImageIO | 31 dB (4:2:2, colour filled in by different filters) and 52 dB (4:4:4), compared as BGRA |
+| DV PAL and NTSC in MOV, Matroska, AVI | VideoToolbox | 36 to 37 dB (Apple's DV decoder differs this much from FFmpeg's) |
+| H.263 in 3GP | VideoToolbox | 62 dB or more |
+| AVI over 1 GB (OpenDML, several RIFF parts; 2.2 GB tried by hand) | own reader | frame count equal, frames from start to end 65 dB |
+
+Not possible on a Mac without writing or bundling a codec:
+
+- **WMA / WMV / ASF**: AudioToolbox has no WMA decoder (`AudioFileOpenURL` fails, `afconvert` lists no such format) and AVFoundation
+  answers "Cannot Open". `Reader::open` says `Windows Media files (WMA, WMV, ASF) cannot be opened: this system has no decoder for them`.
+- **MPEG-4 Advanced Simple Profile** (most DivX and Xvid files): VideoToolbox and AVFoundation refuse B-frames, quarter-pixel motion
+  and custom matrices. The file opens, probes, and its sound decodes; the video decoder fails with its own message.
+
+Not built: MPEG-2 in transport streams and MPEG program streams (.mpg, .vob); neither is on the app's list.
+

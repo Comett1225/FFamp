@@ -1,6 +1,8 @@
 #include "absent/media.h"
 #include "aac_config.h"
 #include "bytes.h"
+#include "nal.h"
+#include "readers.h"
 #include "read_common.h"
 #include <algorithm>
 #include <cmath>
@@ -139,6 +141,17 @@ void audioConfig(uint32_t type, View body, Track& track) {
         track.channels = body.p[13];
         track.bits = body.p[9];
         track.sampleRate = int(View{body.p + 24, 4}.u32());
+    } else if ((type == fourcc("dac3") && body.n >= 2) || (type == fourcc("dec3") && body.n >= 4)) {
+        static const int rates[4] = {48000, 44100, 32000, 0};
+        static const int fronts[8] = {2, 1, 2, 3, 3, 4, 4, 5};
+        BitReader r{body.p, body.n};
+        const bool enhanced = type == fourcc("dec3");
+        if (enhanced) r.skip(16);
+        int rate = rates[r.bits(2)];
+        r.skip(enhanced ? 10 : 8);
+        int mode = int(r.bits(3));
+        track.channels = fronts[mode] + int(r.bit());
+        if (rate) track.sampleRate = rate;
     } else if (type == fourcc("enda") && body.n >= 2 && track.codec == fourcc("lpcm")) {
         track.bigEndian = body.p[1] == 0;
     } else if (type == fourcc("pcmC") && body.n >= 6 && track.codec == fourcc("lpcm")) {
@@ -181,10 +194,33 @@ void audioEntry(uint32_t format, View v, Track& track) {
     else if (format == fourcc("lpcm") && version == 2 && (bits == 8) != bool(flags & 5)) pcm(track, bits, flags & 1, flags & 2);
     else if (format == fourcc(".mp3") || format == 0x6D730055) track.codec = fourcc(".mp3");
     else if (format == fourcc("fLaC")) track.bits = bits;
+    else if (format == fourcc("samr") || format == fourcc("sawb")) {
+        track.channels = 1;
+        track.sampleRate = format == fourcc("sawb") ? 16000 : 8000;
+    }
     boxes(v, [&](uint32_t type, View body) {
         if (type == fourcc("wave")) boxes(body, [&](uint32_t inner, View content) { audioConfig(inner, content, track); });
         else audioConfig(type, body, track);
     });
+}
+
+void videoKind(Track& track) {
+    uint32_t& c = track.codec;
+    const uint32_t family = c >> 8;
+    if (c == fourcc("m1v ") || c == fourcc("mpg1") || c == fourcc("mpeg")) c = fourcc("mp1v");
+    else if (c == fourcc("m2v1") || c == fourcc("mpg2") || family == 0x686476 || family == 0x786476 || family == 0x786435 || (c >> 16) == 0x6D78) c = fourcc("mp2v");
+    else if (c == fourcc("mjpg") || c == fourcc("MJPG") || c == fourcc("AVDJ") || c == fourcc("dmb1")) c = fourcc("jpeg");
+    if (c == fourcc("s263") || c == fourcc("H263")) c = fourcc("h263");
+    if (c != fourcc("mp4v") || track.configType != fourcc("esds")) return;
+    ElementaryStream stream;
+    parseElementaryStream(View{track.config.data(), track.config.size()}, stream);
+    int kind = stream.objectTypeIndication;
+    if (kind == 0x20) return;
+    c = kind >= 0x60 && kind <= 0x65 ? fourcc("mp2v") : kind == 0x6A ? fourcc("mp1v") : kind == 0x6C ? fourcc("jpeg") : c;
+    if (c != fourcc("mp4v")) {
+        track.configType = 0;
+        track.config.clear();
+    }
 }
 
 void entry(uint32_t format, View v, Track& track) {
@@ -196,7 +232,7 @@ void entry(uint32_t format, View v, Track& track) {
         track.height = v.u16();
         v.skip(50);
         boxes(v, [&](uint32_t type, View body) {
-            if (type == fourcc("avcC") || type == fourcc("hvcC") || type == fourcc("vpcC") || type == fourcc("av1C") || type == fourcc("apvC")) {
+            if (type == fourcc("avcC") || type == fourcc("hvcC") || type == fourcc("vpcC") || type == fourcc("av1C") || type == fourcc("apvC") || type == fourcc("esds")) {
                 track.configType = type;
                 track.config.assign(body.p, body.p + body.n);
             } else if (type == fourcc("colr")) {
@@ -210,6 +246,7 @@ void entry(uint32_t format, View v, Track& track) {
                 }
             }
         });
+        videoKind(track);
     } else if (track.kind == Kind::Audio) {
         audioEntry(format, v, track);
     }

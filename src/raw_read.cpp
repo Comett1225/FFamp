@@ -1,9 +1,69 @@
 #include "read_common.h"
+#include "nal.h"
 #include "readers.h"
 #include <algorithm>
 #include <cstring>
 
 namespace absent {
+
+bool dolbyFrame(const uint8_t* h, DolbyFrame& f) {
+    static const int rates[3] = {48000, 44100, 32000};
+    static const int kilobits[19] = {32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640};
+    static const int fronts[8] = {2, 1, 2, 3, 3, 4, 4, 5};
+    if (h[0] != 0x0B || h[1] != 0x77) return false;
+    int version = h[5] >> 3;
+    BitReader r{h, 8};
+    r.skip(16);
+    f.dependent = false;
+    if (version <= 10) {
+        r.skip(16);
+        int rateCode = int(r.bits(2));
+        int sizeCode = int(r.bits(6));
+        if (rateCode == 3 || sizeCode >= 38) return false;
+        int rate = kilobits[sizeCode >> 1];
+        f.rate = rates[rateCode];
+        uint32_t words = rateCode == 0 ? uint32_t(rate * 2) : rateCode == 2 ? uint32_t(rate * 3) : uint32_t(rate * 320 / 147 + (sizeCode & 1));
+        f.bytes = words * 2;
+        r.skip(8);
+        f.mode = int(r.bits(3));
+        if ((f.mode & 1) && f.mode != 1) r.skip(2);
+        if (f.mode & 4) r.skip(2);
+        if (f.mode == 2) r.skip(2);
+        f.lfe = r.bit();
+        f.channels = fronts[f.mode] + int(f.lfe);
+        f.samples = 1536;
+        f.codec = fourcc("ac-3");
+        return true;
+    }
+    if (version > 16) return false;
+    static const int blocks[4] = {1, 2, 3, 6};
+    int kind = int(r.bits(2));
+    r.skip(3);
+    f.bytes = (r.bits(11) + 1) * 2;
+    int rateCode = int(r.bits(2));
+    int count = 6;
+    if (rateCode == 3) {
+        int half = int(r.bits(2));
+        if (half == 3) return false;
+        f.rate = rates[half] / 2;
+    } else {
+        count = blocks[r.bits(2)];
+        f.rate = rates[rateCode];
+    }
+    f.mode = int(r.bits(3));
+    f.lfe = r.bit();
+    f.channels = fronts[f.mode] + int(f.lfe);
+    f.samples = uint32_t(256 * count);
+    f.codec = fourcc("ec-3");
+    f.dependent = kind == 1;
+    return f.bytes >= 8;
+}
+
+uint32_t amrFrameBytes(bool wide, uint8_t first) {
+    static const uint8_t narrowSizes[16] = {12, 13, 15, 17, 19, 20, 26, 31, 5, 0, 0, 0, 0, 0, 0, 0};
+    static const uint8_t wideSizes[16] = {17, 23, 32, 36, 40, 46, 50, 58, 60, 5, 0, 0, 0, 0, 0, 0};
+    return 1u + (wide ? wideSizes : narrowSizes)[(first >> 3) & 15];
+}
 
 namespace {
 
@@ -173,6 +233,88 @@ const char* packets(FileReader& reader, uint64_t start) {
     return nullptr;
 }
 
+const char* dolby(FileReader& reader, uint64_t at) {
+    Source& source = reader.source;
+    const uint64_t end = source.size();
+    Track track;
+    track.id = 1;
+    track.kind = Kind::Audio;
+    int64_t time = 0;
+    uint64_t lost = 0;
+    while (end - at >= 8 && lost < kSearch) {
+        const uint8_t* p = source.view(at, 8);
+        DolbyFrame f;
+        if (!p || !dolbyFrame(p, f) || f.bytes > end - at || (!track.samples.empty() && (f.rate != track.sampleRate || f.codec != track.codec))) {
+            ++at;
+            ++lost;
+            continue;
+        }
+        lost = 0;
+        if (f.dependent && !track.samples.empty() && track.samples.back().offset + track.samples.back().size == at && track.samples.back().size < (1u << 20)) {
+            track.samples.back().size += f.bytes;
+            at += f.bytes;
+            continue;
+        }
+        if (track.samples.empty()) {
+            if (f.dependent) {
+                at += f.bytes;
+                continue;
+            }
+            track.codec = f.codec;
+            track.sampleRate = f.rate;
+            track.timescale = uint32_t(f.rate);
+            track.channels = f.channels;
+        }
+        Sample s;
+        s.offset = at;
+        s.size = f.bytes;
+        s.pts = s.dts = time;
+        s.duration = f.samples;
+        s.sync = true;
+        time += f.samples;
+        track.samples.push_back(s);
+        at += f.bytes;
+    }
+    if (track.samples.empty()) return "no AC-3 frames found";
+    reader.name = track.codec == fourcc("ac-3") ? "ac3" : "eac3";
+    indexTrack(track);
+    reader.list.push_back(std::move(track));
+    return nullptr;
+}
+
+const char* amr(FileReader& reader, bool wide) {
+    Source& source = reader.source;
+    const uint64_t end = source.size();
+    reader.name = "amr";
+    Track track;
+    track.id = 1;
+    track.kind = Kind::Audio;
+    track.codec = wide ? fourcc("sawb") : fourcc("samr");
+    track.sampleRate = wide ? 16000 : 8000;
+    track.timescale = uint32_t(track.sampleRate);
+    track.channels = 1;
+    const uint32_t step = wide ? 320 : 160;
+    uint64_t at = wide ? 9 : 6;
+    while (at < end) {
+        const uint8_t* p = source.view(at, 1);
+        if (!p) break;
+        uint32_t size = amrFrameBytes(wide, p[0]);
+        if (size > end - at) break;
+        Sample s;
+        s.offset = at;
+        s.size = size;
+        s.pts = s.dts = int64_t(track.samples.size()) * step;
+        s.duration = step;
+        s.sync = true;
+        track.samples.push_back(s);
+        at += size;
+    }
+    if (track.samples.empty()) return "no sound frames in this AMR file";
+    indexTrack(track);
+    reader.list.push_back(std::move(track));
+    return nullptr;
+}
+
 struct Candidate {
     uint64_t at;
     uint64_t number;
@@ -278,8 +420,15 @@ std::unique_ptr<Reader> openRawAudio(const std::string& path, std::string* error
             if (skip > source.size() - at) break;
             at += skip;
         }
-        const uint8_t* head = source.view(at, 4);
-        problem = head && memcmp(head, "fLaC", 4) == 0 ? flac(*reader, at) : packets(*reader, at);
+        const uint8_t* head = source.view(at, std::min<uint64_t>(12, source.size() - at));
+        const size_t have = size_t(std::min<uint64_t>(12, source.size() - at));
+        auto starts = [&](const char* text) { return head && have >= strlen(text) && memcmp(head, text, strlen(text)) == 0; };
+        if (starts("fLaC")) problem = flac(*reader, at);
+        else if (starts("#!AMR-WB\n")) problem = amr(*reader, true);
+        else if (starts("#!AMR\n")) problem = amr(*reader, false);
+        else if (starts("#!AMR")) problem = "multichannel AMR files are not supported";
+        else if (have >= 2 && head[0] == 0x0B && head[1] == 0x77) problem = dolby(*reader, at);
+        else problem = packets(*reader, at);
     }
     if (problem) {
         if (error) *error = problem;

@@ -361,6 +361,34 @@ Look lookOf(Reader& reader, const Track& t) {
                 break;
             }
         }
+    } else if (c == fourcc("jpeg")) {
+        look.codec = "mjpeg";
+        look.profile = "Baseline";
+        look.pixels = "yuvj420p";
+        look.rangeKnown = true;
+        look.full = true;
+        if (look.matrix == 2) look.matrix = 5;
+        std::vector<uint8_t> first = firstPacket(reader, t);
+        for (size_t i = 2; i + 3 < first.size() && first[i] == 0xFF;) {
+            if (first[i + 1] >= 0xC0 && first[i + 1] <= 0xC2 && i + 14 < first.size() && first[i + 9] >= 3) {
+                const bool halfX = (first[i + 11] >> 4) == 2 * (first[i + 14] >> 4), halfY = (first[i + 11] & 15) == 2 * (first[i + 14] & 15);
+                look.pixels = halfX && halfY ? "yuvj420p" : halfX ? "yuvj422p" : "yuvj444p";
+                if (first[i + 1] == 0xC2) look.profile = "Progressive";
+                break;
+            }
+            if (first[i + 1] == 0xDA) break;
+            i += 2 + ((size_t(first[i + 2]) << 8) | first[i + 3]);
+        }
+    } else if (c == fourcc("mp1v") || c == fourcc("mp2v") || c == fourcc("h263")) {
+        look.codec = c == fourcc("mp1v") ? "mpeg1video" : c == fourcc("mp2v") ? "mpeg2video" : "h263";
+        look.pixels = "yuv420p";
+        look.rangeKnown = look.rangeKnown || c != fourcc("h263");
+    } else if ((c >> 16) == 0x6476) {
+        look.codec = "dvvideo";
+        look.pixels = c == fourcc("dvcp") ? "yuv420p" : c == fourcc("dvc ") || c == fourcc("dvpp") ? "yuv411p" : "yuv422p";
+    } else if (c == fourcc("samr") || c == fourcc("sawb")) {
+        look.codec = c == fourcc("samr") ? "amr_nb" : "amr_wb";
+        look.sampleFormat = "fltp";
     } else if (c == fourcc("mp4a")) {
         look.codec = "aac";
         look.sampleFormat = "fltp";
@@ -533,6 +561,7 @@ const char* formatName(const std::string& name) {
         {"matroska", "matroska,webm"}, {"mkv", "matroska,webm"}, {"webm", "matroska,webm"},
         {"ogg", "ogg"}, {"opus", "ogg"}, {"wav", "wav"}, {"wave", "wav"}, {"aiff", "aiff"}, {"aifc", "aiff"},
         {"mp3", "mp3"}, {"mp2", "mp3"}, {"mp1", "mp3"}, {"flac", "flac"}, {"aac", "aac"}, {"adts", "aac"}, {"mpegts", "mpegts"}, {"ts", "mpegts"}, {"m2ts", "mpegts"},
+        {"avi", "avi"}, {"caf", "caf"}, {"amr", "amr"}, {"ac3", "ac3"}, {"eac3", "eac3"},
     };
     for (auto& entry : names) if (name == entry.first) return entry.second;
     return nullptr;

@@ -205,6 +205,19 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
             t.codec = fourcc("apcn");
             for (const char* kind : kinds) if (secret.size() >= 4 && memcmp(secret.data(), kind, 4) == 0) t.codec = be32(secret.data());
             lane.frameAtom = true;
+        } else if (id == "V_MPEG4/ISO/ASP" || id == "V_MPEG4/ISO/SP" || id == "V_MPEG4/ISO/AP") {
+            set("mp4v", fourcc("esds"), false);
+            t.config = mpeg4Descriptor(secret.data(), secret.size());
+        } else if (id == "V_MPEG1") set("mp1v", 0, false);
+        else if (id == "V_MPEG2") set("mp2v", 0, false);
+        else if (id == "V_MJPEG") set("jpeg", 0, false);
+        else if (id == "V_MS/VFW/FOURCC" && secret.size() >= 40) {
+            t.codec = videoFourcc(be32(secret.data() + 16), t.height);
+            if (t.codec == fourcc("mp4v")) {
+                t.configType = fourcc("esds");
+                t.config = mpeg4Descriptor(secret.data() + 40, secret.size() - 40);
+            }
+            if (!t.codec || t.codec == fourcc("avc1")) lane.usable = false;
         } else lane.usable = false;
         if ((t.codec == fourcc("avc1") || t.codec == fourcc("hvc1") || t.codec == fourcc("av01")) && t.config.empty()) lane.usable = false;
         return;

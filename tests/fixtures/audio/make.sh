@@ -50,4 +50,10 @@ $F -i $T/q16.wav -c:a pcm_s16le pcm_s16le_4ch.mov
 $F -i $T/p16.wav -c:a pcm_s16le pcm_s16le.mp4
 $F -i $T/p24.wav -c:a pcm_s24be pcm_s24be.mp4
 $F -i $T/pf32.wav -c:a pcm_f32le pcm_f32le.mp4
+clang -O1 -w vorbis_encode.c -I/opt/homebrew/include -L/opt/homebrew/lib -lvorbisenc -lvorbis -logg -o $T/vorbis_encode
+$T/vorbis_encode $T/s44.wav 0.4 vorbis_stereo_44k.ogg
+$T/vorbis_encode $T/x48.wav 0.3 vorbis_51_48k.ogg
+$T/vorbis_encode $T/m44.wav 0.3 $T/m44.ogg
+mkvmerge -q -o vorbis_mono_44k.mka $T/m44.ogg
+mkvmerge -q -w -o vorbis_stereo_44k.webm vorbis_stereo_44k.ogg
 rm -r $T

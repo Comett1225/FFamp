@@ -606,6 +606,7 @@ void MatroskaReader::finish(Lane& lane) {
     if (t.kind == Kind::Audio) {
         const int64_t slack = std::max<int64_t>(1, ticks(int64_t(scale) * 2));
         const bool vorbis = t.codec == fourcc("vorb");
+        const int64_t joined = vorbis ? std::max<int64_t>(slack, lane.modes.blocks[1] / 4) : slack;
         std::vector<bool> known(count);
         for (size_t i = 0; i < count; ++i) {
             known[i] = t.samples[i].duration != 0;
@@ -615,7 +616,7 @@ void MatroskaReader::finish(Lane& lane) {
         for (size_t i = 0; i < count; ++i) {
             Sample& s = t.samples[i];
             int64_t stated = ticks(times[i]);
-            s.pts = expected >= 0 && std::llabs(stated - expected) <= slack ? expected : stated;
+            s.pts = expected >= 0 && std::llabs(stated - expected) <= (i >= 2 ? joined : slack) ? expected : stated;
             expected = known[i] ? s.pts + s.duration : -1;
         }
         for (size_t i = 0; i < count; ++i) {

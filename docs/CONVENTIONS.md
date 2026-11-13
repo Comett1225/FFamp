@@ -11,6 +11,7 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | AV1 | `av01` | `av1C` | AV1CodecConfigurationRecord; samples are low-overhead OBU temporal units |
 | VP9 | `vp09` | `vpcC` (may be empty) | VPCodecConfigurationRecord body (version/flags + fields), or empty |
 | VP8 | `vp08` | `vpcC` (may be empty) | as VP9 |
+| APV | `apv1` | `apvC` | the `apvC` box body: 4 zero bytes, then the APVDecoderConfigurationRecord. Each sample is one access unit with its 4-byte size in front, then the `aPv1` signature (what FFmpeg stores in MP4) |
 | ProRes | the ProRes fourcc as found (`apch`, `apcn`, `apcs`, `apco`, `ap4h`, `ap4x`) | 0 | empty |
 | MPEG-4 part 2 | `mp4v` | `esds` | esds body |
 | AAC (any profile) | `mp4a` | `esds` (from MP4) or `ASC ` (raw AudioSpecificConfig, from Matroska, ADTS, TS) | as named |
@@ -18,7 +19,7 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | Opus | `Opus` | `OpHd` | OpusHead exactly as in Ogg (starts with "OpusHead", little-endian fields); MP4 dOps is converted to this |
 | FLAC | `fLaC` | `fLaC` | the 34-byte STREAMINFO block body |
 | ALAC | `alac` | `alac` | the 24-byte ALACSpecificConfig (magic cookie) |
-| Vorbis | `vorb` | `vorb` | the three header packets in Xiph lacing (as Matroska CodecPrivate) |
+| Vorbis | `vorb` | `vorb` | the three header packets in Xiph lacing (as Matroska CodecPrivate); decoded by libvorbis, the first packet of a run gives no sound |
 | AC-3 / E-AC-3 | `ac-3` / `ec-3` | 0 | empty (no decoder; probe only) |
 | PCM | `lpcm` | 0 | empty; `bits` (8, 16, 24, 32, 64), `floating`, `bigEndian` describe it; 8-bit is unsigned, others signed |
 

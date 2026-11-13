@@ -8,6 +8,7 @@ namespace {
 using namespace cli;
 
 const size_t kChunk = 8192;
+const size_t kPull = 65536;
 
 template <class Source>
 bool spans(Source& source, int channels, const std::string& list) {
@@ -111,12 +112,12 @@ int resample(const Args& args) {
     if (!args.has("from") || !args.has("to")) return fail("usage: resample --from R --to R [--channels C] [--to-channels C] [--chunk n] < f32le > f32le");
     int inChannels = int(args.number("channels", 1));
     int outChannels = int(args.number("to-channels", inChannels));
-    size_t chunk = size_t(std::max(1L, args.number("chunk", long(kChunk))));
+    size_t chunk = size_t(std::max(1L, args.number("chunk", long(kPull))));
     Resampler resampler(int(args.number("from", 0)), inChannels, int(args.number("to", 0)), outChannels);
     std::vector<float> in(chunk * size_t(inChannels));
-    std::vector<float> out(kChunk * size_t(outChannels));
+    std::vector<float> out(kPull * size_t(outChannels));
     auto drain = [&] {
-        while (size_t made = resampler.pull(out.data(), kChunk)) fwrite(out.data(), sizeof(float) * size_t(outChannels), made, stdout);
+        while (size_t made = resampler.pull(out.data(), kPull)) fwrite(out.data(), sizeof(float) * size_t(outChannels), made, stdout);
     };
     while (size_t got = fread(in.data(), sizeof(float) * size_t(inChannels), chunk, stdin)) {
         resampler.push(in.data(), got);

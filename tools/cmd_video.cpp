@@ -150,7 +150,7 @@ int encode(const Args& args) {
     }
     long total = std::min(available, args.number("frames", available));
     uint32_t codec = videoCodec(args);
-    if (!codec) return fail("--codec is h264, hevc, av1 or vp9");
+    if (!codec) return fail("--codec is h264, hevc, av1, vp9 or apv");
 
     std::string error;
     EncodeSpec spec;
@@ -310,7 +310,7 @@ int transcode(const Args& args) {
     auto decoder = VideoDecoder::open(*reader, *track, &error, args.has("software"));
     if (!decoder) return fail(error);
     uint32_t codec = videoCodec(args);
-    if (!codec) return fail("--codec is h264, hevc, av1 or vp9");
+    if (!codec) return fail("--codec is h264, hevc, av1, vp9 or apv");
     EncodeSpec spec;
     spec.width = track->width;
     spec.height = track->height;

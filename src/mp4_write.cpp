@@ -31,7 +31,7 @@ bool isProRes(uint32_t codec) {
 }
 
 bool needsConfig(uint32_t codec) {
-    return codec == fourcc("avc1") || codec == fourcc("hvc1") || codec == fourcc("av01") || codec == fourcc("mp4v") || codec == fourcc("mp4a") || codec == fourcc("Opus")
+    return codec == fourcc("avc1") || codec == fourcc("hvc1") || codec == fourcc("av01") || codec == fourcc("apv1") || codec == fourcc("mp4v") || codec == fourcc("mp4a") || codec == fourcc("Opus")
         || codec == fourcc("fLaC") || codec == fourcc("alac");
 }
 
@@ -340,7 +340,7 @@ void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
     b.u16(0xFFFF);
     if (spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08")) child(b, fourcc("vpcC"), vpConfig(t));
     else if (spec.codec == fourcc("mp4v")) child(b, fourcc("esds"), spec.config);
-    else if (!proRes) child(b, spec.codec == fourcc("avc1") ? fourcc("avcC") : spec.codec == fourcc("hvc1") ? fourcc("hvcC") : fourcc("av1C"), spec.config);
+    else if (!proRes) child(b, spec.codec == fourcc("avc1") ? fourcc("avcC") : spec.codec == fourcc("hvc1") ? fourcc("hvcC") : spec.codec == fourcc("apv1") ? fourcc("apvC") : fourcc("av1C"), spec.config);
     if (proRes) {
         size_t fields = b.open(fourcc("fiel"));
         b.u8(1);

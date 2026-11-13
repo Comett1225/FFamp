@@ -290,6 +290,10 @@ Look lookOf(Reader& reader, const Track& t) {
             bool halfX = t.config[2] & 0x08, halfY = t.config[2] & 0x04;
             look.pixels = pixelName(mono ? 0 : halfX && halfY ? 1 : halfX ? 2 : 3, high ? (twelve ? 12 : 10) : 8, false);
         }
+    } else if (c == fourcc("apv1")) {
+        look.codec = "apv";
+        const bool described = t.configType == fourcc("apvC") && t.config.size() >= 22;
+        look.pixels = pixelName(described && t.config[20] >> 4 == 3 ? 3 : 2, described ? 8 + (t.config[20] & 15) : 10, false);
     } else if (c == fourcc("vp09")) {
         look.codec = "vp9";
         look.pixels = "yuv420p";

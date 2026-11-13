@@ -101,7 +101,7 @@ inline bool pictureBytes(const Args& args, const Frame& frame, std::vector<uint8
 
 inline uint32_t videoCodec(const Args& args) {
     const std::string name = args.get("codec", "h264");
-    return name == "h264" ? fourcc("avc1") : name == "hevc" ? fourcc("hvc1") : name == "av1" ? fourcc("av01") : name == "vp9" ? fourcc("vp09") : 0;
+    return name == "h264" ? fourcc("avc1") : name == "hevc" ? fourcc("hvc1") : name == "av1" ? fourcc("av01") : name == "vp9" ? fourcc("vp09") : name == "apv" ? fourcc("apv1") : 0;
 }
 
 std::unique_ptr<Writer> openOutput(const std::string& path, std::string* error);

@@ -196,7 +196,7 @@ void entry(uint32_t format, View v, Track& track) {
         track.height = v.u16();
         v.skip(50);
         boxes(v, [&](uint32_t type, View body) {
-            if (type == fourcc("avcC") || type == fourcc("hvcC") || type == fourcc("vpcC") || type == fourcc("av1C")) {
+            if (type == fourcc("avcC") || type == fourcc("hvcC") || type == fourcc("vpcC") || type == fourcc("av1C") || type == fourcc("apvC")) {
                 track.configType = type;
                 track.config.assign(body.p, body.p + body.n);
             } else if (type == fourcc("colr")) {

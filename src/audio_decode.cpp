@@ -262,6 +262,12 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
 #else
         return fail("Opus needs libopus, which was not found when building");
 #endif
+    } else if (track.codec == fourcc("vorb")) {
+#ifdef ABSENT_VORBIS
+        a.codec = openVorbisAudio(track, error);
+#else
+        return fail("Vorbis needs libvorbis, which was not found when building");
+#endif
     } else {
 #ifdef __APPLE__
         std::vector<uint8_t> packet(track.samples[0].size);

@@ -186,7 +186,7 @@ int encodeSurface(const Args& args) {
     FILE* video = fopen(args.get("video").c_str(), "rb");
     if (!video) return fail("cannot open the raw video");
     uint32_t codec = videoCodec(args);
-    if (!codec) return fail("--codec is h264, hevc, av1 or vp9");
+    if (!codec) return fail("--codec is h264, hevc, av1, vp9 or apv");
     int fps = int(args.number("fps", 30));
     if (fps <= 0) return fail("bad --fps");
     EncodeSpec spec;

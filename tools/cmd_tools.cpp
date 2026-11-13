@@ -46,7 +46,7 @@ bool hasExtension(const std::string& path) {
 
 int compress(const Args& args) {
     if (args.plain.size() < 2) {
-        return fail("compress needs <in> <out> [--start s --end s] [--size WxH | --fit WxH] [--fps N or N/D] [--codec h264|hevc|av1|vp9] [--bitrate bits] [--audio copy|aac|none] [--audio-bitrate bits]");
+        return fail("compress needs <in> <out> [--start s --end s] [--size WxH | --fit WxH] [--fps N or N/D] [--codec h264|hevc|av1|vp9|apv] [--bitrate bits] [--audio copy|aac|none] [--audio-bitrate bits]");
     }
     CompressJob job;
     job.input = args.plain[0];
@@ -63,7 +63,7 @@ int compress(const Args& args) {
         job.fpsDenominator = int(denominator);
     }
     job.codec = videoCodec(args);
-    if (!job.codec) return fail("--codec is h264, hevc, av1 or vp9");
+    if (!job.codec) return fail("--codec is h264, hevc, av1, vp9 or apv");
     job.bitrate = int(args.number("bitrate", 0));
     const std::string audio = args.get("audio", "copy");
     if (audio != "copy" && audio != "aac" && audio != "none") return fail("--audio is copy, aac or none");

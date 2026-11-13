@@ -18,8 +18,8 @@ const double kBeta = 12.57;
 const int kExactPhases = 1024;
 const int kBlendPhases = 256;
 const int kMostTableValues = 1 << 24;
-const size_t kParallelFrames = 16384;
-const size_t kPartFrames = 4096;
+const size_t kParallelFrames = 8192;
+const size_t kPartFrames = 2048;
 
 double bessel(double x) {
     double sum = 1;
@@ -106,10 +106,13 @@ void SincKernel::renderPart(const float* planes, size_t span, int64_t first, int
     const size_t taps = size_t(2 * half);
     const size_t width = size_t(channels);
     std::vector<float> row(blended ? taps : 0);
-    for (size_t n = 0; n < count; ++n) {
-        int64_t index = outStart + int64_t(n);
-        int64_t whole = centre(index);
-        int64_t phase = int64_t(__int128(index) * down - __int128(whole) * up);
+    int64_t whole = centre(outStart);
+    int64_t phase = int64_t(__int128(outStart) * down - __int128(whole) * up);
+    for (size_t n = 0; n < count; ++n, phase += down) {
+        if (phase >= up) {
+            whole += phase / up;
+            phase %= up;
+        }
         const float* h;
         if (blended) {
             double position = double(phase) / double(up) * phases;

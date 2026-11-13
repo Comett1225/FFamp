@@ -20,5 +20,6 @@ struct PacketDecoder {
 
 std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openOpusAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openVorbisAudio(const Track& track, std::string* error);
 
 }

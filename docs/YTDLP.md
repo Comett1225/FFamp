@@ -3,9 +3,25 @@
 `DeskVideoDownloader.kt` gives yt-dlp `--ffmpeg-location` today and lets it merge, convert and repair with FFmpeg. yt-dlp is not
 changed and `amedia` never starts it. The app tells yt-dlp to download the pieces only and then makes one `amedia` call itself.
 
-Nothing in this file was run against yt-dlp in this round (it is not installed on the build machine and the tests use no network).
-The option names are yt-dlp's documented ones; the `amedia` side is tested with files of the same kinds (fragmented MP4 and WebM
-pieces, a transport stream).
+Checked for real on 2026-11-13 with yt-dlp 2026.10.26 and one Creative Commons film (Blender's "Caminandes 3: Llamigos", 2.5 minutes,
+on YouTube), FFmpeg hidden with the options below; the downloads were deleted afterwards:
+
+| Download | yt-dlp wrote | `amedia` call | Judged by |
+|---|---|---|---|
+| `-f 134,140` (H.264 + AAC, DASH) | `item.134.mp4`, `item.140.m4a` | `merge` gives `item.mp4`, 3601 frames | AVFoundation plays it with picture and sound, VLC opens both tracks, ffprobe counts the same packets |
+| `-f 243,251` (VP9 + Opus, DASH) | `item.243.webm`, `item.251.webm` | `merge` gives `item.webm` | VLC opens both tracks, `mkvmerge -J` reports no errors or warnings |
+| H.264 `.mp4` + Opus `.webm` | as above | `merge` gives an `.mp4` with Opus | AVFoundation and VLC |
+| `-f 229` (HLS, picture only) | `hls.mp4`, really a transport stream | `probe --json` says `mpegts`, `rewrap` gives a plain MP4 | AVFoundation, VLC; FFmpeg decodes the same 3601 pictures from both |
+| `-f 18` (one file with both) | `both.mp4` | none needed; `strip-audio` gives the silent copy | AVFoundation |
+| sound only | `item.140.m4a`, `item.251.webm` | `extract-audio` gives `.m4a` and `.opus` | AVFoundation (M4A), VLC |
+
+What reality added to this file:
+
+- yt-dlp prints `WARNING: ffmpeg-location ... does not exist! Continuing without ffmpeg` on every run. It is expected; the app
+  must not show it as an error.
+- YouTube's HLS pieces pad the end of each piece with transport packets that carry no payload. The reader lost the last picture of
+  every piece on them (27 of 3601 here); fixed in `src/ts_read.cpp`, with a check in the suite.
+- YouTube needs yt-dlp's JavaScript helper (`deno` here). That is yt-dlp's own need and has nothing to do with FFmpeg.
 
 ## What yt-dlp is given
 

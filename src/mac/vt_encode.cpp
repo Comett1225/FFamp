@@ -159,8 +159,8 @@ std::unique_ptr<VideoEncoder> VideoEncoder::open(const EncodeSpec& spec, std::st
     e.spec = spec;
     if (!spec.codec) e.spec.codec = spec.hevc ? fourcc("hvc1") : fourcc("avc1");
     e.spec.hevc = e.spec.codec == fourcc("hvc1") || e.spec.codec == fourcc("hev1");
-    if (e.spec.codec == fourcc("av01") || e.spec.codec == fourcc("vp09")) {
-        e.soft = e.spec.codec == fourcc("av01") ? openSvtAv1(e.spec, error) : openVpxEncoder(e.spec, error);
+    if (e.spec.codec == fourcc("av01") || e.spec.codec == fourcc("vp09") || e.spec.codec == fourcc("apv1")) {
+        e.soft = e.spec.codec == fourcc("av01") ? openSvtAv1(e.spec, error) : e.spec.codec == fourcc("apv1") ? openApvEncoder(e.spec, error) : openVpxEncoder(e.spec, error);
         if (!e.soft) return nullptr;
         e.backend = e.soft->name();
         e.config = e.soft->config();

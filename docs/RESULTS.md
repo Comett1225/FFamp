@@ -146,3 +146,36 @@ absent-media, and every real FFmpeg program and library on the machine denied by
 
 Limits: the stand-ins are separate programs because the app was not changed; they cover only the command lines of this H.264 + AAC MP4
 export; one project on one machine.
+
+# Speed round: sound paths, Vorbis, APV and outside judges
+
+Whole-process wall time on the same Mac, ours and FFmpeg 9.0.2 run in turn, best of five.
+
+| Path | Before | Now | FFmpeg |
+|---|---|---|---|
+| AAC file (87 s, 44.1 kHz stereo) decoded and resampled to 48 kHz, `pcm` | 0.145 s | 0.046 s | 0.066 s |
+| Raw 44.1 kHz stereo (60 s) to 48 kHz through the streaming `Resampler`, large pushes | 0.116 s (busier machine) | 0.022 s | 0.046 s |
+| The same in 1024-frame pushes (one thread) | 0.151 s (busier machine) | 0.049 s | 0.046 s |
+| FLAC, 60 s stereo 16-bit | 0.584 s, 5,180,850 bytes | 0.064 s, 5,192,500 bytes | 0.094 s, 5,463,653 bytes |
+
+- **Resampler**: the same 160-tap Kaiser filter and table as before (135 dB against the exact sweep, a tone above the new limit is left
+  at -128 dB, no delay). The filter sum is written with NEON and shares the coefficients between the two channels of a pair, the phase
+  is stepped instead of divided for every sample, a render of 8192 frames or more is split over the cores, and `PcmReader` reads ahead in
+  65536-frame windows while the next window is decoded on another thread. Every output sample is still a pure function of its position,
+  so any chunking, the threaded path and the streaming path give the same bits (checked in `tests/suites/75_installed.sh`).
+  In small pushes on one thread it is level with FFmpeg's 32-tap default while doing five times the filter work.
+- **FLAC encoder**: the stereo layout and the predictor order are chosen from the autocorrelation (one Levinson pass gives the expected
+  size of every order up to 12), then only the best fixed and the best linear predictor are tried for real. The residual uses 32-bit
+  sums when the block proves they cannot overflow, the bit writer works in words, and 32 blocks at a time are coded on all cores while
+  the MD5 runs beside them. CPU time fell from 0.58 s to 0.16 s; the files are 0.2 % larger than the exhaustive search made them and
+  5 % smaller than FFmpeg's. The stream is identical in every run and decodes to the input in our decoder, FFmpeg and the `flac` tool.
+- **Vorbis** (libvorbis, `ABSENT_VORBIS`): `AudioDecoder` takes `vorb` tracks from Ogg, Matroska and WebM with random access. Against
+  FFmpeg's decoder on files made by libvorbis: same length, no offset, 136 to 137 dB. Files made by FFmpeg's own experimental Vorbis
+  encoder decode differently in FFmpeg and in libvorbis on the second channel; VLC agrees with libvorbis.
+- **APV** (liboapv, `ABSENT_OAPV`): `EncodeSpec.codec = apv1` writes 4:2:2 10-bit APV (profile 422-10, average bitrate, BT.709
+  limited), which is what the app's FFmpeg export ends up with, into MP4 or MOV with an `apvC` box. FFmpeg's APV decoder reads our files
+  and gives the same bits as our own decoder (liboapv again); 65 dB luma PSNR at 20 Mbit/s for 480x270, about 700 frames a second.
+- **Judges** in the suite, each skipped when the tool is missing: `flac -t` on every FLAC file in the output folder, `mkvmerge -J`
+  (no error, no warning) on every Matroska and WebM file, VLC opening eight of our files with no window (`-I dummy`, dummy outputs;
+  it always exits with 0, so the check reads its log for the demuxer, the decoders and error lines).
+- **yt-dlp**: `docs/YTDLP.md` was run for real; it found that the transport stream reader lost one picture per HLS piece.

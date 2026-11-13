@@ -505,7 +505,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool vp9 = codec == fourcc("vp09"), vp8 = codec == fourcc("vp08"), av1 = codec == fourcc("av01");
     const bool prores = codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco") || codec == fourcc("ap4h") || codec == fourcc("ap4x");
     const bool h264 = track.configType == fourcc("avcC"), hevc = track.configType == fourcc("hvcC");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores) return fail("video codec not supported by this decoder");
+    const bool apv = codec == fourcc("apv1");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -520,6 +521,13 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.bits = 10;
         d.shape.chromaY = 0;
         d.shape.chromaX = codec == fourcc("ap4h") || codec == fourcc("ap4x") ? 0 : 1;
+    } else if (apv) {
+        const bool described = track.configType == fourcc("apvC") && config.size() >= 22;
+        const int chroma = described ? config[20] >> 4 : 2;
+        d.shape.bits = described ? 8 + (config[20] & 15) : 10;
+        d.shape.chromaX = chroma == 2 ? 1 : 0;
+        d.shape.chromaY = 0;
+        if (chroma != 2 && chroma != 3) return fail("this APV picture format is not supported");
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
         config.clear();
     }
@@ -553,12 +561,12 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (h264 || hevc || !track.color.known) d.shape.color.full = fromStream.full;
 
     auto softly = [&]() -> std::unique_ptr<VideoDecoder> {
-        d.soft = av1 ? openDav1d(error) : openVpxDecoder(vp8, error);
+        d.soft = apv ? openApvDecoder(error) : av1 ? openDav1d(error) : openVpxDecoder(vp8, error);
         if (!d.soft) return nullptr;
         d.backend = d.soft->name();
         return std::move(decoder);
     };
-    if (vp8 || (software && (vp9 || av1))) return softly();
+    if (vp8 || apv || (software && (vp9 || av1))) return softly();
 
     CMVideoCodecType type = h264 ? kCMVideoCodecType_H264 : hevc ? kCMVideoCodecType_HEVC : vp9 ? kCMVideoCodecType_VP9 : av1 ? kCMVideoCodecType_AV1 : codec;
     if (vp9 || av1) VTRegisterSupplementalVideoDecoderIfAvailable(type);

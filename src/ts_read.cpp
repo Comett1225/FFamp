@@ -111,6 +111,7 @@ struct Payload {
     bool starts = false;
     bool scrambled = false;
     bool jump = false;
+    bool hollow = false;
 };
 
 bool payloadOf(const uint8_t* packet, Payload& out) {
@@ -128,6 +129,7 @@ bool payloadOf(const uint8_t* packet, Payload& out) {
         if (length > 0) out.jump = packet[5] & 0x80;
         start = 5 + length;
     }
+    out.hollow = (control & 1) && start == kPacket;
     if (!(control & 1) || start >= kPacket) return false;
     out.p = packet + start;
     out.n = kPacket - start;
@@ -783,7 +785,11 @@ private:
         while (got < raw) {
             if (!reading.next(packet, place)) return false;
             Payload part;
-            if (!payloadOf(packet, part) || part.pid != pid) continue;
+            if (!payloadOf(packet, part)) {
+                if (part.hollow && part.pid == pid) counter = part.counter;
+                continue;
+            }
+            if (part.pid != pid) continue;
             if (part.scrambled) return false;
             if (counter >= 0 && part.counter == counter) continue;
             counter = part.counter;
@@ -818,7 +824,11 @@ private:
         uint64_t place;
         while (walk.next(packet, place)) {
             Payload part;
-            if (!payloadOf(packet, part) || part.pid == 0x1FFF) continue;
+            if (!payloadOf(packet, part)) {
+                if (part.hollow) for (auto& s : streams) if (s->pid == part.pid && part.counter == ((s->counter + 1) & 15)) s->counter = part.counter;
+                continue;
+            }
+            if (part.pid == 0x1FFF) continue;
             if (part.pid == 0) {
                 if (!programs.feed(part) || programs.data[0] != 0) continue;
                 const std::vector<uint8_t>& d = programs.data;

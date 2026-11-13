@@ -5,10 +5,13 @@
 #include <VideoToolbox/VideoToolbox.h>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
+#include <thread>
 
 namespace absent {
 
@@ -132,22 +135,30 @@ int codePoint(CVPixelBufferRef buffer, CFStringRef key, int (*convert)(CFStringR
     return code;
 }
 
+template <typename T>
+void liftRow(const T* __restrict in, T* __restrict out, int count, int lift) {
+    for (int x = 0; x < count; ++x) out[x] = T(in[x] << lift);
+}
+
+template <typename T>
+void weaveRow(const T* __restrict a, const T* __restrict b, T* __restrict out, int count, int lift) {
+    for (int x = 0; x < count; ++x) {
+        out[2 * x] = T(a[x] << lift);
+        out[2 * x + 1] = T(b[x] << lift);
+    }
+}
+
 void fill(const Picture& p, CVPixelBufferRef buffer) {
     CVPixelBufferLockBaseAddress(buffer, 0);
     const bool wide = p.bits > 8;
-    const int lift = 16 - p.bits;
+    const int lift = wide ? 16 - p.bits : 0;
     uint8_t* luma = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 0));
     const size_t lumaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0);
     for (int y = 0; y < p.height; ++y) {
         const uint8_t* from = p.plane[0] + size_t(y) * p.stride[0];
         uint8_t* to = luma + size_t(y) * lumaStride;
-        if (!wide) {
-            memcpy(to, from, size_t(p.width));
-            continue;
-        }
-        const uint16_t* in = reinterpret_cast<const uint16_t*>(from);
-        uint16_t* out = reinterpret_cast<uint16_t*>(to);
-        for (int x = 0; x < p.width; ++x) out[x] = uint16_t(in[x] << lift);
+        if (wide) liftRow(reinterpret_cast<const uint16_t*>(from), reinterpret_cast<uint16_t*>(to), p.width, lift);
+        else memcpy(to, from, size_t(p.width));
     }
     uint8_t* chroma = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 1));
     const size_t chromaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
@@ -155,20 +166,8 @@ void fill(const Picture& p, CVPixelBufferRef buffer) {
         const uint8_t* u = p.plane[1] + size_t(y) * p.stride[1];
         const uint8_t* v = p.plane[2] + size_t(y) * p.stride[2];
         uint8_t* to = chroma + size_t(y) * chromaStride;
-        if (!wide) {
-            for (int x = 0; x < p.chromaWidth; ++x) {
-                to[2 * x] = u[x];
-                to[2 * x + 1] = v[x];
-            }
-            continue;
-        }
-        const uint16_t* a = reinterpret_cast<const uint16_t*>(u);
-        const uint16_t* b = reinterpret_cast<const uint16_t*>(v);
-        uint16_t* out = reinterpret_cast<uint16_t*>(to);
-        for (int x = 0; x < p.chromaWidth; ++x) {
-            out[2 * x] = uint16_t(a[x] << lift);
-            out[2 * x + 1] = uint16_t(b[x] << lift);
-        }
+        if (wide) weaveRow(reinterpret_cast<const uint16_t*>(u), reinterpret_cast<const uint16_t*>(v), reinterpret_cast<uint16_t*>(to), p.chromaWidth, lift);
+        else weaveRow(u, v, to, p.chromaWidth, 0);
     }
     CVPixelBufferUnlockBaseAddress(buffer, 0);
 }
@@ -253,6 +252,17 @@ struct VideoDecoder::Impl {
     std::atomic<int64_t> floor{0};
     bool keep = true;
     uint32_t next = kNone;
+    uint32_t last = kNone;
+    int64_t kept = INT64_MIN;
+    struct Job {
+        std::vector<uint8_t> bytes;
+        int64_t stamp = 0;
+    };
+    std::condition_variable arrived, queued;
+    std::deque<Job> jobs;
+    bool busy = false;
+    bool stopping = false;
+    std::thread worker;
     uint64_t fed = 0;
     uint64_t restarts = 0;
     std::unique_ptr<SoftDecoder> soft;
@@ -260,7 +270,6 @@ struct VideoDecoder::Impl {
     OSType poolFormat = 0;
     int poolWidth = 0;
     int poolHeight = 0;
-    std::vector<uint8_t> packet;
     StreamShape shape;
     const char* backend = "videotoolbox";
     struct Shown {
@@ -343,6 +352,14 @@ struct VideoDecoder::Impl {
     }
 
     ~Impl() {
+        if (worker.joinable()) {
+            {
+                std::lock_guard<std::mutex> hold(lock);
+                stopping = true;
+            }
+            queued.notify_all();
+            worker.join();
+        }
         if (session) {
             VTDecompressionSessionWaitForAsynchronousFrames(session);
             VTDecompressionSessionInvalidate(session);
@@ -365,8 +382,62 @@ struct VideoDecoder::Impl {
 
     void restart() {
         wait();
-        if (soft) soft->reset();
+        if (soft) {
+            std::unique_lock<std::mutex> hold(lock);
+            jobs.clear();
+            arrived.wait(hold, [&] { return !busy; });
+            hold.unlock();
+            soft->reset();
+        }
         clear();
+        kept = INT64_MIN;
+    }
+
+    void store(const Picture& p) {
+        ++shown;
+        if (p.color.known) {
+            std::lock_guard<std::mutex> hold(lock);
+            if (!shape.color.known) shape.color = p.color;
+        }
+        if (!keep || p.stamp < floor) return;
+        CVPixelBufferRef buffer = surfaceFor(p);
+        if (!buffer) return;
+        {
+            std::lock_guard<std::mutex> hold(lock);
+            auto found = ready.find(p.stamp);
+            if (found != ready.end()) CFRelease(found->second);
+            ready[p.stamp] = buffer;
+        }
+        arrived.notify_all();
+    }
+
+    void work() {
+        std::unique_lock<std::mutex> hold(lock);
+        for (;;) {
+            queued.wait(hold, [&] { return stopping || !jobs.empty(); });
+            if (stopping) return;
+            Job job = std::move(jobs.front());
+            jobs.pop_front();
+            busy = true;
+            hold.unlock();
+            soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) { store(p); });
+            hold.lock();
+            busy = false;
+            arrived.notify_all();
+        }
+    }
+
+    void settle(int64_t pts, int64_t later) {
+        if (!soft) {
+            wait();
+            if (!has(pts) || !has(later)) finishDelayed();
+            return;
+        }
+        std::unique_lock<std::mutex> hold(lock);
+        arrived.wait(hold, [&] { return (ready.count(pts) && ready.count(later)) || (jobs.empty() && !busy); });
+        if (ready.count(pts) && ready.count(later)) return;
+        hold.unlock();
+        soft->drain([&](const Picture& p) { store(p); });
     }
 
     CVPixelBufferRef surfaceFor(const Picture& p) {
@@ -403,22 +474,21 @@ struct VideoDecoder::Impl {
         return buffer;
     }
 
-    bool feedSoft(uint32_t index) {
+    bool feedSoft(uint32_t index, bool queue) {
         const Sample& s = track->samples[index];
-        packet.resize(s.size);
-        if (!file->read(*track, index, packet.data())) return false;
+        Job job;
+        job.bytes.resize(s.size);
+        job.stamp = s.pts;
+        if (!file->read(*track, index, job.bytes.data())) return false;
         ++fed;
-        return soft->decode(packet.data(), packet.size(), [&](const Picture& p) {
-            ++shown;
-            if (p.color.known && !shape.color.known) shape.color = p.color;
-            if (!keep || s.pts < floor) return;
-            CVPixelBufferRef buffer = surfaceFor(p);
-            if (!buffer) return;
+        if (!queue) return soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) { store(p); });
+        if (!worker.joinable()) worker = std::thread([this] { work(); });
+        {
             std::lock_guard<std::mutex> hold(lock);
-            auto found = ready.find(s.pts);
-            if (found != ready.end()) CFRelease(found->second);
-            ready[s.pts] = buffer;
-        });
+            jobs.push_back(std::move(job));
+        }
+        queued.notify_one();
+        return true;
     }
 
     void clear() {
@@ -444,7 +514,7 @@ struct VideoDecoder::Impl {
             ++fed;
             return true;
         }
-        if (soft) return feedSoft(index);
+        if (soft) return feedSoft(index, keep);
         CMBlockBufferRef block = nullptr;
         if (CMBlockBufferCreateWithMemoryBlock(nullptr, nullptr, s.size, nullptr, nullptr, 0, s.size, kCMBlockBufferAssureMemoryNowFlag, &block) != noErr) return false;
         char* bytes = nullptr;
@@ -615,7 +685,11 @@ Frame VideoDecoder::frame(uint32_t index) {
     const int64_t later = track.samples[target].pts;
     d.keep = true;
     d.floor = std::min(pts, later);
-    if (!d.has(pts) || !d.has(later)) {
+    const bool following = d.last != kNone && index == d.last + 1;
+    d.last = index;
+    auto present = [&] { return d.has(pts) && d.has(later); };
+    if (!present() && d.next != kNone && d.next > target && d.floor >= d.kept) d.settle(pts, later);
+    if (!present()) {
         const uint32_t key = d.keyFor(item.first);
         if (d.next == kNone || d.next < key || d.next > item.first) {
             d.restart();
@@ -626,9 +700,16 @@ Frame VideoDecoder::frame(uint32_t index) {
             d.feed(d.next, true);
             ++d.next;
         }
-        d.wait();
-        if (!d.has(pts) || !d.has(later)) d.finishDelayed();
     }
+    if (following && d.next != kNone) {
+        const uint64_t ahead = uint64_t(track.width) * uint64_t(track.height) > 2304u * 1296u ? 4 : 8;
+        const uint64_t limit = std::min<uint64_t>(uint64_t(target) + ahead, track.samples.size() - 1);
+        while (d.next <= limit) {
+            d.feed(d.next, true);
+            ++d.next;
+        }
+    }
+    if (!present()) d.settle(pts, later);
     CVPixelBufferRef buffer = nullptr;
     if (pair) {
         CVPixelBufferRef one = d.peek(pts);
@@ -641,6 +722,7 @@ Frame VideoDecoder::frame(uint32_t index) {
         buffer = d.take(pts);
     }
     if (!buffer) return {};
+    d.kept = d.floor;
     Frame frame;
     frame.native = std::shared_ptr<void>(buffer, [](void* p) { CFRelease(p); });
     frame.width = int(CVPixelBufferGetWidth(buffer));
@@ -653,7 +735,10 @@ Frame VideoDecoder::frame(uint32_t index) {
         frame.chromaWidth = described.chromaWidth;
         frame.chromaHeight = described.chromaHeight;
     }
-    frame.color = d.shape.color;
+    {
+        std::lock_guard<std::mutex> hold(d.lock);
+        frame.color = d.shape.color;
+    }
     frame.color.full = described.color.full;
     if (!frame.color.known) {
         frame.color.primaries = codePoint(buffer, kCVImageBufferColorPrimariesKey, CVColorPrimariesGetIntegerCodePointForString);
@@ -671,7 +756,9 @@ uint64_t VideoDecoder::run(bool async) {
     d.shown = 0;
     for (uint32_t i = 0; i < d.track->samples.size(); ++i) d.feed(i, async);
     d.finishDelayed();
+    if (d.soft) d.soft->drain([&](const Picture& p) { d.store(p); });
     d.next = kNone;
+    d.last = kNone;
     return d.shown;
 }
 

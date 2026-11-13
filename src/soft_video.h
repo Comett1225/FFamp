@@ -14,6 +14,7 @@ struct Picture {
     int bits = 8;
     int shift = 0;
     bool interleaved = false;
+    int64_t stamp = 0;
     Color color;
 };
 
@@ -40,7 +41,8 @@ class SoftDecoder {
 public:
     virtual ~SoftDecoder() = default;
     virtual const char* name() const = 0;
-    virtual bool decode(const uint8_t* data, size_t size, const PictureSink& shown) = 0;
+    virtual bool decode(const uint8_t* data, size_t size, int64_t stamp, const PictureSink& shown) = 0;
+    virtual bool drain(const PictureSink&) { return true; }
     virtual void reset() = 0;
 };
 

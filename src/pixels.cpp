@@ -8,21 +8,20 @@ namespace absent {
 
 namespace {
 
-void rowOf(const Picture& p, int plane, int y, uint16_t* out) {
+template <typename In, typename Out>
+void spread(const In* __restrict in, Out* __restrict out, int count, bool pairs, int shift) {
+    if (pairs) for (int x = 0; x < count; ++x) out[x] = Out(in[2 * x] >> shift);
+    else for (int x = 0; x < count; ++x) out[x] = Out(in[x] >> shift);
+}
+
+template <typename Out>
+void rowOf(const Picture& p, int plane, int y, Out* out) {
     const int count = plane == 0 ? p.width : p.chromaWidth;
     const bool second = plane == 2 && p.interleaved;
     const uint8_t* line = p.plane[second ? 1 : plane] + size_t(y) * p.stride[second ? 1 : plane];
-    const int step = plane != 0 && p.interleaved ? 2 : 1;
-    const int first = second ? 1 : 0;
-    if (p.bits == 8) {
-        for (int x = 0; x < count; ++x) out[x] = line[size_t(first + x * step)];
-    } else {
-        for (int x = 0; x < count; ++x) {
-            uint16_t value;
-            memcpy(&value, line + size_t(first + x * step) * 2, 2);
-            out[x] = uint16_t(value >> p.shift);
-        }
-    }
+    const bool pairs = plane != 0 && p.interleaved;
+    if (p.bits == 8) spread(line + (second ? 1 : 0), out, count, pairs, 0);
+    else spread(reinterpret_cast<const uint16_t*>(line) + (second ? 1 : 0), out, count, pairs, p.shift);
 }
 
 void inParallel(int height, const std::function<void(int, int)>& rows) {
@@ -70,9 +69,18 @@ void pictureToPlanar(const Picture& p, std::vector<uint8_t>& out, bool narrow) {
             if (p.bits == 8 && !(plane != 0 && p.interleaved)) {
                 memcpy(to, p.plane[plane] + size_t(y) * p.stride[plane], size_t(count));
             } else {
+                if (bytes == 2) {
+                    rowOf(p, plane, y, reinterpret_cast<uint16_t*>(to));
+                    to += size_t(count) * bytes;
+                    continue;
+                }
+                if (drop == 0) {
+                    rowOf(p, plane, y, to);
+                    to += size_t(count);
+                    continue;
+                }
                 rowOf(p, plane, y, line.data());
-                if (bytes == 2) memcpy(to, line.data(), size_t(count) * 2);
-                else if (drop == 0) for (int x = 0; x < count; ++x) to[x] = uint8_t(line[size_t(x)]);
+                if (drop == 0) for (int x = 0; x < count; ++x) to[x] = uint8_t(line[size_t(x)]);
                 else for (int x = 0; x < count; ++x) to[x] = uint8_t(std::min((line[size_t(x)] + (1 << (drop - 1))) >> drop, 255));
             }
             to += size_t(count) * bytes;

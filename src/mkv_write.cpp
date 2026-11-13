@@ -276,6 +276,7 @@ bool MkvWriter::finish(std::string* error) {
         if (spec.configType == fourcc("avcC")) codec = "V_MPEG4/ISO/AVC";
         else if (spec.configType == fourcc("hvcC")) codec = "V_MPEGH/ISO/HEVC";
         else if (spec.configType == fourcc("OpHd")) codec = "A_OPUS";
+        else if (spec.configType == fourcc("ASC ")) codec = "A_AAC";
         else if (spec.configType == fourcc("esds")) {
             codec = "A_AAC";
             secret = audioConfig(spec.config);

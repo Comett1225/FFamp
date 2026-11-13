@@ -24,6 +24,12 @@ int probe(const Args& args) {
             printf("track %u other %s samples %zu\n", t.id, fourccText(t.codec).c_str(), t.samples.size());
         }
     }
+    if (!reader->tags().empty()) {
+        std::string line = "tags";
+        for (const auto& [key, value] : reader->tags()) line += " " + key + "=" + value + ";";
+        for (char& c : line) if (c == '\n' || c == '\r') c = ' ';
+        printf("%s\n", line.c_str());
+    }
     return 0;
 }
 

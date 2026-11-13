@@ -64,6 +64,7 @@ inline TrackSpec specOf(const Track& t) {
     int64_t first = t.samples.empty() ? 0 : t.samples.front().pts;
     for (const Sample& s : t.samples) first = std::min(first, s.pts);
     spec.skip = std::max<int64_t>(0, t.mediaStart - first);
+    if (t.kind == Kind::Audio && t.mediaEnd > t.mediaStart) spec.length = t.mediaEnd - t.mediaStart;
     return spec;
 }
 

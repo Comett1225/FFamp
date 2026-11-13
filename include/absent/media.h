@@ -48,6 +48,7 @@ struct Track {
     int bits = 0;
     bool floating = false;
     bool bigEndian = false;
+    uint64_t channelMask = 0;
     bool interlaced = false;
     int64_t mediaEnd = -1;
     std::string language;

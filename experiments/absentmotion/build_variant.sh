@@ -13,7 +13,8 @@ clang++ $DEFINES $FLAGS $INCLUDES -I"$MEDIA/include" -c "$HERE/video_absent.mm" 
 LINE=$(grep -n 'build .*/libamdesktop.dylib: CXX_SHARED_LIBRARY_LINKER' "$TREE/build.ninja" | head -1 | cut -d: -f1)
 OBJECTS=$(sed -n "${LINE}p" "$TREE/build.ninja" | tr ' ' '\n' | grep '\.o$' | grep -v -e '/video\.cpp\.o$' -e 'video_mac\.mm\.o$' | tr '\n' ' ')
 LIBS=$(sed -n "$((LINE + 1)),$((LINE + 8))p" "$TREE/build.ninja" | grep ' LINK_LIBRARIES = ' | sed 's/.*LINK_LIBRARIES = //' | tr ' ' '\n' | grep -v -e '^-lav' -e '^-lsw' -e 'ffmpeg' | tr '\n' ' ')
+EXTRA=$(grep -E '^[A-Z0-9]+_LIBRARY:FILEPATH=/' "$MEDIA/build/CMakeCache.txt" | cut -d= -f2 | tr '\n' ' ')
 cd "$TREE"
 clang++ -arch arm64 -dynamiclib -Wl,-headerpad_max_install_names -o "$OUT/libamdesktop.dylib" -install_name @rpath/libamdesktop.dylib \
-    $OBJECTS "$OUT/video_absent.o" $LIBS "$MEDIA/build/libabsentmedia.a" -framework VideoToolbox -framework CoreMedia -framework AudioToolbox
+    $OBJECTS "$OUT/video_absent.o" $LIBS "$MEDIA/build/libabsentmedia.a" $EXTRA -framework VideoToolbox -framework CoreMedia -framework AudioToolbox -framework AVFoundation -framework ImageIO
 otool -L "$OUT/libamdesktop.dylib" | grep -c -i -e libav -e libsw || true

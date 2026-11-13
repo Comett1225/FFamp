@@ -432,6 +432,15 @@ const char* layoutName(int channels) {
     return channels >= 1 && channels <= 8 ? names[channels] : "";
 }
 
+int64_t whole(double value) {
+    if (!(value == value)) return 0;
+    return value >= 9.2e18 ? INT64_MAX : value <= -9.2e18 ? INT64_MIN : int64_t(std::llround(value));
+}
+
+int64_t floored(double value) {
+    return whole(std::floor(value));
+}
+
 std::string fraction(int64_t top, int64_t bottom) {
     if (top <= 0 || bottom <= 0) return "0/0";
     int64_t common = std::gcd(top, bottom);
@@ -440,7 +449,7 @@ std::string fraction(int64_t top, int64_t bottom) {
     double value = double(top) / double(bottom);
     for (int thousandths = 0; thousandths < 2; ++thousandths) {
         int64_t under = thousandths ? 1001 : 1;
-        int64_t over = int64_t(std::llround(value * double(under) / (thousandths ? 1000.0 : 1.0))) * (thousandths ? 1000 : 1);
+        int64_t over = whole(value * double(under) / (thousandths ? 1000.0 : 1.0)) * (thousandths ? 1000 : 1);
         if (over <= 0) continue;
         if (std::fabs(double(over) / double(under) - value) <= value * 2e-5 && (bottom > under || thousandths == 0)) {
             int64_t shared = std::gcd(over, under);
@@ -582,14 +591,14 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
         j.string("time_base", "1/" + std::to_string(clock));
         if (!t.samples.empty() && t.timescale) {
             if (!wave) {
-                j.number("start_pts", int64_t(std::llround(timing.start * double(clock))));
+                j.number("start_pts", whole(timing.start * double(clock)));
                 j.seconds("start_time", timing.start);
             }
-            j.number("duration_ts", int64_t(std::llround(timing.duration * double(clock))));
+            j.number("duration_ts", whole(timing.duration * double(clock)));
             j.seconds("duration", timing.duration);
-            if (timing.ticks > 0) j.string("bit_rate", std::to_string(int64_t(double(timing.bytes) * 8 * t.timescale / double(timing.ticks))));
+            if (timing.ticks > 0) j.string("bit_rate", std::to_string(floored(double(timing.bytes) * 8 * t.timescale / double(timing.ticks))));
             bool frames = counted && t.codec == fourcc("lpcm") && t.sampleRate > 0;
-            j.string("nb_frames", std::to_string(frames ? int64_t(std::llround(double(timing.ticks) * t.sampleRate / t.timescale)) : int64_t(t.samples.size())));
+            j.string("nb_frames", std::to_string(frames ? whole(double(timing.ticks) * t.sampleRate / t.timescale) : int64_t(t.samples.size())));
             begin = std::min(begin, timing.start);
             finish = std::max(finish, timing.start + timing.duration);
         }
@@ -646,7 +655,7 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
         if (!wave && !adts) j.seconds("start_time", begin);
         j.seconds("duration", finish - begin);
         j.string("size", std::to_string(fileSize));
-        j.string("bit_rate", std::to_string(int64_t(double(fileSize) * 8 / (finish - begin))));
+        j.string("bit_rate", std::to_string(floored(double(fileSize) * 8 / (finish - begin))));
     } else {
         j.string("size", std::to_string(fileSize));
     }

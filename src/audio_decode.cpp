@@ -1,0 +1,288 @@
+#include "absent/audio.h"
+#include "audio_codec.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+namespace absent {
+
+namespace {
+
+struct PcmPackets : PacketDecoder {
+    int bits = 0;
+    bool floating = false;
+    bool bigEndian = false;
+
+    void reset() override {}
+
+    void feed(const std::vector<uint8_t>& packet, std::vector<float>& out) override {
+        const size_t width = size_t(bits / 8);
+        const size_t frame = width * size_t(channels);
+        size_t values = packet.size() / frame * size_t(channels);
+        size_t at = out.size();
+        out.resize(at + values);
+        const uint8_t* p = packet.data();
+        for (size_t i = 0; i < values; ++i, p += width) {
+            uint64_t raw = 0;
+            for (size_t k = 0; k < width; ++k) raw |= uint64_t(p[bigEndian ? width - 1 - k : k]) << (8 * k);
+            float value;
+            if (floating && bits == 32) {
+                uint32_t word = uint32_t(raw);
+                memcpy(&value, &word, 4);
+            } else if (floating) {
+                double wide;
+                memcpy(&wide, &raw, 8);
+                value = float(wide);
+            } else if (bits == 8) {
+                value = float(int(raw) - 128) / 128.0f;
+            } else if (bits == 16) {
+                value = float(int16_t(raw)) / 32768.0f;
+            } else if (bits == 24) {
+                value = float(int32_t(uint32_t(raw) << 8) >> 8) / 8388608.0f;
+            } else {
+                value = float(int32_t(raw)) * (1.0f / 2147483648.0f);
+            }
+            out[at + i] = value;
+        }
+    }
+};
+
+std::unique_ptr<PacketDecoder> openPcm(const Track& track, std::string* error) {
+    bool known = track.floating ? (track.bits == 32 || track.bits == 64) : (track.bits == 8 || track.bits == 16 || track.bits == 24 || track.bits == 32);
+    if (!known) {
+        if (error) *error = "PCM sample format not supported";
+        return nullptr;
+    }
+    auto pcm = std::make_unique<PcmPackets>();
+    pcm->rate = track.sampleRate;
+    pcm->channels = track.channels;
+    pcm->bits = track.bits;
+    pcm->floating = track.floating;
+    pcm->bigEndian = track.bigEndian;
+    pcm->stateless = true;
+    return pcm;
+}
+
+int64_t scaled(int64_t ticks, int64_t rate, int64_t timescale) {
+    const long double limit = 4.0e18L;
+    return int64_t(std::llroundl(std::clamp((long double)ticks * rate / timescale, -limit, limit)));
+}
+
+struct Block {
+    int64_t index = -1;
+    uint64_t used = 0;
+    std::vector<float> pcm;
+};
+
+const int64_t kBlockFrames = 32768;
+const int64_t kRunSeconds = 20;
+const int64_t kHole = 131072;
+const int64_t kSpareSeconds = 3600;
+const int64_t kLongestPacket = 65536;
+const size_t kMostBlockPackets = 1024;
+const size_t kMostHeld = size_t(1) << 24;
+
+}
+
+struct AudioDecoder::Impl {
+    Reader* file = nullptr;
+    const Track* track = nullptr;
+    std::unique_ptr<PacketDecoder> codec;
+    std::vector<int64_t> starts;
+    int64_t first = 0;
+    int64_t last = 0;
+    size_t blockPackets = 1;
+    size_t runPackets = 1;
+    Block cache[8];
+    uint64_t clock = 0;
+    int64_t run = -1;
+    size_t next = 0;
+    int64_t heldFrom = 0;
+    bool ended = false;
+    std::vector<float> held;
+    std::vector<uint8_t> packet;
+
+    size_t count() const { return starts.size() - 1; }
+
+    void place() {
+        const Track& t = *track;
+        const size_t n = t.samples.size();
+        const int64_t rate = codec->rate;
+        const Sample& tail = t.samples.back();
+        const int64_t endTicks = tail.pts + int64_t(tail.duration);
+        starts.resize(n + 1);
+        bool exact = rate % int64_t(t.timescale) == 0;
+        if (exact || !codec->packetFrames) {
+            int64_t grain = !exact && t.codec == fourcc("Opus") ? 120 : 1;
+            for (size_t i = 0; i <= n; ++i) {
+                int64_t at = scaled(i < n ? t.samples[i].pts : endTicks, rate, t.timescale);
+                starts[i] = (at + grain / 2) / grain * grain;
+            }
+        } else {
+            int64_t base = scaled(t.samples[0].pts, rate, t.timescale);
+            for (size_t i = 0; i <= n; ++i) starts[i] = base + int64_t(i) * codec->packetFrames;
+            starts[n] = std::clamp(scaled(endTicks, rate, t.timescale), starts[n - 1], starts[n]);
+        }
+        for (size_t i = 1; i <= n; ++i) starts[i] = std::max(starts[i], starts[i - 1]);
+        int64_t wantedFirst = std::clamp(scaled(t.mediaStart, rate, t.timescale), starts[0], starts[n]);
+        int64_t wantedLast = t.mediaEnd < 0 ? starts[n] : std::clamp(scaled(t.mediaEnd, rate, t.timescale), wantedFirst, starts[n]);
+        const int64_t frameBytes = std::max(1, track->channels * (track->bits / 8));
+        const bool pcm = t.codec == fourcc("lpcm");
+        int64_t closed = 0;
+        int64_t spare = rate * kSpareSeconds;
+        const int64_t longest = codec->longestPacket > 0 ? codec->longestPacket : codec->packetFrames > 0 ? codec->packetFrames : kLongestPacket;
+        int64_t before = starts[0];
+        first = last = -1;
+        for (size_t i = 0; i < n; ++i) {
+            int64_t from = before;
+            int64_t span = starts[i + 1] - from;
+            int64_t real = pcm ? int64_t(t.samples[i].size) / frameBytes : longest;
+            int64_t extra = std::max<int64_t>(0, span - real);
+            int64_t kept = extra > kHole || extra > spare ? std::min(span, real) : span;
+            if (kept == span) spare -= extra;
+            if (first < 0 && wantedFirst < from + span) first = from - closed + std::min(wantedFirst - from, kept);
+            if (last < 0 && wantedLast <= from + span) last = from - closed + std::min(wantedLast - from, kept);
+            closed += span - kept;
+            before = starts[i + 1];
+            starts[i + 1] = before - closed;
+        }
+        if (first < 0) first = starts[n];
+        last = std::max(last, first);
+        int64_t average = std::max<int64_t>(1, (starts[n] - starts[0]) / int64_t(n));
+        blockPackets = size_t(std::clamp<int64_t>((kBlockFrames + average - 1) / average, 1, int64_t(kMostBlockPackets)));
+        int64_t blockFrames = int64_t(blockPackets) * average;
+        runPackets = codec->stateless ? blockPackets : blockPackets * size_t(std::max<int64_t>(1, kRunSeconds * rate / blockFrames));
+    }
+
+    void restart(int64_t group) {
+        size_t from = size_t(group) * runPackets;
+        size_t feedFrom = from - std::min(from, size_t(codec->prerollPackets));
+        while (feedFrom > 0 && starts[from] - starts[feedFrom] < codec->prerollFrames) --feedFrom;
+        codec->reset();
+        run = group;
+        next = feedFrom;
+        heldFrom = starts[feedFrom] - codec->lead;
+        held.clear();
+        ended = false;
+    }
+
+    void forget(int64_t before) {
+        const size_t channels = size_t(codec->channels);
+        int64_t frames = std::min(before - heldFrom, int64_t(held.size() / channels));
+        if (frames <= 0) return;
+        held.erase(held.begin(), held.begin() + long(size_t(frames) * channels));
+        heldFrom += frames;
+    }
+
+    const Block* block(int64_t index) {
+        ++clock;
+        Block* slot = &cache[0];
+        for (Block& b : cache) {
+            if (b.index == index) {
+                b.used = clock;
+                return &b;
+            }
+            if (b.used < slot->used) slot = &b;
+        }
+        const size_t n = count();
+        const size_t channels = size_t(codec->channels);
+        const size_t from = size_t(index) * blockPackets;
+        const size_t to = std::min(n, from + blockPackets);
+        const int64_t group = int64_t(from / runPackets);
+        if (run != group || heldFrom > starts[from]) restart(group);
+        slot->index = -1;
+        while (!ended && heldFrom + int64_t(held.size() / channels) < starts[to] && held.size() < kMostHeld) {
+            if (next >= n) {
+                codec->finish(held);
+                ended = true;
+                break;
+            }
+            packet.resize(track->samples[next].size);
+            if (!packet.empty() && file->read(*track, uint32_t(next), packet.data())) codec->feed(packet, held);
+            ++next;
+            forget(starts[from]);
+        }
+        const int64_t copyFrom = std::max(starts[from], heldFrom);
+        const int64_t copyTo = std::min(starts[to], heldFrom + int64_t(held.size() / channels));
+        slot->pcm.assign(size_t(std::max<int64_t>(0, copyTo - starts[from])) * channels, 0.0f);
+        if (copyTo > copyFrom) {
+            memcpy(slot->pcm.data() + size_t(copyFrom - starts[from]) * channels, held.data() + size_t(copyFrom - heldFrom) * channels,
+                   size_t(copyTo - copyFrom) * channels * sizeof(float));
+        }
+        forget(starts[to]);
+        if (ended) run = -1;
+        slot->index = index;
+        slot->used = clock;
+        return slot;
+    }
+};
+
+AudioDecoder::AudioDecoder() : impl(new Impl) {}
+AudioDecoder::~AudioDecoder() = default;
+
+std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& track, std::string* error) {
+    auto fail = [&](const char* text) {
+        if (error && error->empty()) *error = text;
+        return nullptr;
+    };
+    if (error) error->clear();
+    if (track.kind != Kind::Audio || track.samples.empty() || !track.timescale) return fail("no audio in this track");
+    if (track.samples.size() > (1u << 30)) return fail("too many audio packets");
+    std::unique_ptr<AudioDecoder> decoder(new AudioDecoder);
+    Impl& a = *decoder->impl;
+    a.file = &file;
+    a.track = &track;
+    if (track.codec == fourcc("lpcm")) {
+        if (track.channels < 1 || track.channels > 64 || track.sampleRate < 1) return fail("PCM layout not supported");
+        a.codec = openPcm(track, error);
+    } else if (track.codec == fourcc("Opus")) {
+#ifdef ABSENT_OPUS
+        a.codec = openOpusAudio(track, error);
+#else
+        return fail("Opus needs libopus, which was not found when building");
+#endif
+    } else {
+#ifdef __APPLE__
+        std::vector<uint8_t> packet(track.samples[0].size);
+        if (!file.read(track, 0, packet.data())) return fail("cannot read the first audio packet");
+        a.codec = openSystemAudio(track, packet, error);
+#else
+        return fail("no decoder for this audio codec on this system");
+#endif
+    }
+    if (!a.codec) return fail("audio codec not supported");
+    if (a.codec->rate < 1 || a.codec->rate > 768000 || a.codec->channels < 1 || a.codec->channels > 64) return fail("audio layout not supported");
+    a.place();
+    return decoder;
+}
+
+int AudioDecoder::sampleRate() const { return impl->codec->rate; }
+int AudioDecoder::channels() const { return impl->codec->channels; }
+int64_t AudioDecoder::length() const { return impl->last - impl->first; }
+
+bool AudioDecoder::read(int64_t start, size_t frames, float* out) {
+    Impl& a = *impl;
+    const size_t channels = size_t(a.codec->channels);
+    std::fill(out, out + frames * channels, 0.0f);
+    if (start >= a.last - a.first || start < -(int64_t(1) << 62)) return true;
+    uint64_t skip = start < 0 ? std::min<uint64_t>(frames, uint64_t(-start)) : 0;
+    int64_t at = a.first + start + int64_t(skip);
+    int64_t end = at + int64_t(std::min<uint64_t>(frames - skip, uint64_t(a.last - at)));
+    float* to = out + skip * channels;
+    while (at < end) {
+        size_t packet = size_t(std::upper_bound(a.starts.begin(), a.starts.end(), at) - a.starts.begin()) - 1;
+        if (packet >= a.count()) break;
+        int64_t index = int64_t(packet / a.blockPackets);
+        const Block* block = a.block(index);
+        int64_t blockStart = a.starts[size_t(index) * a.blockPackets];
+        int64_t blockEnd = a.starts[std::min(a.count(), (size_t(index) + 1) * a.blockPackets)];
+        int64_t take = std::min(end, blockStart + int64_t(block->pcm.size() / channels)) - at;
+        if (take > 0) memcpy(to, block->pcm.data() + size_t(at - blockStart) * channels, size_t(take) * channels * sizeof(float));
+        int64_t next = std::min(end, blockEnd);
+        to += size_t(next - at) * channels;
+        at = next;
+    }
+    return true;
+}
+
+}

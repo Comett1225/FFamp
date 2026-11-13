@@ -1,5 +1,6 @@
 #include "absent/media.h"
 #include "bytes.h"
+#include "writers.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -13,7 +14,8 @@ const uint32_t kEbml = 0x1A45DFA3, kSegment = 0x18538067, kSeekHead = 0x114D9B74
 const uint32_t kInfo = 0x1549A966, kTimestampScale = 0x2AD7B1, kDuration = 0x4489, kMuxingApp = 0x4D80, kWritingApp = 0x5741;
 const uint32_t kTracks = 0x1654AE6B, kTrackEntry = 0xAE, kTrackNumber = 0xD7, kTrackUid = 0x73C5, kTrackType = 0x83, kFlagLacing = 0x9C;
 const uint32_t kCodecId = 0x86, kCodecPrivate = 0x63A2, kCodecDelay = 0x56AA, kSeekPreRoll = 0x56BB;
-const uint32_t kVideo = 0xE0, kPixelWidth = 0xB0, kPixelHeight = 0xBA, kAudio = 0xE1, kSamplingFrequency = 0xB5, kChannels = 0x9F;
+const uint32_t kVideo = 0xE0, kPixelWidth = 0xB0, kPixelHeight = 0xBA, kAudio = 0xE1, kSamplingFrequency = 0xB5, kChannels = 0x9F, kBitDepth = 0x6264;
+const uint32_t kColour = 0x55B0, kMatrix = 0x55B1, kRange = 0x55B9, kTransfer = 0x55BA, kPrimaries = 0x55BB;
 const uint32_t kCluster = 0x1F43B675, kTimestamp = 0xE7, kSimpleBlock = 0xA3, kBlockGroup = 0xA0, kBlock = 0xA1, kDiscardPadding = 0x75A2;
 const uint32_t kCues = 0x1C53BB6B, kCuePoint = 0xBB, kCueTime = 0xB3, kCueTrackPositions = 0xB7, kCueTrack = 0xF7, kCueClusterPosition = 0xF1;
 
@@ -76,6 +78,41 @@ void binary(Bytes& b, uint32_t element, const void* data, size_t size) {
 }
 
 void text(Bytes& b, uint32_t element, const char* value) { binary(b, element, value, strlen(value)); }
+
+struct Entry {
+    const char* name = nullptr;
+    std::vector<uint8_t> secret;
+    bool needsSecret = false;
+    bool web = false;
+};
+
+std::vector<uint8_t> audioConfig(const std::vector<uint8_t>& esds);
+
+Entry describe(const TrackSpec& spec) {
+    Entry e;
+    e.secret = spec.config;
+    auto is = [&](const char (&code)[5]) { return spec.codec == fourcc(code); };
+    if (is("avc1")) e = {"V_MPEG4/ISO/AVC", spec.config, true, false};
+    else if (is("hvc1")) e = {"V_MPEGH/ISO/HEVC", spec.config, true, false};
+    else if (is("av01")) e = {"V_AV1", spec.config, true, true};
+    else if (is("vp09")) e = {"V_VP9", {}, false, true};
+    else if (is("vp08")) e = {"V_VP8", {}, false, true};
+    else if (is("mp4a")) e = {"A_AAC", spec.configType == fourcc("esds") ? audioConfig(spec.config) : spec.config, true, false};
+    else if (is("Opus")) e = {"A_OPUS", spec.config, true, true};
+    else if (is("vorb")) e = {"A_VORBIS", spec.config, true, true};
+    else if (is(".mp3")) e = {"A_MPEG/L3", {}, false, false};
+    else if (is("alac")) e = {"A_ALAC", spec.config.size() >= 24 ? std::vector<uint8_t>(spec.config.end() - 24, spec.config.end()) : std::vector<uint8_t>(), true, false};
+    else if (is("fLaC")) {
+        e = {"A_FLAC", {'f', 'L', 'a', 'C', 0x80, 0, 0, uint8_t(spec.config.size())}, true, false};
+        if (spec.config.size() == 34) e.secret.insert(e.secret.end(), spec.config.begin(), spec.config.end());
+        else e.secret.clear();
+    } else if (is("lpcm")) {
+        if (spec.floating) e.name = spec.bigEndian ? nullptr : "A_PCM/FLOAT/IEEE";
+        else e.name = spec.bigEndian && spec.bits > 8 ? "A_PCM/INT/BIG" : "A_PCM/INT/LIT";
+        e.secret.clear();
+    }
+    return e;
+}
 
 std::vector<uint8_t> audioConfig(const std::vector<uint8_t>& esds) {
     View v{esds.data(), esds.size()};
@@ -208,9 +245,15 @@ std::unique_ptr<MkvWriter> MkvWriter::open(const std::string& path, std::string*
 int MkvWriter::add(const TrackSpec& spec) {
     Out out;
     out.spec = spec;
-    out.trims = spec.kind == Kind::Audio && (spec.skip > 0 || spec.length > 0);
+    out.trims = spec.kind == Kind::Audio && (spec.codec == fourcc("mp4a") || spec.codec == fourcc("Opus") || spec.skip > 0 || spec.length > 0);
     impl->tracks.push_back(std::move(out));
     return int(impl->tracks.size()) - 1;
+}
+
+void MkvWriter::trim(int track, int64_t skip, int64_t length) {
+    if (track < 0 || track >= int(impl->tracks.size())) return;
+    impl->tracks[track].spec.skip = skip;
+    impl->tracks[track].spec.length = length;
 }
 
 void MkvWriter::configure(int track, uint32_t type, const std::vector<uint8_t>& config) {
@@ -271,34 +314,37 @@ bool MkvWriter::finish(std::string* error) {
     at = start(tracks, kTracks);
     for (size_t i = 0; i < m.tracks.size(); ++i) {
         const TrackSpec& spec = m.tracks[i].spec;
-        std::vector<uint8_t> secret = spec.config;
-        const char* codec = nullptr;
-        if (spec.configType == fourcc("avcC")) codec = "V_MPEG4/ISO/AVC";
-        else if (spec.configType == fourcc("hvcC")) codec = "V_MPEGH/ISO/HEVC";
-        else if (spec.configType == fourcc("OpHd")) codec = "A_OPUS";
-        else if (spec.configType == fourcc("esds")) {
-            codec = "A_AAC";
-            secret = audioConfig(spec.config);
-        }
-        if (!codec || secret.empty()) return fail("a track cannot be stored in Matroska");
+        const Entry described = describe(spec);
+        const std::vector<uint8_t>& secret = described.secret;
+        const char* codec = described.name;
+        if (!codec || (described.needsSecret && secret.empty())) return fail("a track cannot be stored in Matroska");
+        if (m.webm && !described.web) return fail("WebM holds only VP8, VP9 or AV1 pictures and Opus or Vorbis sound");
         size_t entry = start(tracks, kTrackEntry);
         number(tracks, kTrackNumber, i + 1);
         number(tracks, kTrackUid, i + 1);
         number(tracks, kTrackType, spec.kind == Kind::Video ? 1 : 2);
         number(tracks, kFlagLacing, 0);
         text(tracks, kCodecId, codec);
-        binary(tracks, kCodecPrivate, secret.data(), secret.size());
+        if (!secret.empty()) binary(tracks, kCodecPrivate, secret.data(), secret.size());
         if (spec.kind == Kind::Video) {
             size_t video = start(tracks, kVideo);
             number(tracks, kPixelWidth, uint64_t(spec.width));
             number(tracks, kPixelHeight, uint64_t(spec.height));
+            size_t colour = start(tracks, kColour);
+            number(tracks, kMatrix, uint64_t(spec.color.matrix));
+            number(tracks, kRange, spec.color.full ? 2 : 1);
+            number(tracks, kTransfer, uint64_t(spec.color.transfer));
+            number(tracks, kPrimaries, uint64_t(spec.color.primaries));
+            stop(tracks, colour);
             stop(tracks, video);
         } else {
             if (spec.skip > 0) number(tracks, kCodecDelay, uint64_t(std::llround(double(spec.skip) * 1e9 / spec.timescale)));
-            if (spec.configType == fourcc("OpHd")) number(tracks, kSeekPreRoll, 80000000);
+            if (spec.codec == fourcc("Opus")) number(tracks, kSeekPreRoll, 80000000);
             size_t audio = start(tracks, kAudio);
             real(tracks, kSamplingFrequency, spec.sampleRate);
             number(tracks, kChannels, uint64_t(spec.channels));
+            int depth = spec.codec == fourcc("lpcm") || spec.codec == fourcc("fLaC") ? spec.bits : 0;
+            if (depth > 0) number(tracks, kBitDepth, uint64_t(depth));
             stop(tracks, audio);
         }
         stop(tracks, entry);
@@ -383,6 +429,7 @@ std::unique_ptr<Writer> Writer::open(const std::string& path, std::string* error
         return path.size() > n && path.compare(path.size() - n, n, tail) == 0;
     };
     if (ends(".mkv") || ends(".webm") || ends(".mka")) return MkvWriter::open(path, error);
+    if (ends(".ogg") || ends(".opus") || ends(".oga")) return openOggWriter(path, error);
     return Mp4Writer::open(path, error);
 }
 

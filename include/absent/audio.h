@@ -47,7 +47,7 @@ private:
     std::unique_ptr<Impl> impl;
 };
 
-enum class AudioFormat { Wav16, Wav24, WavFloat, Flac, Aac, Opus, Mp3 };
+enum class AudioFormat { Wav16, Wav24, WavFloat, Flac, Aac, Opus, Mp3, Flac24 };
 
 class AudioFileWriter {
 public:
@@ -55,6 +55,7 @@ public:
     ~AudioFileWriter();
     bool write(const float* pcm, size_t frames);
     bool finish(std::string* error = nullptr);
+    void alwaysRf64();
 
 private:
     AudioFileWriter();

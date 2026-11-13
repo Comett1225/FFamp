@@ -61,6 +61,9 @@ inline TrackSpec specOf(const Track& t) {
     spec.configType = t.configType;
     spec.config = t.config;
     spec.color = t.color;
+    spec.bits = t.bits;
+    spec.floating = t.floating;
+    spec.bigEndian = t.bigEndian;
     int64_t first = t.samples.empty() ? 0 : t.samples.front().pts;
     for (const Sample& s : t.samples) first = std::min(first, s.pts);
     spec.skip = std::max<int64_t>(0, t.mediaStart - first);

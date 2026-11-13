@@ -44,3 +44,17 @@ list; `Sample.offset` is then free for the reader's use.
 - Every count and size read from a file is checked against what is left before it is used; a broken file gives an error, never a crash.
 - Optional libraries are guarded with their ABSENT_* define (see CMakeLists.txt).
 - Commits as `AbsentMotion <noreply@absentmotion.invalid>`, no co-author lines.
+
+## Writers
+
+- `Writer::open` picks the file type by extension: `.mp4`/`.m4v` (ISO MP4), `.mov` (QuickTime), `.m4a` (sound only), `.mkv`/`.mka`,
+  `.webm` (VP8, VP9, AV1, Opus, Vorbis only), `.ogg`/`.opus`/`.oga` (one Opus track). A track the file type cannot hold makes
+  `finish` fail with a message and no file is left behind.
+- `TrackSpec` follows the table above. PCM (`lpcm`) also needs `bits`, `floating`, `bigEndian`; FLAC may give `bits`. `configType`
+  for AAC may be `esds` or `ASC `; VP8/VP9 may have an empty config (MP4 gets a `vpcC` built from the first key frame).
+- `skip` and `length` (track timescale) describe encoder priming and the exact shown length. `Writer::trim(track, skip, length)` sets
+  them late, when the length is only known at the end.
+- PCM packets are whole frames; MP4/MOV store them as one sample per frame, Matroska as one block per packet.
+- Sound-only MP4/MOV/M4A files use the sample rate as the movie timescale so lengths are exact to the sample.
+- `AudioFileWriter` rounds float samples the way FFmpeg does on arm64: truncate `x * 2^31` to 32 bits, then 16-bit =
+  `(v + 0x8000) >> 16` (clamped), 24-bit = `v >> 8`.

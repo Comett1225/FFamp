@@ -2,6 +2,8 @@
 #include "bytes.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
+#include <functional>
 
 namespace absent {
 
@@ -12,12 +14,261 @@ struct Out {
     std::vector<Sample> samples;
     std::vector<uint32_t> chunkSizes;
     std::vector<uint64_t> chunkOffsets;
+    std::vector<uint8_t> opening;
     int64_t start = 0;
     int64_t shown = 0;
     int64_t mediaDuration = 0;
+    uint32_t sourceScale = 0;
+    uint32_t frameBytes = 0;
+    uint64_t frames = 0;
 };
 
-const uint32_t kMovieScale = 1000;
+bool isPcm(const TrackSpec& spec) { return spec.codec == fourcc("lpcm"); }
+
+bool isProRes(uint32_t codec) {
+    return codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco") || codec == fourcc("ap4h") || codec == fourcc("ap4x");
+}
+
+bool needsConfig(uint32_t codec) {
+    return codec == fourcc("avc1") || codec == fourcc("hvc1") || codec == fourcc("av01") || codec == fourcc("mp4v") || codec == fourcc("mp4a") || codec == fourcc("Opus")
+        || codec == fourcc("fLaC") || codec == fourcc("alac");
+}
+
+bool storable(const TrackSpec& spec) {
+    if (isPcm(spec)) return spec.bits == 8 || spec.bits == 16 || spec.bits == 24 || spec.bits == 32 || (spec.floating && spec.bits == 64);
+    return needsConfig(spec.codec) || isProRes(spec.codec) || spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08");
+}
+
+std::vector<uint8_t> elementaryStream(const TrackSpec& spec) {
+    if (spec.configType != fourcc("ASC ")) return spec.config;
+    Bytes b;
+    uint32_t n = uint32_t(std::min<size_t>(spec.config.size(), 64));
+    b.u32(0);
+    b.u8(0x03);
+    b.u8(23 + n);
+    b.u16(0);
+    b.u8(0);
+    b.u8(0x04);
+    b.u8(15 + n);
+    b.u8(0x40);
+    b.u8(0x15);
+    b.u24(0);
+    b.u32(0);
+    b.u32(0);
+    b.u8(0x05);
+    b.u8(n);
+    b.raw(spec.config.data(), n);
+    b.u8(0x06);
+    b.u8(1);
+    b.u8(0x02);
+    return b.d;
+}
+
+std::vector<uint8_t> opusSpecific(const std::vector<uint8_t>& head) {
+    Bytes b;
+    if (head.size() < 19) return b.d;
+    b.u8(0);
+    b.u8(head[9]);
+    b.u16(uint32_t(head[10]) | (uint32_t(head[11]) << 8));
+    b.u32(uint32_t(head[12]) | (uint32_t(head[13]) << 8) | (uint32_t(head[14]) << 16) | (uint32_t(head[15]) << 24));
+    b.u16(uint32_t(head[16]) | (uint32_t(head[17]) << 8));
+    b.raw(head.data() + 18, head.size() - 18);
+    return b.d;
+}
+
+std::vector<uint8_t> vpConfig(const Out& t) {
+    const TrackSpec& spec = t.spec;
+    if (!spec.config.empty()) return spec.config;
+    int profile = 0, depth = 8, chroma = 1;
+    bool full = spec.color.full;
+    if (spec.codec == fourcc("vp09") && t.opening.size() >= 8) {
+        uint64_t bits = 0;
+        for (int i = 0; i < 8; ++i) bits = (bits << 8) | t.opening[size_t(i)];
+        int at = 64;
+        auto take = [&](int n) {
+            at -= n;
+            return int((bits >> at) & ((1u << n) - 1));
+        };
+        bool marked = take(2) == 2;
+        int low = take(1);
+        int version = low | (take(1) << 1);
+        if (version == 3) take(1);
+        bool existing = take(1);
+        bool key = take(1) == 0;
+        take(2);
+        if (marked && !existing && key && take(24) == 0x498342) {
+            profile = version;
+            if (profile >= 2) depth = take(1) ? 12 : 10;
+            bool odd = profile == 1 || profile == 3;
+            if (take(3) != 7) {
+                full = take(1);
+                if (odd) {
+                    int across = take(1), down = take(1);
+                    chroma = across && down ? 1 : across ? 2 : 3;
+                }
+            } else {
+                full = true;
+                if (odd) chroma = 3;
+            }
+        }
+    }
+    static const int areas[] = {36864, 73728, 122880, 245760, 552960, 983040, 2228224, 8912896};
+    static const int levels[] = {10, 11, 20, 21, 30, 31, 41, 51};
+    int level = 62;
+    for (int i = 7; i >= 0; --i) if (spec.width * spec.height <= areas[i]) level = levels[i];
+    Bytes b;
+    b.u32(1 << 24);
+    b.u8(profile);
+    b.u8(spec.codec == fourcc("vp09") ? level : 0);
+    b.u8((depth << 4) | (chroma << 1) | (full ? 1 : 0));
+    b.u8(spec.color.primaries);
+    b.u8(spec.color.transfer);
+    b.u8(spec.color.matrix);
+    b.u16(0);
+    return b.d;
+}
+
+void child(Bytes& b, uint32_t type, const std::vector<uint8_t>& body) {
+    size_t at = b.open(type);
+    b.raw(body.data(), body.size());
+    b.close(at);
+}
+
+void soundStart(Bytes& b, int version, int channels, int bits, int compression, uint32_t rate) {
+    b.u16(version);
+    b.u16(0);
+    b.u32(0);
+    b.u16(channels);
+    b.u16(bits);
+    b.u16(compression);
+    b.u16(0);
+    b.u32(rate <= 0xFFFF ? rate << 16 : 0);
+}
+
+void soundExtension(Bytes& b, uint32_t samplesPerPacket, uint32_t bytesPerSample, int channels) {
+    b.u32(samplesPerPacket);
+    b.u32(bytesPerSample);
+    b.u32(bytesPerSample * uint32_t(channels));
+    b.u32(2);
+}
+
+void soundEntry(Bytes& b, const Out& t, bool quickTime) {
+    const TrackSpec& spec = t.spec;
+    const uint32_t rate = uint32_t(spec.sampleRate);
+    auto open = [&](uint32_t type) {
+        size_t at = b.open(type);
+        b.zero(6);
+        b.u16(1);
+        return at;
+    };
+    auto wave = [&](uint32_t format, const std::function<void()>& inside) {
+        size_t at = b.open(fourcc("wave"));
+        size_t frma = b.open(fourcc("frma"));
+        b.u32(format);
+        b.close(frma);
+        inside();
+        b.u32(8);
+        b.u32(0);
+        b.close(at);
+    };
+    if (isPcm(spec)) {
+        const bool small = spec.channels <= 2;
+        if (!quickTime) {
+            size_t at = open(spec.floating ? fourcc("fpcm") : fourcc("ipcm"));
+            soundStart(b, 0, spec.channels, spec.bits, 0, rate);
+            size_t config = b.open(fourcc("pcmC"), 0, 0);
+            b.u8(spec.bigEndian ? 0 : 1);
+            b.u8(spec.bits);
+            b.close(config);
+            b.close(at);
+        } else if (small && !spec.floating && spec.bits == 16) {
+            size_t at = open(spec.bigEndian ? fourcc("twos") : fourcc("sowt"));
+            soundStart(b, 0, spec.channels, 16, 0, rate);
+            b.close(at);
+        } else if (small && !spec.floating && spec.bits == 24 && rate <= 0xFFFF) {
+            size_t at = open(fourcc("in24"));
+            soundStart(b, 1, spec.channels, 16, 0, rate);
+            soundExtension(b, 1, 3, spec.channels);
+            wave(fourcc("in24"), [&] {
+                size_t enda = b.open(fourcc("enda"));
+                b.u16(spec.bigEndian ? 0 : 1);
+                b.close(enda);
+            });
+            b.close(at);
+        } else {
+            size_t at = open(fourcc("lpcm"));
+            b.u16(2);
+            b.u16(0);
+            b.u32(0);
+            b.u16(3);
+            b.u16(16);
+            b.u16(0xFFFE);
+            b.u16(0);
+            b.u32(0x00010000);
+            b.u32(72);
+            double exact = spec.sampleRate;
+            uint64_t pattern;
+            memcpy(&pattern, &exact, 8);
+            b.u64(pattern);
+            b.u32(uint32_t(spec.channels));
+            b.u32(0x7F000000);
+            b.u32(uint32_t(spec.bits));
+            b.u32((spec.floating ? 1u : spec.bits == 8 ? 0u : 4u) | (spec.bigEndian ? 2u : 0u) | 8u);
+            b.u32(t.frameBytes);
+            b.u32(1);
+            b.close(at);
+        }
+        return;
+    }
+    if (spec.codec == fourcc("mp4a")) {
+        size_t at = open(spec.codec);
+        if (quickTime) {
+            soundStart(b, 1, spec.channels, 16, 0xFFFE, rate);
+            soundExtension(b, 1024, 0, spec.channels);
+            wave(spec.codec, [&] {
+                b.u32(12);
+                b.u32(spec.codec);
+                b.u32(0);
+                child(b, fourcc("esds"), elementaryStream(spec));
+            });
+        } else {
+            soundStart(b, 0, spec.channels, 16, 0, rate);
+            child(b, fourcc("esds"), elementaryStream(spec));
+        }
+        b.close(at);
+    } else if (spec.codec == fourcc("alac")) {
+        std::vector<uint8_t> cookie(4, 0);
+        cookie.insert(cookie.end(), spec.config.end() - 24, spec.config.end());
+        uint32_t frameLength = (uint32_t(cookie[4]) << 24) | (uint32_t(cookie[5]) << 16) | (uint32_t(cookie[6]) << 8) | cookie[7];
+        size_t at = open(spec.codec);
+        if (quickTime) {
+            soundStart(b, 1, spec.channels, 16, 0xFFFE, rate);
+            soundExtension(b, frameLength, 0, spec.channels);
+            wave(spec.codec, [&] { child(b, fourcc("alac"), cookie); });
+        } else {
+            soundStart(b, 0, spec.channels, cookie[9], 0, rate);
+            child(b, fourcc("alac"), cookie);
+        }
+        b.close(at);
+    } else if (spec.codec == fourcc("Opus")) {
+        size_t at = open(spec.codec);
+        soundStart(b, 0, spec.channels, 16, 0, 48000);
+        child(b, fourcc("dOps"), opusSpecific(spec.config));
+        b.close(at);
+    } else {
+        uint32_t shown = rate;
+        while (shown > 0xFFFF) shown /= 2;
+        size_t at = open(spec.codec);
+        soundStart(b, 0, spec.channels, spec.bits ? spec.bits : 16, 0, shown);
+        size_t config = b.open(fourcc("dfLa"), 0, 0);
+        b.u8(0x80);
+        b.u24(uint32_t(spec.config.size()));
+        b.raw(spec.config.data(), spec.config.size());
+        b.close(config);
+        b.close(at);
+    }
+}
+
 const uint32_t kChunkLimit = 64;
 
 void matrix(Bytes& b, int rotation) {
@@ -59,61 +310,69 @@ void prepare(Out& t) {
     t.mediaDuration = tail.dts + tail.duration;
 }
 
-uint64_t scaled(int64_t value, uint32_t from) {
-    return from ? uint64_t((value * kMovieScale + from / 2) / from) : 0;
+uint64_t scaled(int64_t value, uint32_t from, uint32_t to) {
+    return from ? uint64_t((value * to + from / 2) / from) : 0;
 }
 
-void sampleEntry(Bytes& b, const Out& t) {
+void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
     const TrackSpec& spec = t.spec;
+    if (spec.kind != Kind::Video) {
+        soundEntry(b, t, quickTime);
+        return;
+    }
+    const bool proRes = isProRes(spec.codec);
     size_t at = b.open(spec.codec);
     b.zero(6);
     b.u16(1);
-    if (spec.kind == Kind::Video) {
-        b.zero(16);
-        b.u16(spec.width);
-        b.u16(spec.height);
-        b.u32(0x00480000);
-        b.u32(0x00480000);
-        b.u32(0);
-        b.u16(1);
-        b.zero(32);
-        b.u16(0x0018);
-        b.u16(0xFFFF);
-        size_t config = b.open(spec.configType);
-        b.raw(spec.config.data(), spec.config.size());
-        b.close(config);
-        size_t color = b.open(fourcc("colr"));
-        b.u32(fourcc("nclx"));
-        b.u16(spec.color.primaries);
-        b.u16(spec.color.transfer);
-        b.u16(spec.color.matrix);
-        b.u8(spec.color.full ? 0x80 : 0);
-        b.close(color);
-    } else {
-        b.zero(8);
-        b.u16(spec.channels);
-        b.u16(16);
-        b.u32(0);
-        b.u32(uint32_t(spec.sampleRate) << 16);
-        size_t config = b.open(spec.configType);
-        b.raw(spec.config.data(), spec.config.size());
-        b.close(config);
+    b.zero(4);
+    b.u32(proRes ? fourcc("appl") : 0);
+    b.zero(8);
+    b.u16(spec.width);
+    b.u16(spec.height);
+    b.u32(0x00480000);
+    b.u32(0x00480000);
+    b.u32(0);
+    b.u16(1);
+    b.zero(32);
+    b.u16(spec.codec == fourcc("ap4h") || spec.codec == fourcc("ap4x") ? 0x0020 : 0x0018);
+    b.u16(0xFFFF);
+    if (spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08")) child(b, fourcc("vpcC"), vpConfig(t));
+    else if (spec.codec == fourcc("mp4v")) child(b, fourcc("esds"), spec.config);
+    else if (!proRes) child(b, spec.codec == fourcc("avc1") ? fourcc("avcC") : spec.codec == fourcc("hvc1") ? fourcc("hvcC") : fourcc("av1C"), spec.config);
+    if (proRes) {
+        size_t fields = b.open(fourcc("fiel"));
+        b.u8(1);
+        b.u8(0);
+        b.close(fields);
     }
+    size_t color = b.open(fourcc("colr"));
+    b.u32(quickTime ? fourcc("nclc") : fourcc("nclx"));
+    b.u16(spec.color.primaries);
+    b.u16(spec.color.transfer);
+    b.u16(spec.color.matrix);
+    if (!quickTime) b.u8(spec.color.full ? 0x80 : 0);
+    b.close(color);
     b.close(at);
 }
 
-void tables(Bytes& b, const Out& t, uint64_t base, bool wide) {
+void tables(Bytes& b, const Out& t, uint64_t base, bool wide, bool quickTime) {
+    const bool pcm = isPcm(t.spec);
     size_t stbl = b.open(fourcc("stbl"));
     size_t stsd = b.open(fourcc("stsd"), 0, 0);
     b.u32(1);
-    sampleEntry(b, t);
+    sampleEntry(b, t, quickTime);
     b.close(stsd);
 
     size_t stts = b.open(fourcc("stts"), 0, 0);
     size_t count = b.d.size();
     b.u32(0);
     uint32_t runs = 0;
-    for (size_t i = 0; i < t.samples.size();) {
+    if (pcm) {
+        b.u32(uint32_t(t.frames));
+        b.u32(1);
+        ++runs;
+    }
+    for (size_t i = 0; !pcm && i < t.samples.size();) {
         size_t j = i;
         while (j < t.samples.size() && t.samples[j].duration == t.samples[i].duration) ++j;
         b.u32(uint32_t(j - i));
@@ -126,7 +385,7 @@ void tables(Bytes& b, const Out& t, uint64_t base, bool wide) {
     std::copy(patch.d.begin(), patch.d.end(), b.d.begin() + count);
     b.close(stts);
 
-    bool allSync = std::all_of(t.samples.begin(), t.samples.end(), [](const Sample& s) { return s.sync; });
+    bool allSync = pcm || std::all_of(t.samples.begin(), t.samples.end(), [](const Sample& s) { return s.sync; });
     if (!allSync) {
         size_t stss = b.open(fourcc("stss"), 0, 0);
         uint32_t syncs = uint32_t(std::count_if(t.samples.begin(), t.samples.end(), [](const Sample& s) { return s.sync; }));
@@ -135,7 +394,7 @@ void tables(Bytes& b, const Out& t, uint64_t base, bool wide) {
         b.close(stss);
     }
 
-    bool shifted = std::any_of(t.samples.begin(), t.samples.end(), [](const Sample& s) { return s.pts != s.dts; });
+    bool shifted = !pcm && std::any_of(t.samples.begin(), t.samples.end(), [](const Sample& s) { return s.pts != s.dts; });
     if (shifted) {
         size_t ctts = b.open(fourcc("ctts"), 0, 0);
         size_t place = b.d.size();
@@ -173,9 +432,9 @@ void tables(Bytes& b, const Out& t, uint64_t base, bool wide) {
     b.close(stsc);
 
     size_t stsz = b.open(fourcc("stsz"), 0, 0);
-    b.u32(0);
-    b.u32(uint32_t(t.samples.size()));
-    for (const Sample& s : t.samples) b.u32(s.size);
+    b.u32(pcm ? t.frameBytes : 0);
+    b.u32(pcm ? uint32_t(t.frames) : uint32_t(t.samples.size()));
+    for (size_t i = 0; !pcm && i < t.samples.size(); ++i) b.u32(t.samples[i].size);
     b.close(stsz);
 
     size_t offsets = b.open(wide ? fourcc("co64") : fourcc("stco"), 0, 0);
@@ -186,12 +445,13 @@ void tables(Bytes& b, const Out& t, uint64_t base, bool wide) {
     }
     b.close(offsets);
 
-    if (t.spec.kind == Kind::Audio && t.spec.skip > 0) {
+    const bool opus = t.spec.codec == fourcc("Opus");
+    if (opus || (t.spec.codec == fourcc("mp4a") && t.spec.skip > 0)) {
         size_t sgpd = b.open(fourcc("sgpd"), 1, 0);
         b.u32(fourcc("roll"));
         b.u32(2);
         b.u32(1);
-        b.u16(0xFFFF);
+        b.u16(opus ? 0xFFFC : 0xFFFF);
         b.close(sgpd);
         size_t sbgp = b.open(fourcc("sbgp"), 0, 0);
         b.u32(fourcc("roll"));
@@ -203,7 +463,17 @@ void tables(Bytes& b, const Out& t, uint64_t base, bool wide) {
     b.close(stbl);
 }
 
-void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide) {
+void handler(Bytes& b, uint32_t kind, uint32_t type, const char* name, bool quickTime) {
+    size_t hdlr = b.open(fourcc("hdlr"), 0, 0);
+    b.u32(quickTime ? kind : 0);
+    b.u32(type);
+    b.zero(12);
+    if (quickTime) b.u8(uint32_t(strlen(name)));
+    b.raw(name, strlen(name) + (quickTime ? 0 : 1));
+    b.close(hdlr);
+}
+
+void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool quickTime, uint32_t movieScale) {
     const TrackSpec& spec = t.spec;
     bool video = spec.kind == Kind::Video;
     size_t trak = b.open(fourcc("trak"));
@@ -213,7 +483,7 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide) {
     b.u32(0);
     b.u32(id);
     b.u32(0);
-    b.u32(uint32_t(scaled(t.shown, spec.timescale)));
+    b.u32(uint32_t(scaled(t.shown, spec.timescale, movieScale)));
     b.zero(8);
     b.u16(0);
     b.u16(video ? 0 : 1);
@@ -228,7 +498,7 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide) {
         size_t edts = b.open(fourcc("edts"));
         size_t elst = b.open(fourcc("elst"), 0, 0);
         b.u32(1);
-        b.u32(uint32_t(scaled(t.shown, spec.timescale)));
+        b.u32(uint32_t(scaled(t.shown, spec.timescale, movieScale)));
         b.u32(uint32_t(t.start));
         b.u32(0x00010000);
         b.close(elst);
@@ -245,13 +515,7 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide) {
     b.u16(0);
     b.close(mdhd);
 
-    size_t hdlr = b.open(fourcc("hdlr"), 0, 0);
-    b.u32(0);
-    b.u32(video ? fourcc("vide") : fourcc("soun"));
-    b.zero(12);
-    const char* name = video ? "VideoHandler" : "SoundHandler";
-    b.raw(name, 13);
-    b.close(hdlr);
+    handler(b, fourcc("mhlr"), video ? fourcc("vide") : fourcc("soun"), video ? "VideoHandler" : "SoundHandler", quickTime);
 
     size_t minf = b.open(fourcc("minf"));
     if (video) {
@@ -263,6 +527,7 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide) {
         b.zero(4);
         b.close(smhd);
     }
+    if (quickTime) handler(b, fourcc("dhlr"), fourcc("url "), "DataHandler", true);
     size_t dinf = b.open(fourcc("dinf"));
     size_t dref = b.open(fourcc("dref"), 0, 0);
     b.u32(1);
@@ -270,7 +535,7 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide) {
     b.close(url);
     b.close(dref);
     b.close(dinf);
-    tables(b, t, base, wide);
+    tables(b, t, base, wide, quickTime);
     b.close(minf);
     b.close(mdia);
     b.close(trak);
@@ -286,6 +551,7 @@ struct Mp4Writer::Impl {
     std::vector<Out> tracks;
     int last = -1;
     bool failed = false;
+    Mp4Brand brand = Mp4Brand::Mp4;
     ~Impl() {
         if (data) {
             fclose(data);
@@ -296,17 +562,24 @@ struct Mp4Writer::Impl {
     Bytes movie(uint64_t base, bool wide) const {
         Bytes b;
         size_t moov = b.open(fourcc("moov"));
+        uint32_t movieScale = 0;
+        for (const Out& t : tracks) {
+            if (t.samples.empty()) continue;
+            bool sound = t.spec.kind == Kind::Audio && (!movieScale || movieScale == t.spec.timescale);
+            movieScale = sound ? t.spec.timescale : 1000;
+            if (!sound) break;
+        }
         uint64_t duration = 0;
         uint32_t used = 0;
         for (const Out& t : tracks) {
             if (t.samples.empty()) continue;
-            duration = std::max(duration, scaled(t.shown, t.spec.timescale));
+            duration = std::max(duration, scaled(t.shown, t.spec.timescale, movieScale));
             ++used;
         }
         size_t mvhd = b.open(fourcc("mvhd"), 0, 0);
         b.u32(0);
         b.u32(0);
-        b.u32(kMovieScale);
+        b.u32(movieScale);
         b.u32(uint32_t(duration));
         b.u32(0x00010000);
         b.u16(0x0100);
@@ -316,7 +589,7 @@ struct Mp4Writer::Impl {
         b.u32(used + 1);
         b.close(mvhd);
         uint32_t id = 0;
-        for (const Out& t : tracks) if (!t.samples.empty()) track(b, t, ++id, base, wide);
+        for (const Out& t : tracks) if (!t.samples.empty()) track(b, t, ++id, base, wide, brand == Mp4Brand::QuickTime, movieScale);
         b.close(moov);
         return b;
     }
@@ -326,7 +599,13 @@ Mp4Writer::Mp4Writer() : impl(new Impl) {}
 Mp4Writer::~Mp4Writer() = default;
 
 std::unique_ptr<Mp4Writer> Mp4Writer::open(const std::string& path, std::string* error) {
+    auto ends = [&](const char* tail) { return path.size() > 4 && path.compare(path.size() - 4, 4, tail) == 0; };
+    return open(path, ends(".mov") ? Mp4Brand::QuickTime : ends(".m4a") ? Mp4Brand::M4a : Mp4Brand::Mp4, error);
+}
+
+std::unique_ptr<Mp4Writer> Mp4Writer::open(const std::string& path, Mp4Brand brand, std::string* error) {
     std::unique_ptr<Mp4Writer> writer(new Mp4Writer);
+    writer->impl->brand = brand;
     writer->impl->path = path;
     writer->impl->temp = path + ".part";
     writer->impl->data = fopen(writer->impl->temp.c_str(), "wb+");
@@ -340,8 +619,23 @@ std::unique_ptr<Mp4Writer> Mp4Writer::open(const std::string& path, std::string*
 int Mp4Writer::add(const TrackSpec& spec) {
     Out out;
     out.spec = spec;
+    if (isPcm(spec)) {
+        out.frameBytes = uint32_t(std::max(spec.channels, 1) * spec.bits / 8);
+        out.sourceScale = spec.timescale;
+        out.spec.timescale = uint32_t(spec.sampleRate);
+        if (out.sourceScale && out.spec.timescale) {
+            out.spec.skip = spec.skip * out.spec.timescale / out.sourceScale;
+            out.spec.length = spec.length * out.spec.timescale / out.sourceScale;
+        }
+    }
     impl->tracks.push_back(std::move(out));
     return int(impl->tracks.size()) - 1;
+}
+
+void Mp4Writer::trim(int track, int64_t skip, int64_t length) {
+    if (track < 0 || track >= int(impl->tracks.size())) return;
+    impl->tracks[track].spec.skip = skip;
+    impl->tracks[track].spec.length = length;
 }
 
 void Mp4Writer::configure(int track, uint32_t type, const std::vector<uint8_t>& config) {
@@ -357,11 +651,22 @@ bool Mp4Writer::write(int track, const uint8_t* data, size_t size, int64_t pts, 
         return false;
     }
     Out& t = impl->tracks[track];
-    if (impl->last != track || t.chunkSizes.empty() || t.chunkSizes.back() >= kChunkLimit) {
+    const bool pcm = isPcm(t.spec);
+    uint32_t frames = 1;
+    if (pcm) {
+        if (!t.frameBytes || !t.sourceScale || !t.spec.timescale || size % t.frameBytes) return false;
+        frames = uint32_t(size / t.frameBytes);
+        pts = t.samples.empty() ? pts * int64_t(t.spec.timescale) / int64_t(t.sourceScale) : t.samples.back().pts + t.samples.back().duration;
+        dts = pts;
+        duration = frames;
+        t.frames += frames;
+    }
+    if (t.samples.empty()) t.opening.assign(data, data + std::min<size_t>(size, 16));
+    if (impl->last != track || t.chunkSizes.empty() || t.chunkSizes.back() >= (pcm ? std::max<uint32_t>(t.spec.timescale / 2, 1) : kChunkLimit)) {
         t.chunkSizes.push_back(0);
         t.chunkOffsets.push_back(impl->size);
     }
-    ++t.chunkSizes.back();
+    t.chunkSizes.back() += frames;
     Sample s;
     s.offset = impl->size;
     s.size = uint32_t(size);
@@ -385,7 +690,13 @@ bool Mp4Writer::finish(std::string* error) {
     bool h264 = false;
     for (Out& t : impl->tracks) {
         if (t.samples.empty()) continue;
-        if (t.spec.config.empty()) return fail("a track has no codec configuration");
+        if (!storable(t.spec)) return fail("a track cannot be stored in this kind of file");
+        const size_t least = t.spec.codec == fourcc("alac") ? 24 : t.spec.codec == fourcc("Opus") ? 19 : t.spec.codec == fourcc("fLaC") ? 34 : 1;
+        if (needsConfig(t.spec.codec) && t.spec.config.size() < least) return fail("a track has no codec configuration");
+        if (t.spec.codec == fourcc("fLaC") && t.spec.config.size() != 34) return fail("a track has no codec configuration");
+        if (impl->brand == Mp4Brand::M4a && t.spec.kind != Kind::Audio) return fail("an M4A file holds sound only");
+        if (impl->brand == Mp4Brand::QuickTime && (t.spec.codec == fourcc("Opus") || t.spec.codec == fourcc("fLaC") || t.spec.codec == fourcc("vp09") || t.spec.codec == fourcc("vp08")))
+            return fail("QuickTime files cannot hold this codec");
         prepare(t);
         any = true;
         h264 = h264 || t.spec.codec == fourcc("avc1");
@@ -394,12 +705,24 @@ bool Mp4Writer::finish(std::string* error) {
 
     Bytes head;
     size_t ftyp = head.open(fourcc("ftyp"));
-    head.u32(fourcc("isom"));
-    head.u32(0x200);
-    head.u32(fourcc("isom"));
-    head.u32(fourcc("iso2"));
-    if (h264) head.u32(fourcc("avc1"));
-    head.u32(fourcc("mp41"));
+    if (impl->brand == Mp4Brand::QuickTime) {
+        head.u32(fourcc("qt  "));
+        head.u32(0x200);
+        head.u32(fourcc("qt  "));
+    } else if (impl->brand == Mp4Brand::M4a) {
+        head.u32(fourcc("M4A "));
+        head.u32(0);
+        head.u32(fourcc("M4A "));
+        head.u32(fourcc("mp42"));
+        head.u32(fourcc("isom"));
+    } else {
+        head.u32(fourcc("isom"));
+        head.u32(0x200);
+        head.u32(fourcc("isom"));
+        head.u32(fourcc("iso2"));
+        if (h264) head.u32(fourcc("avc1"));
+        head.u32(fourcc("mp41"));
+    }
     head.close(ftyp);
 
     bool wide = impl->size > 0xF0000000ull;

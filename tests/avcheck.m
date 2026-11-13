@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
         CGImageRef image = [generator copyCGImageAtTime:CMTimeMakeWithSeconds(seconds / 2, 600) actualTime:NULL error:&error];
 #pragma clang diagnostic pop
         printf("playable %d duration %.3f video_frames %ld audio_frames %ld still %s\n", playable, seconds, pictures, sound, image ? "ok" : "failed");
-        BOOL ok = playable && pictures > 0 && sound != -2 && sound != -3 && sound != -4 && image;
+        BOOL ok = playable && sound != -2 && sound != -3 && sound != -4 && (pictures == -1 ? sound > 0 : pictures > 0 && image);
         if (image) CGImageRelease(image);
         return ok ? 0 : 1;
     }

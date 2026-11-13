@@ -101,6 +101,9 @@ struct TrackSpec {
     Color color;
     int64_t skip = 0;
     int64_t length = 0;
+    int bits = 0;
+    bool floating = false;
+    bool bigEndian = false;
 };
 
 class Writer {
@@ -111,12 +114,17 @@ public:
     virtual void configure(int track, uint32_t type, const std::vector<uint8_t>& config) = 0;
     virtual bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) = 0;
     virtual bool finish(std::string* error = nullptr) = 0;
+    virtual void trim(int, int64_t, int64_t) {}
 };
+
+enum class Mp4Brand { Mp4, QuickTime, M4a };
 
 class Mp4Writer : public Writer {
 public:
     static std::unique_ptr<Mp4Writer> open(const std::string& path, std::string* error = nullptr);
+    static std::unique_ptr<Mp4Writer> open(const std::string& path, Mp4Brand brand, std::string* error = nullptr);
     ~Mp4Writer() override;
+    void trim(int track, int64_t skip, int64_t length) override;
     int add(const TrackSpec& spec) override;
     void configure(int track, uint32_t type, const std::vector<uint8_t>& config) override;
     bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) override;
@@ -136,6 +144,7 @@ public:
     void configure(int track, uint32_t type, const std::vector<uint8_t>& config) override;
     bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) override;
     bool finish(std::string* error = nullptr) override;
+    void trim(int track, int64_t skip, int64_t length) override;
 
 private:
     MkvWriter();

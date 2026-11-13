@@ -44,3 +44,19 @@ list; `Sample.offset` is then free for the reader's use.
 - Every count and size read from a file is checked against what is left before it is used; a broken file gives an error, never a crash.
 - Optional libraries are guarded with their ABSENT_* define (see CMakeLists.txt).
 - Commits as `AbsentMotion <noreply@absentmotion.invalid>`, no co-author lines.
+
+## Presentation delay and file clocks (`Track.delay`)
+
+- `delay` (track timescale) is the time on the file's own clock at which the tick `mediaStart` is shown. A sample is shown at
+  `pts - mediaStart + delay`. Tracks of one file are kept in sync by their difference in `delay`; a consumer that wants the file to start
+  at zero subtracts the smallest `delay` of all tracks (what the app does with ffprobe's format `start_time`).
+- MP4/MOV: leading empty edits (media_time -1) add up to `delay`. The first media edit sets `mediaStart` and, when it has a duration,
+  `mediaEnd`; edits that continue exactly where the previous one ended are joined to it. Later, separate segments are not played.
+  Samples at or after `mediaEnd` are left out of `order`.
+- MPEG-TS: timescale 90000 for every track. Each track's `dts` starts at 0; `mediaStart` is the pts of its first sample (the first key
+  frame for video) and `delay` is that sample's time on the stream clock (33-bit wrap-around undone). A stream that starts less than a
+  minute before the wrap gets negative times before it, as ffprobe shows it. `Track.id` is the PID.
+- MPEG-TS video keeps parameter sets and SEI inside the samples as well as in `config`; access unit delimiters and filler data are
+  dropped. H.264 samples are marked `sync` on IDR pictures only, HEVC on every IRAP picture. Two fields of one H.264 frame are one sample.
+- MPEG audio layer I uses the codec `.mp1` (layer II `.mp2`, layer III `.mp3`).
+- `Reader::format()` of the transport stream reader is `mpegts`.

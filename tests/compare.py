@@ -14,7 +14,7 @@ FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 
 def size_of(path):
     out = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
-                         capture_output=True, text=True, check=True).stdout.strip().split(",")
+                         capture_output=True, text=True, check=True).stdout.split()[0].split(",")
     return int(out[0]), int(out[1])
 
 
@@ -63,7 +63,7 @@ def seek(path, count, seed):
     width, height = size_of(path)
     frame = width * height * 3 // 2
     frames = int(subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", path],
-                                capture_output=True, text=True, check=True).stdout.strip().strip(","))
+                                capture_output=True, text=True, check=True).stdout.split()[0].strip(","))
     rng = random.Random(seed)
     picks = [rng.randrange(frames) for _ in range(count - 2)] + [0, frames - 1]
     rng.shuffle(picks)

@@ -1,4 +1,5 @@
 #include "cli.h"
+#include "absent/probe.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -9,6 +10,14 @@ namespace cli {
 namespace {
 
 int probe(const Args& args) {
+    if (args.has("json")) {
+        std::string path = !args.plain.empty() ? args.plain[0] : args.get("json") != "1" ? args.get("json") : args.get("packets");
+        std::string error;
+        std::string json = probeJson(path, args.has("packets"), &error);
+        if (json.empty()) return fail(error);
+        fputs(json.c_str(), stdout);
+        return 0;
+    }
     if (args.plain.empty()) return fail("probe needs a file");
     std::string error;
     auto reader = Reader::open(args.plain[0], &error);

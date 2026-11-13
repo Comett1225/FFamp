@@ -268,9 +268,59 @@ opencore-amr and vo-amrwbenc).
 Not possible on a Mac without writing or bundling a codec:
 
 - **WMA / WMV / ASF**: AudioToolbox has no WMA decoder (`AudioFileOpenURL` fails, `afconvert` lists no such format) and AVFoundation
-  answers "Cannot Open". `Reader::open` says `Windows Media files (WMA, WMV, ASF) cannot be opened: this system has no decoder for them`.
+  answers "Cannot Open". `Reader::open` said `Windows Media files (WMA, WMV, ASF) cannot be opened: this system has no decoder for them`
+  until the ASF reader of the Windows Media round.
 - **MPEG-4 Advanced Simple Profile** (most DivX and Xvid files): VideoToolbox and AVFoundation refuse B-frames, quarter-pixel motion
   and custom matrices. The file opens, probes, and its sound decodes; the video decoder fails with its own message.
 
 Not built: MPEG-2 in transport streams and MPEG program streams (.mpg, .vob); neither is on the app's list.
+
+# Windows Media round 1: the ASF reader
+
+`src/asf_read.cpp` opens .wma, .wmv and .asf files: every audio and video stream, its packets, times, key frames and tags (rules in
+`docs/CONVENTIONS.md`). Sources: the expired ASF patent US 6,041,345, the file-analysis description of ASF at
+avifile.sourceforge.net, and what real files show, checked packet by packet against FFmpeg's demuxer. Microsoft's ASF specification
+1.20.03 was not used: its licence allows implementations in object code only, rules out open-source licences and ended on
+1 January 2012. No code of another implementation was read for the reader.
+
+Suite `tests/suites/47_asf.sh`, fixtures in `tests/fixtures/asf` (10 files, 560 KB, made by `make.sh` with FFmpeg; `craft.py` makes
+altered copies at test time). Sample files that may not be committed are tested when `WINMEDIA_SAMPLES` names a folder of them.
+
+| Check | Result |
+|---|---|
+| Every packet of the 10 fixtures and 2 altered copies (stated packet lengths; scrambled sound) against `ffprobe -show_packets -show_data_hash` | bytes, times and key flags all equal; MP3 and PCM, which are cut into their own frames, equal as byte streams with the same start |
+| 29 Microsoft-made and FATE files: WMV7, WMV8, WMV9 Simple, Main and Complex, VC-1 Advanced (also interlaced), WMVA, Microsoft MPEG-4 v3, WMA 1, 2, Pro, Lossless and Voice, up to 6,699 pictures and 1080p | every packet equal; on four cut-off files FFmpeg also passes on the cut part of the last media object (1 or 2 packets more) |
+| Probe fields against ffprobe | codec names, profiles, sizes, pixel and sample formats, rates, channels, time bases, frame counts and tags equal (differences kept on purpose below) |
+| H.264 with B-frames in ASF | frame-exact against FFmpeg's decode; random frames equal the straight decode |
+| MPEG-4 part 2, H.263 and Motion JPEG in ASF (system decoder) | 49, 62 and 68 dB |
+| MP3 and PCM in ASF | 71 to 77 dB; PCM bit-exact |
+| Scrambled sound (audio spread, span 4, made by `craft.py`) | put back bit-exact; FFmpeg's demuxer agrees |
+| Key frames from the index when the payloads carry no key bits | FFmpeg-made files: all found; five Microsoft-made files: 8 of 8, 9 of 9, 16 of 17 and 38 of 40 with none wrong, 281 of 565 with 3 wrong (the index lists one picture a second) |
+| Seeking with `ffmpeg -ss` as judge | FFmpeg always starts on one of our key frames, at or before ours |
+| DRM | a real DRM-protected file (FATE `wmv_drm.wmv`) and two altered fixtures are refused with the DRM message |
+| WMA, WMV and Microsoft MPEG-4 in ASF and AVI | probe names them; the decoders say `this video codec (...) is not decoded yet` |
+| Fuzzing with undefined-behaviour checks, ASF seeds, packets, probe, audio and video targets | over a million runs; one find (below) |
+| Open and probe a 1 GB WMV (24,000 pictures, warm cache) | 0.10 s, 22 MB peak; ffprobe 0.025 s for its header-only answer, 0.18 s to list the packets |
+
+What the tests found:
+
+- FFmpeg writes H.264 into ASF with decode times and its demuxer gives no presentation times, so the display order comes from the
+  picture order counts.
+- FFmpeg's Simple Index gives a packet count that is not the number of packets the key frame spans (Microsoft's is); the entry's time
+  picks the right media object in both.
+- `asf_msmpeg4v2_mp3_asf2divX_fault.asf` (a sample from an FFmpeg bug report): FFmpeg stops after 7 pictures with invalid packet
+  lengths; FFamp reads all 1,035 pictures and 69 s of MP3.
+- Fuzzing: an H.264 parameter set with a huge picture order count length made a shift undefined (now bounded); the input is kept in
+  `tests/fixtures/fuzz/open/`.
+
+Differences from ffprobe kept on purpose: each stream's length is its own (ffprobe gives every stream the file's play duration and
+adds it to the first time), bit rates are counted from the packets (ffprobe takes the stated ones), frame rates of streams without a
+fixed rate (ffprobe 0/0 or 1000/1), language as stored (`en-us`, ffprobe `eng`), and ffprobe starts the H.264 track of an
+FFmpeg-made file at the first sound packet (0.057 s).
+
+Test counts: `47_asf.sh` 79 checks (61 without FFmpeg) and 69 more on the sample files; `QUICK=1 tests/run.sh` 2,276 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh` 1,479 pass, 89 skipped.
+
+Not done: the Windows Media decoders themselves (plan and order in the private notes); Media Object Index and Timecode Index objects;
+payload extension data past the standard 8 replicated bytes; Stream Bitrate Properties; mutual exclusion (every stream of a
+multi-bitrate file is listed); ISO 639-2 language codes.
 

@@ -62,6 +62,8 @@ struct VideoInfo {
     uint32_t ticks = 0;
     uint32_t timeScale = 0;
     int frameNumBits = 4;
+    int orderType = -1;
+    int orderBits = 0;
     bool separatePlanes = false;
     int profileSpace = 0;
     int tier = 0;

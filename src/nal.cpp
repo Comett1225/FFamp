@@ -123,8 +123,9 @@ VideoInfo parseAvcSps(const uint8_t* nal, size_t n) {
     if (frameNumMinus4 > 12) return info;
     info.frameNumBits = int(frameNumMinus4) + 4;
     uint32_t orderType = r.ue();
+    info.orderType = int(orderType);
     if (orderType == 0) {
-        r.ue();
+        info.orderBits = int(r.ue()) + 4;
     } else if (orderType == 1) {
         r.skip(1);
         r.se();

@@ -27,6 +27,8 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | DV | `dvc ` (NTSC), `dvcp` (PAL), `dv5n`, `dv5p`, or the QuickTime fourcc as found | 0 | empty |
 | H.263 | `h263` | 0 | empty |
 | PCM | `lpcm` | 0 | empty; `bits` (8, 16, 24, 32, 64), `floating`, `bigEndian` describe it; 8-bit is unsigned, others signed |
+| Windows Media Video 7, 8, 9, VC-1, Microsoft MPEG-4 v1 to v3 | `WMV1`, `WMV2`, `WMV3`, `WVC1`, `WMVA`, `MPG4`, `MP42`, `MP43` (AVI may give `DIV3`, `DIV4`) | `bmih` | the stream's BITMAPINFOHEADER (40 bytes, little-endian) followed by its codec data (WMV3: the 4-byte sequence header; WVC1: sequence header and entry point) |
+| Windows Media Audio 1, 2, 9 Pro, 9 Lossless, 9 Voice | `wma1`, `wma2`, `wmap`, `wmal`, `wmas` | `wfex` | the stream's WAVEFORMATEX (18 bytes, little-endian; WAVEFORMATEXTENSIBLE when the tag is 0xFFFE) followed by its codec data; one sample is one ASF media object |
 
 ## Timing
 
@@ -106,6 +108,47 @@ list; `Sample.offset` is then free for the reader's use.
 - `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
 - `Mp4Writer` writes version 1 (64-bit) `mvhd`, `tkhd`, `mdhd` and `elst` boxes when a length does not fit in 32 bits.
 
+## ASF: Windows Media files (.wma, .wmv, .asf)
+
+- `Reader::format()` is `asf`; probe's format name is `asf` and every time base is 1/1000.
+- Tracks: every audio and video stream the header describes (Stream Properties objects, also those inside Extended Stream Properties),
+  in header order; `Track.id` is the ASF stream number. Script command, image, file and binary streams are skipped. A stream with no
+  complete media object is kept with no samples.
+- Samples: one per media object, rebuilt from its payloads across packets: error correction data, every length type, a stated packet
+  length, single and multiple payloads, compressed payloads (one replicated byte: several small objects in one payload), padding. A
+  media object whose pieces do not join up, or that the end of the file cuts off, is left out (FFmpeg passes on the part that is
+  there). `Sample.offset` is the place in the stream's own byte sequence, not in the file.
+- Times: milliseconds (`timescale` 1000): presentation time minus the File Properties preroll plus the stream's time offset.
+  `mediaStart` and `delay` are both the earliest time, so a sample is shown at its own `pts`.
+- Video whose times rise in decode order keeps them as pts and dts, except H.264, whose display order comes from the picture order
+  counts (FFmpeg writes decode times into ASF); times that do not rise are presentation times and get a made-up dts no later than pts,
+  as in Matroska. Durations are the gaps in display order; the last one is the Extended Stream Properties frame time.
+- Key frames: the key-frame bit of the payloads. A video stream with no key-frame bit at all takes them from the Index or Simple Index
+  objects (in the indexed packet, the last media object that starts there at or before the entry's time) and H.264 from its IDR
+  pictures; the first picture is always one. Seeking is over all samples, so it works with or without an index.
+- H.264 stored with start codes is turned into 4-byte lengths (access unit delimiters and filler dropped) with an `avcC` built from
+  the parameter sets in the codec data and the stream. MPEG-4 part 2 (`M4S2`, `MP4S` and the AVI fourccs) gets an `esds` from the
+  codec data, or from the headers in front of the first picture.
+- Sound: MP3, MP2, AC-3 and PCM are read as one byte stream and cut into their own frames (PCM in 4096-frame packets) with the sample
+  rate as `timescale`, as in AVI; the first frame starts at the first media object's time. Every other sound codec keeps one sample per
+  media object, `sync` on all of them, duration = the gap to the next.
+- Audio spread error correction is undone while the pieces are listed: in each whole group of span x virtual packet length bytes of
+  a media object, chunk `k` of the output is stored chunk `(k mod n) x span + k / n`, `n` = virtual packet length / chunk length.
+  Bytes after the last whole group stay as stored.
+- DRM: a Content Encryption, Extended Content Encryption or Advanced Content Encryption object, or a stream marked encrypted, makes
+  `Reader::open` fail with `this Windows Media file is protected by DRM (digital rights management) and cannot be played`.
+- Tags: Content Description (`title`, `artist`, `copyright`, `comment`, `rating`), Extended Content Description (`WM/AlbumTitle` album,
+  `WM/Year` date, `WM/Genre` genre, `WM/TrackNumber` track, `WM/AlbumArtist` album_artist, `WM/EncodingSettings` encoder, others
+  under their own names; text, numbers and booleans, not byte values), `creation_time` from File Properties. `Track.language` is the
+  Language List entry as stored (RFC 1766, `en-us`); ffprobe shows ISO 639-2 (`eng`).
+- `statedSeconds()` is the play duration minus the preroll, except for broadcast files and files whose data object runs past the end.
+- Probe names `wmav1`, `wmav2`, `wmapro`, `wmalossless`, `wmavoice`, `wmv1`, `wmv2`, `wmv3`, `vc1`, `msmpeg4v1`, `msmpeg4v2`,
+  `msmpeg4v3`, from ASF and AVI. Until their codec rounds land, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio
+  2) is not decoded yet` and `VideoDecoder::open` with `this video codec (Windows Media Video 9) is not decoded yet` (each with its own
+  name).
+- H.263 and Motion JPEG in ASF get their FFamp codes (`h263`, `jpeg`) and decode. Other sound tags keep a track named by the tag in
+  hex (`0130`), other video fourccs a track named by the fourcc.
+
 ## AVI, CAF, AC-3, AMR and older video (formats round)
 
 - `Reader::format()` is `avi`, `caf`, `amr`, `ac3` or `eac3` for the new readers.
@@ -123,7 +166,7 @@ list; `Sample.offset` is then free for the reader's use.
   matrices is read and probed but `VideoDecoder::open` fails with a message that says so.
 - JPEG pictures that are not 4:2:0 are refused by VideoToolbox; they are decoded through ImageIO and come out as 8-bit 4:4:4 BT.709
   limited-range frames (backend `imageio`).
-- Windows Media (ASF: WMA, WMV) is recognised and refused with its own message; nothing on a Mac decodes it.
+- Windows Media files open through the ASF reader (next section).
 - Alpha: `Track.alpha` is set for VP8 and VP9 in Matroska/WebM whose blocks carry an alpha picture (BlockAdditional 1);
   `Reader::readAlpha` gives that picture's packet. `VideoDecoder` decodes both with libvpx and, for ProRes 4444 with an alpha channel,
   asks VideoToolbox for it. The frame's pixel buffer stays the usual two-plane YCbCr buffer; the 8-bit alpha plane rides on it as the

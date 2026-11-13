@@ -100,5 +100,6 @@ bool splitXiph(const std::vector<uint8_t>& laced, std::vector<View>& packets);
 void vorbisComments(const uint8_t* p, size_t n, Tags& tags);
 uint64_t id3v2(Source& source, uint64_t at, Tags& tags);
 void id3v1(Source& source, Tags& tags);
+std::string utf16Text(const uint8_t* p, size_t n);
 
 }

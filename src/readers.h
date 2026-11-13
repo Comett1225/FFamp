@@ -11,6 +11,8 @@ std::unique_ptr<Reader> openTransportStream(const std::string& path, std::string
 std::unique_ptr<Reader> openIvf(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openAvi(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error);
+std::unique_ptr<Reader> openAsf(const std::string& path, std::string* error);
+const char* windowsMediaName(uint32_t codec);
 
 struct DolbyFrame {
     uint32_t codec = 0;

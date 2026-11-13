@@ -426,6 +426,17 @@ Look lookOf(Reader& reader, const Track& t) {
     } else if (c == fourcc("ac-3") || c == fourcc("ec-3")) {
         look.codec = c == fourcc("ac-3") ? "ac3" : "eac3";
         look.sampleFormat = "fltp";
+    } else if (c == fourcc("wma1") || c == fourcc("wma2") || c == fourcc("wmap") || c == fourcc("wmal") || c == fourcc("wmas")) {
+        look.codec = c == fourcc("wma1") ? "wmav1" : c == fourcc("wma2") ? "wmav2" : c == fourcc("wmap") ? "wmapro" : c == fourcc("wmal") ? "wmalossless" : "wmavoice";
+        look.sampleFormat = c == fourcc("wmas") ? "flt" : c != fourcc("wmal") ? "fltp" : t.bits > 16 ? "s32p" : "s16p";
+    } else if (c == fourcc("WMV1") || c == fourcc("WMV2") || c == fourcc("WMV3") || c == fourcc("WVC1") || c == fourcc("WMVA")) {
+        look.codec = c == fourcc("WMV1") ? "wmv1" : c == fourcc("WMV2") ? "wmv2" : c == fourcc("WMV3") ? "wmv3" : "vc1";
+        look.pixels = "yuv420p";
+        if (c == fourcc("WMV3") && t.config.size() >= 41) look.profile = (t.config[40] >> 6) == 0 ? "Simple" : (t.config[40] >> 6) == 1 ? "Main" : "Complex";
+        if (c != fourcc("WMV3") && c != fourcc("WMV1") && c != fourcc("WMV2")) look.profile = "Advanced";
+    } else if (c == fourcc("MPG4") || c == fourcc("MP42") || c == fourcc("MP43") || c == fourcc("DIV3") || c == fourcc("DIV4")) {
+        look.codec = c == fourcc("MPG4") ? "msmpeg4v1" : c == fourcc("MP42") ? "msmpeg4v2" : "msmpeg4v3";
+        look.pixels = "yuv420p";
     } else if (c == fourcc("lpcm")) {
         int bits = t.bits ? t.bits : 16;
         std::string order = bits == 8 ? "" : t.bigEndian ? "be" : "le";
@@ -561,7 +572,7 @@ const char* formatName(const std::string& name) {
         {"matroska", "matroska,webm"}, {"mkv", "matroska,webm"}, {"webm", "matroska,webm"},
         {"ogg", "ogg"}, {"opus", "ogg"}, {"wav", "wav"}, {"wave", "wav"}, {"aiff", "aiff"}, {"aifc", "aiff"},
         {"mp3", "mp3"}, {"mp2", "mp3"}, {"mp1", "mp3"}, {"flac", "flac"}, {"aac", "aac"}, {"adts", "aac"}, {"mpegts", "mpegts"}, {"ts", "mpegts"}, {"m2ts", "mpegts"},
-        {"avi", "avi"}, {"caf", "caf"}, {"amr", "amr"}, {"ac3", "ac3"}, {"eac3", "eac3"},
+        {"avi", "avi"}, {"caf", "caf"}, {"asf", "asf"}, {"amr", "amr"}, {"ac3", "ac3"}, {"eac3", "eac3"},
     };
     for (auto& entry : names) if (name == entry.first) return entry.second;
     return nullptr;
@@ -577,7 +588,7 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
     const std::vector<Track>& tracks = reader->tracks();
     const char* name = formatName(reader->format());
     const std::string family = name ? name : reader->format();
-    const bool matroska = family == "matroska,webm", mpegAudio = family == "mp3", adts = family == "aac", wave = family == "wav", ogg = family == "ogg";
+    const bool matroska = family == "matroska,webm", windowsMedia = family == "asf", mpegAudio = family == "mp3", adts = family == "aac", wave = family == "wav", ogg = family == "ogg";
     const bool counted = family == "aiff" || family == "mov,mp4,m4a,3gp,3g2,mj2";
     Json j;
     j.open('{');
@@ -588,7 +599,7 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
         const Track& t = tracks[index];
         Look look = lookOf(*reader, t);
         Timing timing = timingOf(t);
-        int64_t clock = matroska ? 1000 : mpegAudio ? 14112000 : adts ? 28224000 : t.timescale;
+        int64_t clock = matroska || windowsMedia ? 1000 : mpegAudio ? 14112000 : adts ? 28224000 : t.timescale;
         if (t.timescale && !t.samples.empty()) {
             if (mpegAudio && t.mediaStart > 0) timing.start += double(t.mediaStart) / t.timescale;
             if (ogg && t.codec == fourcc("Opus") && t.mediaStart > 0) timing.duration += double(t.mediaStart) / t.timescale;

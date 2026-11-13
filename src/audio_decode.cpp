@@ -1,5 +1,6 @@
 #include "absent/audio.h"
 #include "audio_codec.h"
+#include "readers.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -253,6 +254,10 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
     Impl& a = *decoder->impl;
     a.file = &file;
     a.track = &track;
+    if (const char* name = windowsMediaName(track.codec)) {
+        if (error) *error = std::string("this sound codec (") + name + ") is not decoded yet";
+        return nullptr;
+    }
     if (track.codec == fourcc("lpcm")) {
         if (track.channels < 1 || track.channels > 64 || track.sampleRate < 1) return fail("PCM layout not supported");
         a.codec = openPcm(track, error);

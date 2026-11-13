@@ -167,6 +167,8 @@ uint64_t Source::find(uint64_t from, uint64_t end, const uint8_t* pattern, size_
     return end;
 }
 
+std::string utf16Text(const uint8_t* p, size_t n) { return wide(p, n, false); }
+
 bool FileReader::read(const Track& track, uint32_t index, uint8_t* out) {
     if (index >= track.samples.size()) return false;
     return source.read(track.samples[index].offset, out, track.samples[index].size);

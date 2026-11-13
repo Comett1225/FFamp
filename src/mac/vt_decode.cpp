@@ -1,4 +1,5 @@
 #include "absent/media.h"
+#include "readers.h"
 #include "soft_video.h"
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>
@@ -703,6 +704,10 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         return nullptr;
     };
     if (track.samples.empty() || !track.timescale || track.timescale > uint32_t(INT32_MAX) || track.width <= 0 || track.height <= 0) return fail("track is empty");
+    if (const char* name = windowsMediaName(track.codec)) {
+        if (error) *error = std::string("this video codec (") + name + ") is not decoded yet";
+        return nullptr;
+    }
     const uint32_t codec = track.codec;
     const bool vp9 = codec == fourcc("vp09"), vp8 = codec == fourcc("vp08"), av1 = codec == fourcc("av01");
     const bool prores = codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco") || codec == fourcc("ap4h") || codec == fourcc("ap4x");

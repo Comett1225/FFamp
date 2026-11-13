@@ -54,10 +54,7 @@ std::unique_ptr<Reader> Reader::open(const std::string& path, std::string* error
     fclose(file);
     if (n >= 4 && memcmp(head, "DKIF", 4) == 0) return openIvf(path, error);
     static const uint8_t windowsMedia[16] = {0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C};
-    if (n >= 16 && memcmp(head, windowsMedia, 16) == 0) {
-        if (error) *error = "Windows Media files (WMA, WMV, ASF) cannot be opened: this system has no decoder for them";
-        return nullptr;
-    }
+    if (n >= 16 && memcmp(head, windowsMedia, 16) == 0) return openAsf(path, error);
     switch (sniff(head, n)) {
         case Sniffed::Mp4: return Mp4Reader::open(path, error);
         case Sniffed::Matroska: return openMatroska(path, error);

@@ -56,7 +56,7 @@ public:
     virtual std::vector<uint8_t> config() const = 0;
 };
 
-std::unique_ptr<SoftDecoder> openDav1d(std::string* error);
+std::unique_ptr<SoftDecoder> openDav1d(int delay, std::string* error);
 std::unique_ptr<SoftDecoder> openVpxDecoder(bool vp8, std::string* error);
 std::unique_ptr<SoftEncoder> openSvtAv1(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftEncoder> openVpxEncoder(const EncodeSpec& spec, std::string* error);
@@ -68,7 +68,10 @@ bool h264Layout(const std::vector<uint8_t>& config, H264Layout& layout);
 int h264FieldOf(const H264Layout& layout, const uint8_t* sample, size_t size, uint32_t& frameNumber);
 bool shapeFromConfig(uint32_t configType, const std::vector<uint8_t>& config, StreamShape& shape);
 
-bool pictureToBGRA(const Picture& picture, uint8_t* out, size_t stride);
+bool pictureToBGRA(const Picture& picture, uint8_t* out, size_t stride, bool redFirst = false);
+void rowsToBGRA(const Picture& picture, uint8_t* out, size_t stride, bool redFirst, int from, int to);
+void pictureRow(const Picture& picture, int plane, int y, float* out);
+void inParallel(int rows, const std::function<void(int, int)>& work);
 void pictureToPlanar(const Picture& picture, std::vector<uint8_t>& out, bool narrow = false);
 void pictureToI420(const Picture& picture, std::vector<uint8_t>& out);
 bool withPixelBuffer(void* pixelBuffer, const std::function<bool(const Picture&)>& use);

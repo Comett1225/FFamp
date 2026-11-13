@@ -251,6 +251,7 @@ struct VideoDecoder::Impl {
     std::atomic<uint64_t> shown{0};
     std::atomic<int64_t> floor{0};
     bool keep = true;
+    uint32_t ahead = 8;
     uint32_t next = kNone;
     uint32_t last = kNone;
     int64_t kept = INT64_MIN;
@@ -584,6 +585,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     d.track = &track;
     d.shape.width = track.width;
     d.shape.height = track.height;
+    if (uint64_t(track.width) * uint64_t(track.height) > 2304u * 1296u) d.ahead = 4;
 
     std::vector<uint8_t> config = track.config;
     if (prores) {
@@ -623,8 +625,9 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (h264 || hevc || !track.color.known) d.shape.color.full = fromStream.full;
 
     auto softly = [&]() -> std::unique_ptr<VideoDecoder> {
-        d.soft = av1 ? openDav1d(error) : openVpxDecoder(vp8, error);
+        d.soft = av1 ? openDav1d(int(d.ahead), error) : openVpxDecoder(vp8, error);
         if (!d.soft) return nullptr;
+        if (av1) d.ahead += d.ahead / 2;
         d.backend = d.soft->name();
         return std::move(decoder);
     };
@@ -702,8 +705,7 @@ Frame VideoDecoder::frame(uint32_t index) {
         }
     }
     if (following && d.next != kNone) {
-        const uint64_t ahead = uint64_t(track.width) * uint64_t(track.height) > 2304u * 1296u ? 4 : 8;
-        const uint64_t limit = std::min<uint64_t>(uint64_t(target) + ahead, track.samples.size() - 1);
+        const uint64_t limit = std::min<uint64_t>(uint64_t(target) + d.ahead, track.samples.size() - 1);
         while (d.next <= limit) {
             d.feed(d.next, true);
             ++d.next;

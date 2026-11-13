@@ -110,9 +110,10 @@ struct Dav1dDecoder : SoftDecoder {
 
 }
 
-std::unique_ptr<SoftDecoder> openDav1d(std::string* error) {
+std::unique_ptr<SoftDecoder> openDav1d(int delay, std::string* error) {
     Dav1dSettings settings;
     dav1d_default_settings(&settings);
+    settings.max_frame_delay = delay;
     settings.frame_size_limit = 8192u * 8192u;
     settings.logger.callback = quiet;
     std::unique_ptr<Dav1dDecoder> decoder(new Dav1dDecoder);
@@ -128,7 +129,7 @@ std::unique_ptr<SoftDecoder> openDav1d(std::string* error) {
 
 namespace absent {
 
-std::unique_ptr<SoftDecoder> openDav1d(std::string* error) {
+std::unique_ptr<SoftDecoder> openDav1d(int, std::string* error) {
     if (error) *error = "built without an AV1 software decoder";
     return nullptr;
 }

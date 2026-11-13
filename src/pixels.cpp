@@ -1,7 +1,10 @@
 #include "soft_video.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 namespace absent {
@@ -24,16 +27,91 @@ void rowOf(const Picture& p, int plane, int y, Out* out) {
     else spread(reinterpret_cast<const uint16_t*>(line) + (second ? 1 : 0), out, count, pairs, p.shift);
 }
 
-void inParallel(int height, const std::function<void(int, int)>& rows) {
-    const int workers = std::clamp(int(std::thread::hardware_concurrency()), 1, 8);
-    if (workers == 1 || height < 64) {
-        rows(0, height);
-        return;
+struct Crew {
+    const int hands = std::clamp(int(std::thread::hardware_concurrency()), 1, 16);
+    int parts = 1;
+    std::mutex turn, lock;
+    std::condition_variable wake, done;
+    const std::function<void(int, int)>* work = nullptr;
+    int rows = 0;
+    int left = 0;
+    uint64_t round = 0;
+    std::atomic<int> next{1 << 30};
+
+    Crew() {
+        for (int k = 1; k < hands; ++k) {
+            std::thread([this] {
+                uint64_t seen = 0;
+                for (;;) {
+                    {
+                        std::unique_lock<std::mutex> hold(lock);
+                        wake.wait(hold, [&] { return round != seen; });
+                        seen = round;
+                    }
+                    help();
+                }
+            }).detach();
+        }
     }
-    std::vector<std::thread> pool;
-    for (int k = 1; k < workers; ++k) pool.emplace_back(rows, height * k / workers, height * (k + 1) / workers);
-    rows(0, height / workers);
-    for (std::thread& worker : pool) worker.join();
+
+    void help() {
+        for (;;) {
+            const int part = next.fetch_add(1);
+            if (part >= parts) return;
+            (*work)(int(int64_t(rows) * part / parts), int(int64_t(rows) * (part + 1) / parts));
+            std::lock_guard<std::mutex> hold(lock);
+            if (--left == 0) done.notify_all();
+        }
+    }
+
+    void run(int count, const std::function<void(int, int)>& job) {
+        std::lock_guard<std::mutex> mine(turn);
+        {
+            std::lock_guard<std::mutex> hold(lock);
+            work = &job;
+            rows = count;
+            parts = std::min(hands * 4, count / 16);
+            left = parts;
+            ++round;
+            next = 0;
+        }
+        wake.notify_all();
+        help();
+        std::unique_lock<std::mutex> hold(lock);
+        done.wait(hold, [&] { return left == 0; });
+        next = 1 << 30;
+    }
+};
+
+template <int R, int B>
+void sdrRow(const float* __restrict l, const float* __restrict cbs, const float* __restrict crs, uint8_t* __restrict row, int width, float kr, float kb, float kg) {
+    const float toRed = 2 * (1 - kr), toBlue = 2 * (1 - kb);
+    for (int x = 0; x < width; ++x) {
+        float r = l[x] + toRed * crs[x], bl = l[x] + toBlue * cbs[x];
+        float g = (l[x] - kr * r - kb * bl) / kg;
+        r = std::min(std::max(r, 0.0f), 1.0f);
+        g = std::min(std::max(g, 0.0f), 1.0f);
+        bl = std::min(std::max(bl, 0.0f), 1.0f);
+        row[4 * x + B] = uint8_t(bl * 255 + 0.5f);
+        row[4 * x + 1] = uint8_t(g * 255 + 0.5f);
+        row[4 * x + R] = uint8_t(r * 255 + 0.5f);
+        row[4 * x + 3] = 255;
+    }
+}
+
+void widen(const float* __restrict u, float* __restrict out, int count) {
+    for (int c = 0; c < count; ++c) {
+        out[2 * c] = 0.75f * u[c] + 0.25f * u[c - 1];
+        out[2 * c + 1] = 0.75f * u[c] + 0.25f * u[c + 1];
+    }
+}
+
+void mix(const uint16_t* __restrict a, const uint16_t* __restrict b, float* __restrict out, int count, float nearWeight, float base, float scale) {
+    for (int x = 0; x < count; ++x) out[x] = ((float(a[x]) * nearWeight + float(b[x]) * (1 - nearWeight)) - base) * scale;
+}
+
+void level(const uint16_t* __restrict in, float* __restrict out, int count, float base, float scale) {
+    for (int x = 0; x < count; ++x) out[x] = (float(in[x]) - base) * scale;
 }
 
 struct Levels {
@@ -54,6 +132,12 @@ float softKnee(float m) {
     return m <= k ? m : k + (1 - k) * (m - k) / ((m - k) + (1 - k));
 }
 
+}
+
+void inParallel(int rows, const std::function<void(int, int)>& work) {
+    static Crew& crew = *new Crew;
+    if (crew.hands == 1 || rows < 64) work(0, rows);
+    else crew.run(rows, work);
 }
 
 void pictureToPlanar(const Picture& p, std::vector<uint8_t>& out, bool narrow) {
@@ -114,8 +198,11 @@ void pictureToI420(const Picture& p, std::vector<uint8_t>& out) {
     }
 }
 
-bool pictureToBGRA(const Picture& p, uint8_t* out, size_t stride) {
-    if (p.width <= 0 || p.height <= 0 || p.chromaWidth <= 0 || p.chromaHeight <= 0 || p.bits < 8 || p.bits > 16) return false;
+void pictureRow(const Picture& p, int plane, int y, float* out) {
+    rowOf(p, plane, y, out);
+}
+
+void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, int from, int to) {
     static const Levels levels;
     const bool hlg = p.color.transfer == 18, hdr = hlg || p.color.transfer == 16;
     int matrix = p.color.known ? p.color.matrix : 2;
@@ -129,69 +216,98 @@ bool pictureToBGRA(const Picture& p, uint8_t* out, size_t stride) {
     const bool halfRows = p.chromaHeight < p.height, halfColumns = p.chromaWidth < p.width;
     const std::vector<float>& linear = hlg ? levels.hlg : levels.pq;
 
-    inParallel(p.height, [&](int from, int to) {
-        const size_t cw = size_t(p.chromaWidth);
-        std::vector<uint16_t> luma(size_t(p.width)), a(cw), b(cw);
-        std::vector<float> u(cw + 1), v(cw + 1);
-        for (int y = from; y < to; ++y) {
-            rowOf(p, 0, y, luma.data());
-            int near = y, far = y;
-            float nearWeight = 1;
-            if (halfRows) {
-                near = y / 2;
-                far = std::clamp(y % 2 ? near + 1 : near - 1, 0, p.chromaHeight - 1);
-                nearWeight = 0.75f;
-            }
-            near = std::min(near, p.chromaHeight - 1);
-            for (int plane = 1; plane <= 2; ++plane) {
-                std::vector<float>& mixed = plane == 1 ? u : v;
-                rowOf(p, plane, near, a.data());
-                rowOf(p, plane, far, b.data());
-                for (size_t x = 0; x < cw; ++x) mixed[x] = ((float(a[x]) * nearWeight + float(b[x]) * (1 - nearWeight)) - chromaBase) * chromaScale;
-                mixed[cw] = mixed[cw - 1];
-            }
-            uint8_t* row = out + size_t(y) * stride;
-            for (int x = 0; x < p.width; ++x, row += 4) {
-                float cb, cr;
-                if (halfColumns) {
-                    const size_t c = std::min(size_t(x / 2), cw - 1);
-                    const size_t beside = x % 2 ? c + 1 : (c > 0 ? c - 1 : 0);
-                    cb = 0.75f * u[c] + 0.25f * u[beside];
-                    cr = 0.75f * v[c] + 0.25f * v[beside];
-                } else {
-                    cb = u[size_t(x)];
-                    cr = v[size_t(x)];
-                }
-                const float l = (float(luma[size_t(x)]) - lumaBase) * lumaScale;
-                float r = l + 2 * (1 - kr) * cr, bl = l + 2 * (1 - kb) * cb;
-                float g = (l - kr * r - kb * bl) / kg;
-                r = std::clamp(r, 0.0f, 1.0f);
-                g = std::clamp(g, 0.0f, 1.0f);
-                bl = std::clamp(bl, 0.0f, 1.0f);
-                if (!hdr) {
-                    row[0] = uint8_t(bl * 255 + 0.5f);
-                    row[1] = uint8_t(g * 255 + 0.5f);
-                    row[2] = uint8_t(r * 255 + 0.5f);
-                    row[3] = 255;
-                    continue;
-                }
-                r = linear[size_t(r * 65535 + 0.5f) >> 4];
-                g = linear[size_t(g * 65535 + 0.5f) >> 4];
-                bl = linear[size_t(bl * 65535 + 0.5f) >> 4];
-                if (hlg) {
-                    const float gain = 4.926f * std::pow(std::max(0.2627f * r + 0.678f * g + 0.0593f * bl, 1e-6f), 0.2f);
-                    r *= gain;
-                    g *= gain;
-                    bl *= gain;
-                }
-                const float c[3] = {-0.0182f * r - 0.1006f * g + 1.1187f * bl, -0.1246f * r + 1.1329f * g - 0.0083f * bl, 1.6605f * r - 0.5876f * g - 0.0728f * bl};
-                const float peak = std::max({c[0], c[1], c[2], 1e-6f});
-                const float scale = softKnee(peak) / peak;
-                for (int k = 0; k < 3; ++k) row[k] = uint8_t(levels.encode[size_t(std::clamp(c[k] * scale, 0.0f, 1.0f) * 4095.0f + 0.5f)]);
-                row[3] = 255;
-            }
+
+    const size_t cw = size_t(p.chromaWidth);
+    std::vector<uint16_t> luma(size_t(p.width)), a(cw), b(cw);
+    std::vector<float> u(cw + 1), v(cw + 1);
+    const bool quick = !hdr && (!halfColumns || cw * 2 >= size_t(p.width));
+    std::vector<float> lumaLevel, padded[2], wide[2];
+    if (quick) {
+        lumaLevel.resize(size_t(p.width));
+        for (auto& line : padded) line.resize(cw + 2);
+        if (halfColumns) for (auto& line : wide) line.resize(cw * 2);
+    }
+    for (int y = from; y < to; ++y) {
+        rowOf(p, 0, y, luma.data());
+        int near = y, far = y;
+        float nearWeight = 1;
+        if (halfRows) {
+            near = y / 2;
+            far = std::clamp(y % 2 ? near + 1 : near - 1, 0, p.chromaHeight - 1);
+            nearWeight = 0.75f;
         }
-    });
+        near = std::min(near, p.chromaHeight - 1);
+        for (int plane = 1; plane <= 2; ++plane) {
+            std::vector<float>& mixed = plane == 1 ? u : v;
+            rowOf(p, plane, near, a.data());
+            rowOf(p, plane, far, b.data());
+            if (quick) {
+                float* line = padded[plane - 1].data() + 1;
+                mix(a.data(), b.data(), line, int(cw), nearWeight, chromaBase, chromaScale);
+                line[-1] = line[0];
+                line[cw] = line[cw - 1];
+                if (halfColumns) widen(line, wide[plane - 1].data(), int(cw));
+                continue;
+            }
+            for (size_t x = 0; x < cw; ++x) mixed[x] = ((float(a[x]) * nearWeight + float(b[x]) * (1 - nearWeight)) - chromaBase) * chromaScale;
+            mixed[cw] = mixed[cw - 1];
+        }
+        uint8_t* row = out + size_t(y) * stride;
+        if (quick) {
+            level(luma.data(), lumaLevel.data(), p.width, lumaBase, lumaScale);
+            const float* cbs = halfColumns ? wide[0].data() : padded[0].data() + 1;
+            const float* crs = halfColumns ? wide[1].data() : padded[1].data() + 1;
+            if (redFirst) sdrRow<0, 2>(lumaLevel.data(), cbs, crs, row, p.width, kr, kb, kg);
+            else sdrRow<2, 0>(lumaLevel.data(), cbs, crs, row, p.width, kr, kb, kg);
+            continue;
+        }
+        const int ri = redFirst ? 0 : 2, bi = redFirst ? 2 : 0;
+        for (int x = 0; x < p.width; ++x, row += 4) {
+            float cb, cr;
+            if (halfColumns) {
+                const size_t c = std::min(size_t(x / 2), cw - 1);
+                const size_t beside = x % 2 ? c + 1 : (c > 0 ? c - 1 : 0);
+                cb = 0.75f * u[c] + 0.25f * u[beside];
+                cr = 0.75f * v[c] + 0.25f * v[beside];
+            } else {
+                cb = u[size_t(x)];
+                cr = v[size_t(x)];
+            }
+            const float l = (float(luma[size_t(x)]) - lumaBase) * lumaScale;
+            float r = l + 2 * (1 - kr) * cr, bl = l + 2 * (1 - kb) * cb;
+            float g = (l - kr * r - kb * bl) / kg;
+            r = std::clamp(r, 0.0f, 1.0f);
+            g = std::clamp(g, 0.0f, 1.0f);
+            bl = std::clamp(bl, 0.0f, 1.0f);
+            if (!hdr) {
+                row[bi] = uint8_t(bl * 255 + 0.5f);
+                row[1] = uint8_t(g * 255 + 0.5f);
+                row[ri] = uint8_t(r * 255 + 0.5f);
+                row[3] = 255;
+                continue;
+            }
+            r = linear[size_t(r * 65535 + 0.5f) >> 4];
+            g = linear[size_t(g * 65535 + 0.5f) >> 4];
+            bl = linear[size_t(bl * 65535 + 0.5f) >> 4];
+            if (hlg) {
+                const float gain = 4.926f * std::pow(std::max(0.2627f * r + 0.678f * g + 0.0593f * bl, 1e-6f), 0.2f);
+                r *= gain;
+                g *= gain;
+                bl *= gain;
+            }
+            const float c[3] = {-0.0182f * r - 0.1006f * g + 1.1187f * bl, -0.1246f * r + 1.1329f * g - 0.0083f * bl, 1.6605f * r - 0.5876f * g - 0.0728f * bl};
+            const float peak = std::max({c[0], c[1], c[2], 1e-6f});
+            const float scale = softKnee(peak) / peak;
+            const int place[3] = {bi, 1, ri};
+            for (int k = 0; k < 3; ++k) row[place[k]] = uint8_t(levels.encode[size_t(std::clamp(c[k] * scale, 0.0f, 1.0f) * 4095.0f + 0.5f)]);
+            row[3] = 255;
+        }
+    }
+}
+
+bool pictureToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst) {
+    if (p.width <= 0 || p.height <= 0 || p.chromaWidth <= 0 || p.chromaHeight <= 0 || p.bits < 8 || p.bits > 16) return false;
+    inParallel(p.height, [&](int from, int to) { rowsToBGRA(p, out, stride, redFirst, from, to); });
     return true;
 }
 

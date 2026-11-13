@@ -13,6 +13,7 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 - H.264 and HEVC decoding through VideoToolbox, frames stay on the GPU (IOSurface, Metal-ready).
 - Frame-exact seeking to any frame.
 - H.264 and HEVC encoding through VideoToolbox, AAC through AudioToolbox, Opus through libopus when it is installed.
+- VC-1 (Windows Media Video 9: `WMV3`, `WVC1`, `WMVA`) through FFamp's own software decoder, based on FFmpeg's (`docs/NOTICE.md`).
 - `ffamp`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
 - File tools (`docs/TOOLS.md`): `compress`, `trim`, `extract-audio`, `reverse`, `gif-video`, `merge`, `strip-audio`, `rewrap`, with progress
   lines and a clean stop; `docs/YTDLP.md` describes the downloader without FFmpeg.
@@ -33,6 +34,7 @@ is linked; parts based on FFmpeg are listed in `docs/NOTICE.md`.
     src/mp4_write.cpp        ISO base media file writer
     src/mkv_write.cpp        Matroska and WebM writer (RFC 8794, RFC 9559)
     src/opus_encode.cpp      Opus through libopus (BSD), built only when the library is found
+    src/vc1_*.cpp            VC-1 decoder (based on FFmpeg's, see docs/NOTICE.md)
     src/mac/                 VideoToolbox and AudioToolbox back end
     tools/ffamp.cpp         command-line tool
     tests/                   comparison against FFmpeg and against AVFoundation

@@ -375,6 +375,51 @@ payload extension data past the standard 8 replicated bytes; Stream Bitrate Prop
 multi-bitrate file is listed); ISO 639-2 language codes.
 
 
+# Windows Media step B: VC-1 (WMV3, WVC1, WMVA)
+
+FFamp's own VC-1 decoder (`src/vc1_*.cpp`; backend `vc1`), based on FFmpeg's VC-1 decoder as the owner's rule of
+2026-11-13 allows: the FFmpeg C was turned into FFamp's C++ (one `Vc1` context in place of `VC1Context` and `MpegEncContext`, member
+functions, no comments), the tables were copied by script from FFmpeg's data headers, and every derived file is listed in
+`docs/NOTICE.md`. How it is driven is in `docs/CONVENTIONS.md`.
+
+FFmpeg cannot encode VC-1, so the committed fixtures are written by `tests/fixtures/vc1/make.py`, a small WMV3 writer of FFamp's own:
+Main profile with B-pictures (direct and interpolated), intensity compensation, range reduction, overlap smoothing and the loop
+filter, and Simple profile with bilinear, half-pel and quarter-pel motion (`main_bframes.avi` 1.7 KB, `simple.avi` 1.2 KB). The
+public sample files of the plan's appendix A are tested when `WINMEDIA_SAMPLES` names their folder; they are not committed.
+
+| File | What it is | Result against FFmpeg's decode |
+|---|---|---|
+| `main_bframes.avi`, `simple.avi` (fixtures) | Main with B, IC, range reduction; Simple | every frame bit-exact, in order |
+| `sample-wmv9-simple-SP@ML.wmv`, `sb-spl-q94.avi` | WMV3 Simple, CIF and 640x480 | 595 and 193 frames bit-exact |
+| `sample-wmv9-main-MP@LL.wmv`, `sb-main-q94.avi` | WMV3 Main | 595 and 193 frames bit-exact |
+| `sb-adv-q94.avi` | WMV3 Complex without X8 (simple IDCT) | 193 frames bit-exact |
+| `Robotica_720.wmv`, `Robotica_1080.wmv` | WMV3 Main 1280x720 and 1440x1080 | 480 and 480 frames bit-exact |
+| `480i30__codec_WVC1__...wmv` | WVC1 Advanced, interlaced field pictures, B | 66 frames bit-exact |
+| `wmva-smpl-bdsm.wmv` | WMVA (old Advanced profile framing), B | 1,004 frames bit-exact; FFmpeg shows one more picture from the media object the end of the file cuts off |
+| FATE `SA00040`, `SA00050`, `SA10091`, `SA20021` | Advanced, progressive, B, slices | every picture bit-exact |
+| FATE `SA10143`, `ilaced_twomv` | Advanced, interlaced field and frame pictures, 2-MV | every picture bit-exact |
+| FATE `SMM0005.rcv`, `SMM0015.rcv` | WMV3 Main with and without B | every picture bit-exact; also in display order from an AVI |
+
+The raw `.vc1` and `.rcv` files have no display times, so FFmpeg's Matroska copy of them is compared picture by picture without the
+order. Random frames (12 to 16 per file, in random order) equal the straight decode and FFmpeg's frame at that time on every file.
+
+Where FFmpeg is wrong or silent (plan section 3.6), ST 421 decides:
+
+- **Range mapping** (Advanced profile `RANGE_MAPY`, `RANGE_MAPUV` in the entry point): FFmpeg reads the values and ignores them.
+  FFamp applies ST 421 6.2.15 and 6.2.16 to the output pictures only (the references stay unmapped, ST 421 5.6). Test: the
+  interlaced WVC1 sample with its entry point patched to `RANGE_MAPY` 2 and `RANGE_MAPUV` 5 gives FFmpeg's pictures mapped by the
+  formula, every pixel of 66 frames.
+- **Pan-scan** (`PANSCAN_FLAG`): FFmpeg does not read the pan-scan windows and loses its place in the picture header. FFamp skips
+  them as ST 421 8.9.1 counts them (no sample file has them).
+- **Progressive segmented frames** (`PSF`): FFmpeg refuses the stream; the flag only changes how frames are shown, so FFamp decodes
+  them as progressive frames (no sample file has it).
+- Not changed (FFmpeg's behaviour kept, no sample to check against): direct mode in a B field picture whose anchor is a frame picture
+  (an error, as in FFmpeg), the chroma motion vector pull-back FFmpeg marks as a FIXME, old interlaced mode (`res_y411`, refused),
+  multiresolution pictures (`RESPIC` read, not scaled), and X8 intra pictures of the Complex profile (refused with a message; the
+  plan puts X8 in step D).
+
+Test counts (milestones 1 to 4): `QUICK=1 tests/run.sh` 2,376 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh`
+1,544 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 74 checks (43 without FFmpeg), all pass.
 # Windows Media round 2: Windows Media Audio 1 and 2, and the audio framework for the family
 
 `src/wma_decode.cpp` decodes Windows Media Audio 1 (`0x0160`) and 2 (`0x0161`) from ASF, AVI and Matroska behind `AudioDecoder`. It is
@@ -499,3 +544,41 @@ Speed, best of three, whole files through the command line (`ffamp adecode` agai
 
 FFamp's whole-file time includes the counting parse (on all cores) and the parse inside the decode; FFmpeg parses once. The suite
 checks these three files against the 1.5 limit when the samples are there.
+
+Speed, whole program, best of three, decoding into memory (`ffamp bench --mode copy`; FFmpeg 9.0.2 `-f null`, which has no thread
+support for VC-1 and gives the same time with `-threads 1`), measured while another build ran on the same Mac:
+
+| File | Frames | FFamp | FFmpeg |
+|---|---|---|---|
+| `Robotica_1080.wmv`, 1440x1080 Main, P only | 480 | 536 fps | 576 fps |
+| `Robotica_720.wmv`, 1280x720 Main, P only | 480 | 812 fps | 833 fps |
+| `sample-wmv9-main-MP@LL.wmv`, 352x288 Main | 595 | 3,864 fps | 4,044 fps |
+| `ilaced_twomv`, 1920x1080 interlaced fields, 8 of 13 pictures B | 13 | 151 fps | 102 fps |
+| `SA10143`, 720x480 interlaced fields, half of the pictures B | 30 | 882 fps | 506 fps |
+| `480i30__codec_WVC1__...wmv`, 720x480 interlaced, B | 66 | 1,082 fps | 853 fps |
+
+The plan asked for at least 230 fps at 1440x1080; one core gives 536 (suite check: over 230). Since the merge with the WMA round
+the decoder reads its bits through the shared `BitReader` and `Vlc` (`src/bits.h`, `src/vlc.h`) of the audio framework; its own
+copies are gone, the pictures and the speed are unchanged. Most of the time goes to reading the
+coefficients (about 30 %), motion compensation and the inverse transforms. The bicubic motion compensation is written with the
+filter modes as template arguments so the compiler vectorises it; the chroma motion compensation uses NEON. With B-pictures on two
+worker threads (milestone 5) the interlaced files run 1.5 to 1.7 times faster than one thread and faster than FFmpeg; streams with
+no B-pictures (most WMV3) have nothing to overlap, because each P-picture needs the one before it.
+
+Seeking: a jump starts at the key frame at or before the frame asked for (from the container's key flags, or from the picture types
+in AVI) and decodes forward; every random frame tested equals the straight decode and FFmpeg's frame (16 per sample file, 10 per
+fixture, and runs of frames after jumps on two sample files).
+
+Fuzzing: the `vc1` target (the decoder fed raw sequence headers and pictures, seeded with `tests/fixtures/fuzz/vc1/`) ran 253,000
+inputs with undefined-behaviour checks without a find; 560 damaged copies of seven sample files under Guard Malloc (heap overruns
+and underruns trap) decoded or failed cleanly. AddressSanitizer hangs at start-up on this macOS, so it could not be used.
+
+
+Test counts after milestone 5 and the merge with the WMA round: `QUICK=1 tests/run.sh` 2,458 pass, 1 skipped (a real camera);
+`QUICK=1 NOFFMPEG=1 tests/run.sh` 1,569 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 75 checks (44 without FFmpeg),
+all pass.
+
+Not done: X8 intra pictures (Complex profile, plan step D), the mixed field/frame direct mode and the chroma pull-back FIXME of FFmpeg
+(no sample to check ST 421 against), old interlaced mode, multiresolution scaling, sprites, readers for raw `.vc1` and `.rcv` files,
+threads for streams without B-pictures (each P-picture needs the one before; slices are rare), hand-written NEON for the transforms
+and the loop filter.

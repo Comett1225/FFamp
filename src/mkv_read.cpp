@@ -223,6 +223,10 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
                 t.configType = 0;
                 t.config.clear();
             }
+            if (vc1Codec(t.codec)) {
+                t.configType = fourcc("bmih");
+                t.config = secret;
+            }
         } else {
             char name[4] = {' ', ' ', ' ', ' '};
             for (size_t i = 0; i < 4 && i + 2 < id.size(); ++i) name[i] = id[i + 2];

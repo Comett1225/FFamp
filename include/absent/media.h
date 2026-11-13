@@ -50,6 +50,7 @@ struct Track {
     bool bigEndian = false;
     bool interlaced = false;
     int64_t mediaEnd = -1;
+    int64_t delay = 0;
     std::string language;
     uint32_t configType = 0;
     std::vector<uint8_t> config;

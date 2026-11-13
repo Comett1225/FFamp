@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <map>
 #include <numeric>
 
@@ -59,6 +61,11 @@ struct Defaults {
     uint32_t flags = 0;
 };
 
+struct Edit {
+    uint64_t duration = 0;
+    int64_t time = 0;
+};
+
 struct Pending {
     Track track;
     View stsd;
@@ -71,7 +78,7 @@ struct Pending {
     uint32_t fixedSize = 0;
     uint32_t sampleCount = 0;
     bool hasStss = false;
-    bool hasEdit = false;
+    std::vector<Edit> edits;
     Defaults defaults;
     int64_t fragmentTime = 0;
 };
@@ -215,21 +222,159 @@ void edits(View v, Pending& p) {
     uint8_t version = v.u8();
     v.skip(3);
     uint32_t count = v.u32();
+    p.edits.clear();
     for (uint32_t i = 0; i < count && v.left() >= (version ? 20u : 12u); ++i) {
-        int64_t time;
+        Edit edit;
         if (version) {
-            v.skip(8);
-            time = int64_t(v.u64());
+            edit.duration = v.u64();
+            edit.time = int64_t(v.u64());
         } else {
-            v.skip(4);
-            time = int32_t(v.u32());
+            edit.duration = v.u32();
+            edit.time = int32_t(v.u32());
+            if (edit.duration == 0xFFFFFFFFu) edit.duration = 0;
         }
         v.skip(4);
-        if (time >= 0 && !p.hasEdit) {
-            p.track.mediaStart = time;
-            p.hasEdit = true;
-        }
+        p.edits.push_back(edit);
     }
+}
+
+int64_t movieToTrack(uint64_t ticks, uint32_t movieScale, uint32_t trackScale) {
+    unsigned __int128 scaled = (static_cast<unsigned __int128>(ticks) * trackScale + movieScale / 2) / movieScale;
+    return scaled > static_cast<unsigned __int128>(INT64_MAX / 2) ? INT64_MAX / 2 : int64_t(scaled);
+}
+
+void applyEdits(Pending& p, uint32_t movieScale) {
+    Track& track = p.track;
+    uint64_t wait = 0;
+    size_t at = 0;
+    while (at < p.edits.size() && p.edits[at].time == -1) wait += p.edits[at++].duration;
+    while (at < p.edits.size() && p.edits[at].time < 0) ++at;
+    if (at == p.edits.size()) return;
+    track.mediaStart = p.edits[at].time;
+    if (!movieScale || !track.timescale) return;
+    track.delay = movieToTrack(wait, movieScale, track.timescale);
+    int64_t end = track.mediaStart;
+    for (; at < p.edits.size() && p.edits[at].duration > 0 && p.edits[at].time >= 0 && std::llabs(p.edits[at].time - end) <= 1; ++at) {
+        int64_t length = movieToTrack(p.edits[at].duration, movieScale, track.timescale);
+        if (length > INT64_MAX / 2 - end) return;
+        end += length;
+    }
+    if (end > track.mediaStart) track.mediaEnd = end;
+}
+
+std::string languageName(uint32_t code) {
+    if (code == 0) return "eng";
+    if (code < 0x400 || code == 0x7FFF) return "";
+    std::string text(3, ' ');
+    for (int i = 0; i < 3; ++i) text[i] = char(0x60 + ((code >> (10 - 5 * i)) & 31));
+    for (char c : text) if (c < 'a' || c > 'z') return "";
+    return text;
+}
+
+uint32_t movieScaleOf(View moov) {
+    uint32_t scale = 0;
+    boxes(moov, [&](uint32_t type, View body) {
+        if (type != fourcc("mvhd") || scale) return;
+        uint8_t version = body.u8();
+        body.skip(3);
+        body.skip(version ? 16 : 8);
+        scale = body.u32();
+    });
+    return scale;
+}
+
+std::string clockText(uint64_t since1904) {
+    const uint64_t toUnix = 2082844800ull;
+    time_t seconds = time_t(since1904 >= toUnix ? since1904 - toUnix : since1904);
+    struct tm parts;
+    if (!gmtime_r(&seconds, &parts)) return "";
+    char text[64];
+    snprintf(text, sizeof text, "%04d-%02d-%02dT%02d:%02d:%02d.000000Z", parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday, parts.tm_hour, parts.tm_min, parts.tm_sec);
+    return text;
+}
+
+std::string textOf(View v) {
+    std::string text(reinterpret_cast<const char*>(v.p + v.at), v.left());
+    while (!text.empty() && text.back() == 0) text.pop_back();
+    return text;
+}
+
+std::string tagName(uint32_t type) {
+    static const std::pair<uint32_t, const char*> names[] = {
+        {0xA96E616D, "title"}, {0xA9415254, "artist"}, {0xA9616C62, "album"}, {0xA9646179, "date"}, {0xA9746F6F, "encoder"},
+        {0xA9636D74, "comment"}, {0xA967656E, "genre"}, {0xA9777274, "composer"}, {0xA9677270, "grouping"}, {0xA96C7972, "lyrics"},
+        {0xA9737766, "encoder"}, {0xA9617574, "artist"}, {0xA9696E66, "comment"}, {0xA9637079, "copyright"},
+        {fourcc("aART"), "album_artist"}, {fourcc("desc"), "description"}, {fourcc("cprt"), "copyright"},
+    };
+    for (auto& name : names) if (name.first == type) return name.second;
+    return "";
+}
+
+bool dataText(View item, std::string& text) {
+    bool found = false;
+    boxes(item, [&](uint32_t type, View body) {
+        if (type != fourcc("data") || found) return;
+        uint32_t kind = body.u32() & 0xFFFFFF;
+        body.skip(4);
+        if (!body.ok || kind != 1) return;
+        text = textOf(body);
+        found = true;
+    });
+    return found;
+}
+
+void itemList(View meta, std::map<std::string, std::string>& tags) {
+    if (meta.left() >= 8 && View{meta.p + 4, 4}.u32() != fourcc("hdlr")) meta.skip(4);
+    std::vector<std::string> keys;
+    boxes(meta, [&](uint32_t type, View body) {
+        if (type == fourcc("keys")) {
+            body.skip(4);
+            uint32_t count = body.u32();
+            for (uint32_t i = 0; i < count && body.left() >= 8; ++i) {
+                uint32_t size = body.u32();
+                body.skip(4);
+                if (size < 8) return;
+                keys.push_back(textOf(body.sub(size - 8)));
+            }
+        } else if (type == fourcc("ilst")) {
+            boxes(body, [&](uint32_t item, View content) {
+                std::string name = item >= 1 && item <= keys.size() ? keys[item - 1] : tagName(item);
+                std::string text;
+                if (!name.empty() && dataText(content, text) && !tags.count(name)) tags[name] = text;
+            });
+        }
+    });
+}
+
+void movieTags(View moov, std::map<std::string, std::string>& tags) {
+    boxes(moov, [&](uint32_t type, View body) {
+        if (type == fourcc("mvhd")) {
+            uint8_t version = body.u8();
+            body.skip(3);
+            uint64_t created = version ? body.u64() : body.u32();
+            if (body.ok && created) tags["creation_time"] = clockText(created);
+        } else if (type == fourcc("meta")) {
+            itemList(body, tags);
+        } else if (type == fourcc("udta")) {
+            boxes(body, [&](uint32_t inner, View content) {
+                if (inner == fourcc("meta")) {
+                    itemList(content, tags);
+                    return;
+                }
+                std::string name = tagName(inner);
+                if (name.empty() || tags.count(name)) return;
+                std::string text;
+                if (content.left() >= 8 && View{content.p + 4, 4}.u32() == fourcc("data")) {
+                    if (dataText(content, text)) tags[name] = text;
+                    return;
+                }
+                uint32_t length = content.u16();
+                content.skip(2);
+                if (!content.ok || length > content.left()) return;
+                tags[name] = textOf(content.sub(length));
+            });
+        }
+    });
 }
 
 void media(View v, Pending& p) {
@@ -239,6 +384,8 @@ void media(View v, Pending& p) {
             body.skip(3);
             body.skip(version ? 16 : 8);
             p.track.timescale = body.u32();
+            body.skip(version ? 8 : 4);
+            p.track.language = languageName(body.u16());
         } else if (type == fourcc("hdlr")) {
             body.skip(8);
             uint32_t handler = body.u32();
@@ -448,11 +595,14 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
             movie.resize(size_t(body));
             if (fread(movie.data(), 1, movie.size(), file) != movie.size()) return fail("movie header cut short");
             seen = true;
+            uint32_t movieScale = movieScaleOf(View{movie.data(), movie.size()});
+            movieTags(View{movie.data(), movie.size()}, reader->impl->tags);
             boxes(View{movie.data(), movie.size()}, [&](uint32_t name, View content) {
                 if (name == fourcc("trak")) {
                     Pending p;
                     trak(content, p);
                     place(p);
+                    applyEdits(p, movieScale);
                     if (p.track.id && !pending.count(p.track.id)) {
                         ids.push_back(p.track.id);
                         pending.emplace(p.track.id, std::move(p));
@@ -485,7 +635,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
         while (keep < track.samples.size() && track.samples[keep].offset <= total && track.samples[keep].size <= total - track.samples[keep].offset) ++keep;
         track.samples.resize(keep);
         for (uint32_t i = 0; i < track.samples.size(); ++i) {
-            if (track.samples[i].pts >= track.mediaStart) track.order.push_back(i);
+            if (track.samples[i].pts >= track.mediaStart && (track.mediaEnd < 0 || track.samples[i].pts < track.mediaEnd)) track.order.push_back(i);
             if (track.samples[i].sync) track.syncs.push_back(i);
         }
         std::stable_sort(track.order.begin(), track.order.end(), [&](uint32_t a, uint32_t b) { return track.samples[a].pts < track.samples[b].pts; });

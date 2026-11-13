@@ -17,6 +17,8 @@ Sniffed sniff(const uint8_t* b, size_t n) {
     if ((at(0, "RIFF") || at(0, "RF64")) && at(8, "WAVE")) return Sniffed::Wave;
     if (at(0, "FORM") && (at(8, "AIFF") || at(8, "AIFC"))) return Sniffed::Wave;
     if (n >= 189 && b[0] == 0x47 && b[188] == 0x47 && (n < 377 || b[376] == 0x47)) return Sniffed::TransportStream;
+    if (n >= 389 && b[4] == 0x47 && b[196] == 0x47 && b[388] == 0x47) return Sniffed::TransportStream;
+    if (n >= 205 && b[0] == 0x47 && b[204] == 0x47) return Sniffed::TransportStream;
     if (at(0, "fLaC") || at(0, "ID3")) return Sniffed::RawAudio;
     if (n >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) return Sniffed::RawAudio;
     return Sniffed::Unknown;

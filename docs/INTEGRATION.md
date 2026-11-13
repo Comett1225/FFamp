@@ -85,3 +85,29 @@ data class CaptureMode(val width: Int, val height: Int, val fps: Double)
 
 The object is added first with FFmpeg behind it on every platform, so callers move one at a time and nothing changes for users. Then
 each platform's back end is replaced when its tests pass. A setting keeps the old path for one release.
+
+## Probe (stands in for ffprobe)
+
+`absent::probeJson(path, packets, &error)` (`include/absent/probe.h`) and `amedia probe --json [--packets] <file>` give the JSON the app
+parses today from `ffprobe -show_streams -show_format [-show_packets] -of json`: the same key names, the same value formats (strings for
+times and rates, numbers for sizes and indexes), the same spellings of codec, profile, pixel format and colour names. It uses only the
+`Reader` / `Track` interface, so every container a reader exists for is covered.
+
+Deliberate differences from ffprobe (all checked in `tests/suites/40_probe.sh`):
+
+- Packets are listed track by track (ffprobe interleaves them); filter by `stream_index` as the app already does.
+- Transport stream audio: `duration` counts every frame (ffprobe stops at the last PES header, about 0.15 s short), `bit_rate` leaves
+  out the ADTS headers (ffprobe counts them), `pos` is given for every packet, and a mid-PES `pts` at 44.1 kHz can differ by one 90 kHz
+  tick. Transport stream video packet sizes are those of the length-prefixed samples without delimiters.
+- Transport streams get `bit_rate` and `nb_frames` per stream (ffprobe has none).
+- H.264 in a transport stream: only IDR pictures carry the `K` flag (ffprobe also flags recovery points); the decoder cannot start on
+  the others.
+- MP4 key flags come from the sync sample table only (ffprobe's parser adds a few more), and `dts` is not shifted down when a file
+  has negative composition offsets (`pts` is the same).
+- `r_frame_rate` of a file with uneven frame times is the lowest common rate that fits every time stamp; ffprobe's guess can differ
+  (2 of 26 real files tried). `avg_frame_rate` matched on all of them.
+- MP4 with several separate edits: the first segment only (ffprobe plays them all).
+- Not written: `codec_long_name`, `codec_tag`, `level`, `has_b_frames`, aspect ratios, `disposition`, `handler_name`, per-stream
+  `creation_time`, the `displaymatrix` text, `probe_score`, programs and chapters. The app reads none of them.
+- AV1: colour names come from the container only (the sequence header is not parsed). VP9 without a first key frame falls back to
+  `vpcC`.

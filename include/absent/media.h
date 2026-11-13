@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -44,6 +45,12 @@ struct Track {
     int rotation = 0;
     int sampleRate = 0;
     int channels = 0;
+    int bits = 0;
+    bool floating = false;
+    bool bigEndian = false;
+    bool interlaced = false;
+    int64_t mediaEnd = -1;
+    std::string language;
     uint32_t configType = 0;
     std::vector<uint8_t> config;
     Color color;
@@ -54,13 +61,25 @@ struct Track {
     double rate() const;
 };
 
-class Mp4Reader {
+class Reader {
+public:
+    static std::unique_ptr<Reader> open(const std::string& path, std::string* error = nullptr);
+    virtual ~Reader() = default;
+    virtual const char* format() const = 0;
+    virtual const std::vector<Track>& tracks() const = 0;
+    virtual bool read(const Track& track, uint32_t index, uint8_t* out) = 0;
+    virtual const std::map<std::string, std::string>& tags() const;
+    const Track* first(Kind kind) const;
+};
+
+class Mp4Reader : public Reader {
 public:
     static std::unique_ptr<Mp4Reader> open(const std::string& path, std::string* error = nullptr);
-    ~Mp4Reader();
-    const std::vector<Track>& tracks() const;
-    const Track* first(Kind kind) const;
-    bool read(const Track& track, uint32_t index, uint8_t* out);
+    ~Mp4Reader() override;
+    const char* format() const override;
+    const std::vector<Track>& tracks() const override;
+    bool read(const Track& track, uint32_t index, uint8_t* out) override;
+    const std::map<std::string, std::string>& tags() const override;
 
 private:
     Mp4Reader();
@@ -136,7 +155,7 @@ bool copyI420(const Frame& frame, std::vector<uint8_t>& out);
 
 class VideoDecoder {
 public:
-    static std::unique_ptr<VideoDecoder> open(Mp4Reader& file, const Track& track, std::string* error = nullptr);
+    static std::unique_ptr<VideoDecoder> open(Reader& file, const Track& track, std::string* error = nullptr);
     ~VideoDecoder();
     uint32_t frames() const;
     Frame frame(uint32_t index);

@@ -52,7 +52,7 @@ bool copyI420(const Frame& frame, std::vector<uint8_t>& out) {
 }
 
 struct VideoDecoder::Impl {
-    Mp4Reader* file = nullptr;
+    Reader* file = nullptr;
     const Track* track = nullptr;
     CMVideoFormatDescriptionRef format = nullptr;
     VTDecompressionSessionRef session = nullptr;
@@ -144,7 +144,7 @@ struct VideoDecoder::Impl {
 VideoDecoder::VideoDecoder() : impl(new Impl) {}
 VideoDecoder::~VideoDecoder() = default;
 
-std::unique_ptr<VideoDecoder> VideoDecoder::open(Mp4Reader& file, const Track& track, std::string* error) {
+std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& track, std::string* error) {
     auto fail = [&](const char* text) {
         if (error) *error = text;
         return nullptr;

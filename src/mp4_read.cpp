@@ -385,6 +385,8 @@ void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks) {
 struct Mp4Reader::Impl {
     FILE* file = nullptr;
     std::vector<Track> tracks;
+    std::map<std::string, std::string> tags;
+    bool quicktime = false;
     ~Impl() { if (file) fclose(file); }
 };
 
@@ -393,10 +395,9 @@ Mp4Reader::~Mp4Reader() = default;
 
 const std::vector<Track>& Mp4Reader::tracks() const { return impl->tracks; }
 
-const Track* Mp4Reader::first(Kind kind) const {
-    for (const Track& t : impl->tracks) if (t.kind == kind && !t.samples.empty()) return &t;
-    return nullptr;
-}
+const char* Mp4Reader::format() const { return impl->quicktime ? "mov" : "mp4"; }
+
+const std::map<std::string, std::string>& Mp4Reader::tags() const { return impl->tags; }
 
 bool Mp4Reader::read(const Track& track, uint32_t index, uint8_t* out) {
     if (index >= track.samples.size()) return false;
@@ -438,6 +439,10 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
         }
         if (size < skip || size > total - at) break;
         uint64_t body = size - skip;
+        if (type == fourcc("ftyp") && at == 0 && body >= 4) {
+            uint8_t brand[4];
+            if (fread(brand, 1, 4, file) == 4) reader->impl->quicktime = View{brand, 4}.u32() == fourcc("qt  ");
+        }
         if (type == fourcc("moov") && !seen) {
             if (body > (1ull << 30)) return fail("movie header too large");
             movie.resize(size_t(body));

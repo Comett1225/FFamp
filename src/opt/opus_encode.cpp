@@ -1,3 +1,4 @@
+#ifdef ABSENT_OPUS
 #include "absent/media.h"
 #include <opus/opus.h>
 #include <cstring>
@@ -76,3 +77,5 @@ std::vector<uint8_t> OpusEncoder::config() const {
 }
 
 }
+
+#endif

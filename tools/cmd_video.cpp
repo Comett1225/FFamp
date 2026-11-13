@@ -1,99 +1,17 @@
-#include "absent/media.h"
+#include "cli.h"
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <map>
-#include <string>
-#include <vector>
 
-using namespace absent;
+namespace cli {
 
 namespace {
-
-double now() {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-struct Args {
-    std::vector<std::string> plain;
-    std::map<std::string, std::string> named;
-    std::string get(const std::string& key, const std::string& fallback = "") const {
-        auto found = named.find(key);
-        return found == named.end() ? fallback : found->second;
-    }
-    long number(const std::string& key, long fallback) const {
-        auto found = named.find(key);
-        return found == named.end() ? fallback : atol(found->second.c_str());
-    }
-    bool has(const std::string& key) const { return named.count(key) > 0; }
-};
-
-Args parse(int argc, char** argv) {
-    Args args;
-    for (int i = 2; i < argc; ++i) {
-        std::string token = argv[i];
-        if (token.rfind("--", 0) == 0) {
-            bool value = i + 1 < argc && std::string(argv[i + 1]).rfind("--", 0) != 0;
-            args.named[token.substr(2)] = value ? argv[++i] : "1";
-        } else {
-            args.plain.push_back(token);
-        }
-    }
-    return args;
-}
-
-int fail(const std::string& text) {
-    fprintf(stderr, "amedia: %s\n", text.c_str());
-    return 1;
-}
-
-TrackSpec specOf(const Track& t) {
-    TrackSpec spec;
-    spec.kind = t.kind;
-    spec.codec = t.codec;
-    spec.timescale = t.timescale;
-    spec.width = t.width;
-    spec.height = t.height;
-    spec.rotation = t.rotation;
-    spec.sampleRate = t.sampleRate;
-    spec.channels = t.channels;
-    spec.configType = t.configType;
-    spec.config = t.config;
-    spec.color = t.color;
-    int64_t first = t.samples.empty() ? 0 : t.samples.front().pts;
-    for (const Sample& s : t.samples) first = std::min(first, s.pts);
-    spec.skip = std::max<int64_t>(0, t.mediaStart - first);
-    return spec;
-}
-
-struct Copier {
-    Mp4Reader& reader;
-    Writer& writer;
-    const Track& track;
-    int out;
-    uint32_t next = 0;
-    std::vector<uint8_t> buffer;
-
-    double time() const { return next < track.samples.size() ? double(track.samples[next].dts) / track.timescale : 1e300; }
-    bool step() {
-        const Sample& s = track.samples[next];
-        buffer.resize(s.size);
-        if (!reader.read(track, next, buffer.data())) return false;
-        ++next;
-        return writer.write(out, buffer.data(), s.size, s.pts, s.dts, s.duration, s.sync);
-    }
-    bool until(double seconds) {
-        while (time() <= seconds) if (!step()) return false;
-        return true;
-    }
-};
 
 int probe(const Args& args) {
     if (args.plain.empty()) return fail("probe needs a file");
     std::string error;
-    auto reader = Mp4Reader::open(args.plain[0], &error);
+    auto reader = Reader::open(args.plain[0], &error);
     if (!reader) return fail(error);
     for (const Track& t : reader->tracks()) {
         if (t.kind == Kind::Video) {
@@ -112,7 +30,7 @@ int probe(const Args& args) {
 int decode(const Args& args) {
     if (args.plain.empty()) return fail("decode needs a file");
     std::string error;
-    auto reader = Mp4Reader::open(args.plain[0], &error);
+    auto reader = Reader::open(args.plain[0], &error);
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
@@ -131,7 +49,7 @@ int decode(const Args& args) {
 int frames(const Args& args) {
     if (args.plain.empty() || !args.has("list")) return fail("frames needs a file and --list a,b,c");
     std::string error;
-    auto reader = Mp4Reader::open(args.plain[0], &error);
+    auto reader = Reader::open(args.plain[0], &error);
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
@@ -167,7 +85,7 @@ int frames(const Args& args) {
 int bench(const Args& args) {
     if (args.plain.empty()) return fail("bench needs a file");
     std::string error;
-    auto reader = Mp4Reader::open(args.plain[0], &error);
+    auto reader = Reader::open(args.plain[0], &error);
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
@@ -368,7 +286,7 @@ int encode(const Args& args) {
 int transcode(const Args& args) {
     if (args.plain.size() < 2) return fail("transcode needs an input and an output file");
     std::string error;
-    auto reader = Mp4Reader::open(args.plain[0], &error);
+    auto reader = Reader::open(args.plain[0], &error);
     if (!reader) return fail(error);
     const Track* track = reader->first(Kind::Video);
     if (!track) return fail("no video track");
@@ -431,7 +349,7 @@ int transcode(const Args& args) {
 int remux(const Args& args) {
     if (args.plain.size() < 2) return fail("remux needs an input and an output file");
     std::string error;
-    auto reader = Mp4Reader::open(args.plain[0], &error);
+    auto reader = Reader::open(args.plain[0], &error);
     if (!reader) return fail(error);
     auto writer = Writer::open(args.plain[1], &error);
     if (!writer) return fail(error);
@@ -452,18 +370,14 @@ int remux(const Args& args) {
     return 0;
 }
 
+Register probeCommand("probe", probe);
+Register decodeCommand("decode", decode);
+Register framesCommand("frames", frames);
+Register benchCommand("bench", bench);
+Register encodeCommand("encode", encode);
+Register transcodeCommand("transcode", transcode);
+Register remuxCommand("remux", remux);
+
 }
 
-int main(int argc, char** argv) {
-    if (argc < 2) return fail("commands: probe, decode, frames, bench, encode, transcode, remux");
-    std::string command = argv[1];
-    Args args = parse(argc, argv);
-    if (command == "probe") return probe(args);
-    if (command == "decode") return decode(args);
-    if (command == "frames") return frames(args);
-    if (command == "bench") return bench(args);
-    if (command == "encode") return encode(args);
-    if (command == "transcode") return transcode(args);
-    if (command == "remux") return remux(args);
-    return fail("unknown command " + command);
 }

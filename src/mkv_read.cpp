@@ -22,6 +22,7 @@ const uint32_t kDiscardPadding = 0x75A2, kPreviousSize = 0xAB, kPosition = 0xA7,
 const uint32_t kTag = 0x7373, kTargets = 0x63C0, kTargetTrack = 0x63C5, kSimpleTag = 0x67C8, kTagName = 0x45A3, kTagString = 0x4487;
 const int64_t kUnknown = INT64_MIN;
 const double kBillion = 1e9;
+const uint32_t kSegmentDuration = 0x4489;
 
 struct Element {
     uint32_t id = 0;
@@ -275,7 +276,10 @@ class MatroskaReader : public FileReader {
 public:
     std::vector<Lane> lanes;
     uint64_t scale = 1000000;
+    double length = -1;
     bool haveTracks = false;
+
+    double statedSeconds() const override { return length > 0 ? length * double(scale) / kBillion : -1; }
 
     Lane* lane(uint64_t number) {
         for (Lane& l : lanes) if (l.track.id == number) return &l;
@@ -305,6 +309,7 @@ public:
         children(v, [&](uint32_t id, View body) {
             if (id == kTimestampScale && number(body)) scale = std::min<uint64_t>(number(body), 1000000000000ull);
             else if (id == kTitle && !text(body).empty()) found["title"] = text(body);
+            else if (id == kSegmentDuration && std::isfinite(real(body))) length = real(body);
         });
     }
 

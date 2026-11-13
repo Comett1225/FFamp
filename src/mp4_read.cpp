@@ -487,12 +487,13 @@ void trak(View v, Pending& p) {
     });
 }
 
-void placePcm(Pending& p) {
+void placePcm(Pending& p, uint64_t fileSize) {
     Track& track = p.track;
     uint32_t unit = p.fixedSize == 1 ? uint32_t(track.channels) * uint32_t(track.bits / 8) : p.fixedSize;
     uint32_t delta = p.stts[0].second;
     uint64_t left = std::min(p.sampleCount, p.stts[0].first);
-    if (unit > 65536 || delta > 65536) return;
+    if (unit < 1 || unit > 65536 || delta > 65536) return;
+    left = std::min(left, fileSize / unit);
     const uint64_t group = 4096;
     int64_t dts = 0;
     for (size_t r = 0; r < p.stsc.size() && left; ++r) {
@@ -547,7 +548,7 @@ void gapless(View movie, std::vector<Track*>& audio, const std::map<uint32_t, bo
     }
 }
 
-void place(Pending& p) {
+void place(Pending& p, uint64_t fileSize) {
     Track& track = p.track;
     if (p.stsd.n >= 8) {
         View v = p.stsd;
@@ -559,11 +560,12 @@ void place(Pending& p) {
         });
     }
     if (track.codec == fourcc("lpcm") && p.fixedSize && p.stts.size() == 1 && track.channels > 0 && track.bits >= 8) {
-        placePcm(p);
+        placePcm(p, fileSize);
         return;
     }
     uint32_t count = p.sampleCount;
     if (!p.fixedSize) count = std::min<uint32_t>(count, uint32_t(p.sizes.size()));
+    else count = uint32_t(std::min<uint64_t>(count, fileSize / p.fixedSize));
     uint64_t possible = 0;
     for (const Run& run : p.stsc) possible = std::max<uint64_t>(possible, run.count);
     possible *= p.chunks.size();
@@ -613,7 +615,7 @@ void place(Pending& p) {
     }
 }
 
-void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks) {
+void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks, uint64_t& samplesLeft) {
     uint64_t next = start;
     bool firstTraf = true;
     boxes(v, [&](uint32_t type, View traf) {
@@ -652,6 +654,8 @@ void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks) {
                 if (hasFirst) firstFlags = body.u32();
                 uint32_t each = ((flags & 0x100) ? 4 : 0) + ((flags & 0x200) ? 4 : 0) + ((flags & 0x400) ? 4 : 0) + ((flags & 0x800) ? 4 : 0);
                 if (each ? count > body.left() / each : count > (1u << 24)) return;
+                if (count > samplesLeft) return;
+                samplesLeft -= count;
                 for (uint32_t i = 0; i < count; ++i) {
                     Sample s;
                     s.duration = (flags & 0x100) ? body.u32() : d.duration;
@@ -711,12 +715,12 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
     uint64_t total = uint64_t(ftello(file));
     std::map<uint32_t, Pending> pending;
     std::map<uint32_t, bool> edited;
-    uint32_t movieScale = 0;
     std::vector<uint32_t> ids;
     std::vector<uint8_t> movie;
     std::vector<uint8_t> piece;
     bool seen = false;
     uint64_t at = 0;
+    uint64_t samplesLeft = total;
     while (at + 8 <= total) {
         uint8_t head[16];
         if (fseeko(file, off_t(at), SEEK_SET) != 0 || fread(head, 1, 8, file) != 8) break;
@@ -752,7 +756,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
                 } else if (name == fourcc("trak")) {
                     Pending p;
                     trak(content, p);
-                    place(p);
+                    place(p, total);
                     applyEdits(p, movieScale);
                     if (p.track.id && !pending.count(p.track.id)) {
                         ids.push_back(p.track.id);
@@ -775,7 +779,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
             if (body > (1ull << 28)) return fail("fragment header too large");
             piece.resize(size_t(body));
             if (fread(piece.data(), 1, piece.size(), file) != piece.size()) break;
-            fragment(View{piece.data(), piece.size()}, at, pending);
+            fragment(View{piece.data(), piece.size()}, at, pending, samplesLeft);
         }
         at += size;
     }

@@ -101,6 +101,7 @@ std::unique_ptr<SoftEncoder> openSvtAv1(const EncodeSpec& spec, std::string* err
     settings.enc_mode = int8_t(std::clamp(spec.speed < 0 ? 10 : spec.speed, 0, 13));
     settings.rate_control_mode = SVT_AV1_RC_MODE_VBR;
     settings.target_bit_rate = uint32_t(spec.bitrate);
+    settings.under_shoot_pct = 5;
     settings.intra_period_length = std::max(spec.keyInterval, 1) - 1;
     settings.color_primaries = EB_CICP_CP_BT_709;
     settings.transfer_characteristics = EB_CICP_TC_BT_709;

@@ -317,7 +317,7 @@ int transcode(const Args& args) {
     spec.timescale = track->timescale;
     spec.fps = track->rate();
     spec.bitrate = int(args.number("bitrate", 8000000));
-    spec.keyInterval = int(spec.fps + 0.5);
+    spec.keyInterval = int(args.number("gop", long(spec.fps + 0.5)));
     spec.codec = codec;
     spec.speed = int(args.number("speed", -1));
     auto encoder = VideoEncoder::open(spec, &error);

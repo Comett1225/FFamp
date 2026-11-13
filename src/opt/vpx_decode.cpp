@@ -20,13 +20,14 @@ struct VpxDecoder : SoftDecoder {
     const char* name() const override { return "libvpx"; }
     void reset() override {}
 
-    bool decode(const uint8_t* data, size_t size, const PictureSink& sink) override {
+    bool decode(const uint8_t* data, size_t size, int64_t stamp, const PictureSink& sink) override {
         if (size > 0xFFFFFFFFu || vpx_codec_decode(&context, data, static_cast<unsigned int>(size), nullptr, 0) != VPX_CODEC_OK) return false;
         vpx_codec_iter_t walk = nullptr;
         while (vpx_image_t* image = vpx_codec_get_frame(&context, &walk)) {
             const int kind = image->fmt & ~VPX_IMG_FMT_HIGHBITDEPTH;
             if (kind != VPX_IMG_FMT_I420 && kind != VPX_IMG_FMT_I422 && kind != VPX_IMG_FMT_I444) return false;
             Picture p;
+            p.stamp = stamp;
             p.width = int(image->d_w);
             p.height = int(image->d_h);
             p.bits = int(image->bit_depth);
@@ -60,6 +61,7 @@ std::unique_ptr<SoftDecoder> openVpxDecoder(bool vp8, std::string* error) {
         return nullptr;
     }
     decoder->started = true;
+    if (!vp8) vpx_codec_control(&decoder->context, VP9D_SET_LOOP_FILTER_OPT, 1);
     return decoder;
 }
 

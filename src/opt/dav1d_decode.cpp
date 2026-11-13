@@ -22,6 +22,7 @@ struct Dav1dDecoder : SoftDecoder {
 
     void show(const Dav1dPicture& shown, const PictureSink& sink) {
         Picture p;
+        p.stamp = shown.m.timestamp;
         p.width = shown.p.w;
         p.height = shown.p.h;
         p.bits = shown.p.bpc;
@@ -58,13 +59,31 @@ struct Dav1dDecoder : SoftDecoder {
         sink(p);
     }
 
-    bool decode(const uint8_t* bytes, size_t size, const PictureSink& sink) override {
+    bool drain(const PictureSink& sink) override {
+        for (int empty = 0; empty < 2;) {
+            Dav1dPicture shown;
+            memset(&shown, 0, sizeof shown);
+            const int got = dav1d_get_picture(context, &shown);
+            if (got == DAV1D_ERR(EAGAIN)) {
+                ++empty;
+                continue;
+            }
+            if (got < 0) return false;
+            empty = 1;
+            show(shown, sink);
+            dav1d_picture_unref(&shown);
+        }
+        return true;
+    }
+
+    bool decode(const uint8_t* bytes, size_t size, int64_t stamp, const PictureSink& sink) override {
         if (!size) return true;
         Dav1dData data;
         memset(&data, 0, sizeof data);
         uint8_t* room = dav1d_data_create(&data, size);
         if (!room) return false;
         memcpy(room, bytes, size);
+        data.m.timestamp = stamp;
         bool ok = true;
         for (;;) {
             int sent = data.sz ? dav1d_send_data(context, &data) : 0;
@@ -81,9 +100,8 @@ struct Dav1dDecoder : SoftDecoder {
             } else if (got != DAV1D_ERR(EAGAIN)) {
                 ok = false;
                 break;
-            } else if (!data.sz) {
-                break;
             }
+            if (!data.sz) break;
         }
         if (data.sz) dav1d_data_unref(&data);
         return ok;
@@ -92,10 +110,10 @@ struct Dav1dDecoder : SoftDecoder {
 
 }
 
-std::unique_ptr<SoftDecoder> openDav1d(std::string* error) {
+std::unique_ptr<SoftDecoder> openDav1d(int delay, std::string* error) {
     Dav1dSettings settings;
     dav1d_default_settings(&settings);
-    settings.max_frame_delay = 1;
+    settings.max_frame_delay = delay;
     settings.frame_size_limit = 8192u * 8192u;
     settings.logger.callback = quiet;
     std::unique_ptr<Dav1dDecoder> decoder(new Dav1dDecoder);
@@ -111,7 +129,7 @@ std::unique_ptr<SoftDecoder> openDav1d(std::string* error) {
 
 namespace absent {
 
-std::unique_ptr<SoftDecoder> openDav1d(std::string* error) {
+std::unique_ptr<SoftDecoder> openDav1d(int, std::string* error) {
     if (error) *error = "built without an AV1 software decoder";
     return nullptr;
 }

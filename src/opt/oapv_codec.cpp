@@ -159,7 +159,7 @@ struct ApvDecoder : SoftDecoder {
     const char* name() const override { return "openapv"; }
     void reset() override {}
 
-    bool decode(const uint8_t* data, size_t size, const PictureSink& sink) override {
+    bool decode(const uint8_t* data, size_t size, int64_t stamp, const PictureSink& sink) override {
         if (size < 8 || size > 0x7FFFFFFFu) return false;
         if (memcmp(data, "aPv1", 4) != 0) {
             data += kSizeField;
@@ -183,6 +183,7 @@ struct ApvDecoder : SoftDecoder {
         oapvd_stat_t stat = {};
         if (OAPV_FAILED(oapvd_decode(handle, &bits, &frames, nullptr, &stat))) return false;
         Picture p;
+        p.stamp = stamp;
         p.width = width;
         p.height = height;
         p.bits = OAPV_CS_GET_BIT_DEPTH(space);

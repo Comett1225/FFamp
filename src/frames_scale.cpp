@@ -2,7 +2,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <thread>
+#include <map>
+#include <mutex>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 namespace absent {
 
@@ -10,6 +14,7 @@ namespace {
 
 struct Taps {
     int count = 0;
+    int stride = 0;
     std::vector<int> first;
     std::vector<float> weight;
 };
@@ -25,9 +30,10 @@ double cubic(double x) {
 Taps makeTaps(int in, int out, double step, double origin) {
     const double widen = std::max(1.0, step), radius = 2 * widen;
     Taps taps;
-    taps.count = std::min(in, int(std::ceil(radius * 2)) + 1);
+    taps.count = std::min(in, int(std::ceil(radius * 2)));
+    taps.stride = (taps.count + 3) & ~3;
     taps.first.resize(size_t(out));
-    taps.weight.assign(size_t(out) * size_t(taps.count), 0.0f);
+    taps.weight.assign(size_t(out) * size_t(taps.stride), 0.0f);
     std::vector<double> row(size_t(taps.count));
     for (int o = 0; o < out; ++o) {
         const double centre = origin + o * step;
@@ -46,72 +52,83 @@ Taps makeTaps(int in, int out, double step, double origin) {
             sum = 1;
         }
         taps.first[size_t(o)] = first;
-        for (int k = 0; k < taps.count; ++k) taps.weight[size_t(o) * size_t(taps.count) + size_t(k)] = float(row[size_t(k)] / sum);
+        for (int k = 0; k < taps.count; ++k) taps.weight[size_t(o) * size_t(taps.stride) + size_t(k)] = float(row[size_t(k)] / sum);
     }
     return taps;
 }
 
-void inRows(int rows, const std::function<void(int, int)>& work) {
-    const int workers = std::clamp(int(std::thread::hardware_concurrency()), 1, 8);
-    if (workers == 1 || rows < 64) {
-        work(0, rows);
-        return;
+void across4(const float* __restrict line, const int* __restrict first, const float* __restrict weight, float* __restrict target, int count, int taps) {
+    for (int x = 0; x < count; ++x, weight += taps) {
+        const float* samples = line + first[x];
+#if defined(__aarch64__)
+        float32x4_t sum = vmulq_f32(vld1q_f32(samples), vld1q_f32(weight));
+        for (int k = 4; k < taps; k += 4) sum = vfmaq_f32(sum, vld1q_f32(samples + k), vld1q_f32(weight + k));
+        target[x] = vaddvq_f32(sum);
+#else
+        float a = 0, b = 0, c = 0, d = 0;
+        for (int k = 0; k < taps; k += 4) {
+            a += samples[k] * weight[k];
+            b += samples[k + 1] * weight[k + 1];
+            c += samples[k + 2] * weight[k + 2];
+            d += samples[k + 3] * weight[k + 3];
+        }
+        target[x] = (a + b) + (c + d);
+#endif
     }
-    std::vector<std::thread> pool;
-    for (int k = 1; k < workers; ++k) pool.emplace_back(work, rows * k / workers, rows * (k + 1) / workers);
-    work(0, rows / workers);
-    for (std::thread& worker : pool) worker.join();
+}
+
+void add(const float* __restrict source, float* __restrict line, int count, float w) {
+    for (int x = 0; x < count; ++x) line[x] += source[x] * w;
 }
 
 template <typename T>
-void scaleSamples(const uint8_t* in, size_t inStride, int inWidth, int inHeight, uint8_t* out, int outWidth, int outHeight, int top, const Taps& across, const Taps& down) {
-    std::vector<float> middle(size_t(inHeight) * size_t(outWidth));
-    inRows(inHeight, [&](int from, int to) {
-        std::vector<float> line(static_cast<size_t>(inWidth));
-        for (int y = from; y < to; ++y) {
-            const T* source = reinterpret_cast<const T*>(in + size_t(y) * inStride);
-            for (int x = 0; x < inWidth; ++x) line[size_t(x)] = float(source[x]);
-            float* target = middle.data() + size_t(y) * size_t(outWidth);
-            const float* weight = across.weight.data();
-            for (int x = 0; x < outWidth; ++x, weight += across.count) {
-                const float* samples = line.data() + across.first[size_t(x)];
-                float sum = 0;
-                for (int k = 0; k < across.count; ++k) sum += samples[k] * weight[k];
-                target[x] = sum;
-            }
-        }
-    });
-    inRows(outHeight, [&](int from, int to) {
-        std::vector<float> line(static_cast<size_t>(outWidth));
-        for (int y = from; y < to; ++y) {
-            std::fill(line.begin(), line.end(), 0.5f);
-            const float* weight = down.weight.data() + size_t(y) * size_t(down.count);
-            for (int k = 0; k < down.count; ++k) {
-                const float w = weight[k];
-                if (w == 0) continue;
-                const float* source = middle.data() + size_t(down.first[size_t(y)] + k) * size_t(outWidth);
-                for (int x = 0; x < outWidth; ++x) line[size_t(x)] += source[x] * w;
-            }
-            T* target = reinterpret_cast<T*>(out + size_t(y) * size_t(outWidth) * sizeof(T));
-            for (int x = 0; x < outWidth; ++x) target[x] = T(std::clamp(line[size_t(x)], 0.0f, float(top)));
-        }
-    });
+void settle(const float* __restrict line, T* __restrict target, int count, float top) {
+    for (int x = 0; x < count; ++x) target[x] = T(std::min(std::max(line[x], 0.0f), top));
 }
 
-void packed(const uint8_t* bgra, size_t pixels, PixelLayout layout, uint8_t* out) {
-    if (layout == PixelLayout::Rgba) {
-        for (size_t i = 0; i < pixels; ++i, bgra += 4, out += 4) {
-            out[0] = bgra[2];
-            out[1] = bgra[1];
-            out[2] = bgra[0];
-            out[3] = 255;
+std::shared_ptr<const Taps> tapsFor(int in, int out) {
+    static std::mutex lock;
+    static std::map<std::pair<int, int>, std::shared_ptr<const Taps>> known;
+    std::lock_guard<std::mutex> hold(lock);
+    if (known.size() > 64) known.clear();
+    std::shared_ptr<const Taps>& slot = known[{in, out}];
+    if (!slot) {
+        const double step = double(in) / out;
+        slot = std::make_shared<const Taps>(makeTaps(in, out, step, 0.5 * step - 0.5));
+    }
+    return slot;
+}
+
+void scaleRows(const Picture& p, int plane, uint8_t* out, int outWidth, int bytes, int top, const Taps& across, const Taps& down, int from, int to) {
+    if (from >= to) return;
+    static thread_local std::vector<float> middle, line;
+    const int inWidth = plane ? p.chromaWidth : p.width;
+    const int first = down.first[size_t(from)], rows = down.first[size_t(to) - 1] + down.count - first;
+    if (middle.size() < size_t(rows) * size_t(outWidth)) middle.resize(size_t(rows) * size_t(outWidth));
+    if (line.size() < size_t(std::max(inWidth, outWidth)) + 4) line.resize(size_t(std::max(inWidth, outWidth)) + 4);
+    std::fill(line.begin() + inWidth, line.begin() + inWidth + 4, 0.0f);
+    for (int y = 0; y < rows; ++y) {
+        pictureRow(p, plane, first + y, line.data());
+        across4(line.data(), across.first.data(), across.weight.data(), middle.data() + size_t(y) * size_t(outWidth), outWidth, across.stride);
+    }
+    for (int y = from; y < to; ++y) {
+        std::fill(line.begin(), line.begin() + outWidth, 0.5f);
+        const float* weight = down.weight.data() + size_t(y) * size_t(down.stride);
+        for (int k = 0; k < down.count; ++k) {
+            if (weight[k] == 0) continue;
+            add(middle.data() + size_t(down.first[size_t(y)] - first + k) * size_t(outWidth), line.data(), outWidth, weight[k]);
         }
-    } else {
-        for (size_t i = 0; i < pixels; ++i, bgra += 4, out += 3) {
-            out[0] = bgra[2];
-            out[1] = bgra[1];
-            out[2] = bgra[0];
-        }
+        uint8_t* target = out + size_t(y) * size_t(outWidth) * size_t(bytes);
+        if (bytes == 2) settle(line.data(), reinterpret_cast<uint16_t*>(target), outWidth, float(top));
+        else settle(line.data(), target, outWidth, float(top));
+    }
+}
+
+void packed(const uint8_t* __restrict bgra, size_t pixels, uint8_t* __restrict out) {
+    for (size_t i = 0; i < pixels; ++i, bgra += 4, out += 3) {
+        out[0] = bgra[2];
+        out[1] = bgra[1];
+        out[2] = bgra[0];
     }
 }
 
@@ -130,7 +147,7 @@ void turnPlane(const uint8_t* in, int width, int height, int unit, int rotation,
         return;
     }
     const bool clockwise = rotation == 90;
-    inRows(width, [&](int first, int last) {
+    inParallel(width, [&](int first, int last) {
         for (int y = first; y < last; ++y) {
             uint8_t* to = out + size_t(y) * size_t(height) * u;
             for (int x = 0; x < height; ++x, to += u) {
@@ -160,22 +177,16 @@ size_t pixelBytes(PixelLayout layout, int width, int height) {
     return area * size_t(unitBytes(layout));
 }
 
-void scalePlane(const uint8_t* in, size_t inStride, int inWidth, int inHeight, uint8_t* out, int outWidth, int outHeight, int bytes, int top, double stepX, double originX, double stepY, double originY) {
-    const Taps across = makeTaps(inWidth, outWidth, stepX, originX), down = makeTaps(inHeight, outHeight, stepY, originY);
-    if (bytes == 2) scaleSamples<uint16_t>(in, inStride, inWidth, inHeight, out, outWidth, outHeight, top, across, down);
-    else scaleSamples<uint8_t>(in, inStride, inWidth, inHeight, out, outWidth, outHeight, top, across, down);
-}
-
 bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout, std::vector<uint8_t>& out) {
-    if (width <= 0 || height <= 0 || p.width <= 0 || p.height <= 0 || p.chromaWidth <= 0 || p.chromaHeight <= 0 || layout == PixelLayout::Gray) return false;
+    if (width <= 0 || height <= 0 || p.width <= 0 || p.height <= 0 || p.chromaWidth <= 0 || p.chromaHeight <= 0 || p.bits < 8 || p.bits > 16 || layout == PixelLayout::Gray) return false;
     const bool planar = layout == PixelLayout::I420, same = width == p.width && height == p.height;
     out.resize(pixelBytes(layout, width, height));
     std::vector<uint8_t> bgra;
     auto finish = [&](const Picture& ready) {
-        if (layout == PixelLayout::Bgra) return pictureToBGRA(ready, out.data(), size_t(width) * 4);
+        if (layout != PixelLayout::Rgb24) return pictureToBGRA(ready, out.data(), size_t(width) * 4, layout == PixelLayout::Rgba);
         bgra.resize(size_t(width) * size_t(height) * 4);
         if (!pictureToBGRA(ready, bgra.data(), size_t(width) * 4)) return false;
-        packed(bgra.data(), size_t(width) * size_t(height), layout, out.data());
+        packed(bgra.data(), size_t(width) * size_t(height), out.data());
         return true;
     };
     if (same) {
@@ -183,23 +194,12 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
         pictureToI420(p, out);
         return true;
     }
-    std::vector<uint8_t> flat;
-    pictureToPlanar(p, flat);
     const int bytes = p.bits > 8 ? 2 : 1, top = (1 << p.bits) - 1;
     const int chromaWidth = planar ? (width + 1) / 2 : width, chromaHeight = planar ? (height + 1) / 2 : height;
     const size_t luma = size_t(width) * size_t(height) * size_t(bytes), chroma = size_t(chromaWidth) * size_t(chromaHeight) * size_t(bytes);
-    std::vector<uint8_t> wide;
+    static thread_local std::vector<uint8_t> wide;
     std::vector<uint8_t>& scaled = planar && bytes == 1 ? out : wide;
     scaled.resize(luma + 2 * chroma);
-    const double ratioX = double(p.width) / width, ratioY = double(p.height) / height;
-    scalePlane(flat.data(), size_t(p.width) * size_t(bytes), p.width, p.height, scaled.data(), width, height, bytes, top, ratioX, 0.5 * ratioX - 0.5, ratioY, 0.5 * ratioY - 0.5);
-    const double stepX = double(p.chromaWidth) / chromaWidth, stepY = double(p.chromaHeight) / chromaHeight;
-    const double originX = 0.5 * stepX - 0.5, originY = 0.5 * stepY - 0.5;
-    const size_t sourceLuma = size_t(p.width) * size_t(p.height) * size_t(bytes), sourceChroma = size_t(p.chromaWidth) * size_t(p.chromaHeight) * size_t(bytes);
-    for (size_t plane = 0; plane < 2; ++plane) {
-        scalePlane(flat.data() + sourceLuma + plane * sourceChroma, size_t(p.chromaWidth) * size_t(bytes), p.chromaWidth, p.chromaHeight, scaled.data() + luma + plane * chroma, chromaWidth, chromaHeight,
-            bytes, top, stepX, originX, stepY, originY);
-    }
     Picture ready;
     ready.plane[0] = scaled.data();
     ready.plane[1] = scaled.data() + luma;
@@ -212,6 +212,18 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
     ready.chromaHeight = chromaHeight;
     ready.bits = p.bits;
     ready.color = p.color;
+    const auto lumaAcross = tapsFor(p.width, width), lumaDown = tapsFor(p.height, height);
+    const auto chromaAcross = tapsFor(p.chromaWidth, chromaWidth), chromaDown = tapsFor(p.chromaHeight, chromaHeight);
+    const bool direct = layout == PixelLayout::Bgra || layout == PixelLayout::Rgba;
+    inParallel(height, [&](int from, int to) {
+        scaleRows(p, 0, scaled.data(), width, bytes, top, *lumaAcross, *lumaDown, from, to);
+        const int chromaFrom = int(int64_t(from) * chromaHeight / height), chromaTo = int(int64_t(to) * chromaHeight / height);
+        for (int plane = 1; plane <= 2; ++plane) {
+            scaleRows(p, plane, scaled.data() + luma + size_t(plane - 1) * chroma, chromaWidth, bytes, top, *chromaAcross, *chromaDown, chromaFrom, chromaTo);
+        }
+        if (direct) rowsToBGRA(ready, out.data(), size_t(width) * 4, layout == PixelLayout::Rgba, from, to);
+    });
+    if (direct) return true;
     if (!planar) return finish(ready);
     if (bytes == 2) pictureToPlanar(ready, out, true);
     return true;

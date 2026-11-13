@@ -59,3 +59,38 @@ sides, so export speed is the same; the gain is in decoding, seeking and in not 
 10-bit and HDR, interlaced video, more than two audio channels, AAC decoding, MOV writing, Matroska reading, files with several video
 sample descriptions, edit lists with more than one segment, edit lists in fragmented files, negative timestamps when copying into
 Matroska, and fuzz testing of the readers. Players other than Apple's engine (VLC, browsers, Windows) have not been tried yet.
+
+## File tools (`docs/TOOLS.md`)
+
+`tests/suites/70_tools.sh`: 87 checks that need no FFmpeg (fixtures in `tests/fixtures/tools/`, 290 KB) and 63 more against the files the
+app's FFmpeg command lines produce for the same inputs.
+
+| Check | Result |
+|---|---|
+| Trim: packets between the key frame at or before the start and the end | all byte-identical (MP4, Matroska, WebM, transport stream in); length exact to the frame, sound exact to the sample |
+| Trim against `ffmpeg -ss -t -c copy` | same first key frame; every one of our packets is among FFmpeg's; ours ends at the asked time, FFmpeg's 0.07 s later with the picture 0.083 s behind the sound |
+| Extract by copy | every packet identical, also to FFmpeg's copy |
+| Extract to AAC 96 kbit/s and MP3 128 kbit/s | length within 0.03 s, bitrate within 20 %, sound agrees with the source and with FFmpeg's file (correlation above 0.97) |
+| Compress (cut, 160x90, 15 fps; 60 fps; HEVC; VP9; AV1; 10-bit source; variable frame rate source; 30000/1001) | size, frame count, constant frame times, length, bitrate within 35 % on the 2 to 4 second test clips (within 0.2 % on a 60 second 1080p clip), the right source frame in every slot |
+| Compress against the app's FFmpeg command | same frame count and frame times to the millisecond, file size within 30 %, picture quality against the source not below FFmpeg's |
+| Reverse | frame N equals source frame (last - N) at 49 dB or better (55 dB for the variable frame rate clip), every frame shown as long as in the source, sound is the source backwards (correlation 1.0000), also through the scratch file |
+| Reverse against the app's FFmpeg steps | same frame count, length, frame times; pictures agree at 36 dB or better |
+| GIF frames from ImageIO against an independent drawing (five files) | every frame identical to the byte, colour and alpha |
+| GIF videos | sizes, frame times and length follow the delays; colour is the premultiplied drawing (53 dB or better), matte is the alpha (57 dB) |
+| Merge, strip-audio, transport stream to MP4 | every packet kept, also identical to FFmpeg's merge; gap between picture and sound kept to the millisecond |
+| Stop with SIGINT or SIGTERM | exit code 130, no output, `.part` or scratch file |
+| Cut-off and scrambled inputs (56 runs in the suite, 3,120 more by hand) | an error or a file, never a crash or a hang |
+| Every output | opens in AVFoundation; no ffprobe or FFmpeg decode messages |
+
+Speed on a 60 second 1080p H.264 clip (wall time, one run each, another job was running on the machine):
+
+| Job | Ours | FFmpeg, same job |
+|---|---|---|
+| Compress to 720p, 30 fps, 4 Mbit/s, AAC | 5.6 to 6.8 s, 52 MB peak | 4.4 s, 180 MB peak |
+| Compress to HEVC 1080p 5 Mbit/s, sound copied | 8.7 s, 46 MB | 9.0 s, 204 MB |
+| Reverse the whole clip | 13.8 s, 57 MB of process memory plus up to 512 MB of GPU frames | not measured |
+| Reverse with a 64 MB frame budget (30 groups through the scratch file) | 35 s | |
+| Copy every packet into a new MP4 (62 MB) | 0.21 s | |
+| Sound to MP3 | 0.29 s | |
+
+Compress with scaling is slower than FFmpeg because decoding, scaling and encoding run one after the other on one thread here.

@@ -75,6 +75,7 @@ std::unique_ptr<Mp3File> Mp3File::open(const std::string& path, int rate, int ch
     out->lame = lame_init();
     if (!out->lame) return fail("the MP3 encoder did not start");
     lame_set_in_samplerate(out->lame, rate);
+    lame_set_out_samplerate(out->lame, rate);
     lame_set_num_channels(out->lame, channels);
     lame_set_mode(out->lame, channels == 1 ? MONO : JOINT_STEREO);
     lame_set_VBR(out->lame, vbr_off);

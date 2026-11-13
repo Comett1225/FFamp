@@ -483,7 +483,7 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool q
     b.u32(0);
     b.u32(id);
     b.u32(0);
-    b.u32(uint32_t(scaled(t.shown, spec.timescale, movieScale)));
+    b.u32(uint32_t(scaled(t.shown + spec.delay, spec.timescale, movieScale)));
     b.zero(8);
     b.u16(0);
     b.u16(video ? 0 : 1);
@@ -494,10 +494,15 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool q
     b.u32(uint32_t(spec.height) << 16);
     b.close(tkhd);
 
-    if (t.start != 0 || spec.length > 0) {
+    if (t.start != 0 || spec.length > 0 || spec.delay > 0) {
         size_t edts = b.open(fourcc("edts"));
         size_t elst = b.open(fourcc("elst"), 0, 0);
-        b.u32(1);
+        b.u32(spec.delay > 0 ? 2 : 1);
+        if (spec.delay > 0) {
+            b.u32(uint32_t(scaled(spec.delay, spec.timescale, movieScale)));
+            b.u32(0xFFFFFFFFu);
+            b.u32(0x00010000);
+        }
         b.u32(uint32_t(scaled(t.shown, spec.timescale, movieScale)));
         b.u32(uint32_t(t.start));
         b.u32(0x00010000);
@@ -573,7 +578,7 @@ struct Mp4Writer::Impl {
         uint32_t used = 0;
         for (const Out& t : tracks) {
             if (t.samples.empty()) continue;
-            duration = std::max(duration, scaled(t.shown, t.spec.timescale, movieScale));
+            duration = std::max(duration, scaled(t.shown + t.spec.delay, t.spec.timescale, movieScale));
             ++used;
         }
         size_t mvhd = b.open(fourcc("mvhd"), 0, 0);
@@ -626,6 +631,7 @@ int Mp4Writer::add(const TrackSpec& spec) {
         if (out.sourceScale && out.spec.timescale) {
             out.spec.skip = spec.skip * out.spec.timescale / out.sourceScale;
             out.spec.length = spec.length * out.spec.timescale / out.sourceScale;
+            out.spec.delay = spec.delay * out.spec.timescale / out.sourceScale;
         }
     }
     impl->tracks.push_back(std::move(out));

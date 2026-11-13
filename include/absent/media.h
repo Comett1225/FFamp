@@ -106,6 +106,7 @@ struct TrackSpec {
     int bits = 0;
     bool floating = false;
     bool bigEndian = false;
+    int64_t delay = 0;
 };
 
 class Writer {

@@ -74,3 +74,18 @@ list; `Sample.offset` is then free for the reader's use.
   dropped. H.264 samples are marked `sync` on IDR pictures only, HEVC on every IRAP picture. Two fields of one H.264 frame are one sample.
 - MPEG audio layer I uses the codec `.mp1` (layer II `.mp2`, layer III `.mp3`).
 - `Reader::format()` of the transport stream reader is `mpegts`.
+
+## File tools (`include/absent/tools.h`, details in `docs/TOOLS.md`)
+
+- `TrackSpec::delay` (track time scale) is the time before a track starts in the output. `Mp4Writer` writes a leading empty edit,
+  `MkvWriter` adds it to every block time, the Ogg writer ignores it.
+- `VideoDecoder::pts(index)` gives the time stamp of shown frame `index` without decoding.
+- Times given to the tools count from the file's zero: the earliest shown sample of any video or sound track, with `Track.delay`
+  taken into account.
+- `Progress` is `bool(double fraction)`; returning `false` stops the tool, which then returns `false` with the error `cancelled` and
+  leaves no file. Commands print `progress 0.42` lines and exit with 130 when stopped by SIGINT or SIGTERM.
+- Tools write through the writers' `<output>.part` files; anything else they create (`<output>.spill.mp4`) is removed on every path.
+- A stream copy that starts inside a sound track takes run-in packets before the cut (AAC 2, Opus and MP3 4, Vorbis 1) and hides
+  them with `skip`.
+- A source frame without colour labels is taken as BT.709 and not converted; labelled frames are converted to 8-bit BT.709 limited
+  range before encoding (`Scaler` in `src/mac/tools_scale.cpp`).

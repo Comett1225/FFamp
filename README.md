@@ -14,6 +14,8 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 - Frame-exact seeking to any frame.
 - H.264 and HEVC encoding through VideoToolbox, AAC through AudioToolbox, Opus through libopus when it is installed.
 - `amedia`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
+- File tools (`docs/TOOLS.md`): `compress`, `trim`, `extract-audio`, `reverse`, `gif-video`, `merge`, `strip-audio`, `rewrap`, with progress
+  lines and a clean stop; `docs/YTDLP.md` describes the downloader without FFmpeg.
 
 ## Build and test
 

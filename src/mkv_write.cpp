@@ -266,6 +266,7 @@ bool MkvWriter::write(int track, const uint8_t* data, size_t size, int64_t pts, 
     if (track < 0 || track >= int(impl->tracks.size()) || impl->failed) return false;
     Out& t = impl->tracks[track];
     if (!t.spec.timescale) return false;
+    pts += t.spec.delay;
     int64_t time = std::max<int64_t>(0, std::llround(double(pts) * 1000.0 / t.spec.timescale));
     t.decoded += duration;
     t.end = std::max<int64_t>(t.end, std::llround(double(pts + duration) * 1000.0 / t.spec.timescale));
@@ -295,7 +296,7 @@ bool MkvWriter::finish(std::string* error) {
             int64_t extra = t.spec.length > 0 ? t.decoded - t.spec.skip - t.spec.length : 0;
             int64_t discard = extra > 0 ? std::llround(double(extra) * 1e9 / t.spec.timescale) : 0;
             m.block(int(i), t.held.data.data(), t.held.data.size(), t.held.time, true, discard);
-            if (t.spec.length > 0) shown = double(t.spec.length) * 1000.0 / t.spec.timescale;
+            if (t.spec.length > 0) shown = double(t.spec.length + t.spec.delay) * 1000.0 / t.spec.timescale;
         }
         duration = std::max(duration, shown);
     }

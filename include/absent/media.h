@@ -178,6 +178,7 @@ public:
     ~VideoDecoder();
     const char* backend() const;
     uint32_t frames() const;
+    int64_t pts(uint32_t index) const;
     Frame frame(uint32_t index);
     uint64_t run(bool async);
     uint64_t fed() const;

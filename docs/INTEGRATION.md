@@ -111,3 +111,41 @@ Deliberate differences from ffprobe (all checked in `tests/suites/40_probe.sh`):
   `creation_time`, the `displaymatrix` text, `probe_score`, programs and chapters. The app reads none of them.
 - AV1: colour names come from the container only (the sequence header is not parsed). VP9 without a first key frame falls back to
   `vpcC`.
+
+## Frame pipes, speech and camera (stand in for the remaining ffmpeg calls)
+
+`include/absent/capture.h` holds `FrameReader`, `FrameWriter`, `convertSpeech` / `shapeSpeech`, `captureDevices`, `captureAccess` and
+`CaptureSession`. The commands print or read the same raw bytes the app pipes today, so each call site changes its command line only.
+
+| Today in the app | With amedia |
+|---|---|
+| `-ss S -noautorotate -i f -t L -vf fps=R[,scale=W:H] -pix_fmt rgb24 -f rawvideo -` (AI video, matte) | `frames-out f --no-rotate --start S --length L --fps R [--size WxH] --format rgb24` |
+| `-ss S -noautorotate -i f -frames:v N -fps_mode passthrough -pix_fmt yuv420p -f rawvideo -` (frame reader) | `frames-out f --no-rotate --start S --count N --format i420` |
+| `-ss S -noautorotate -i f [-frames:v 1] -vf scale=W:H -pix_fmt rgba -f rawvideo -` (mosh, interpolation) | `frames-out f --no-rotate --start S [--count 1] --size WxH --format rgba`, or one `FrameReader` kept open (`indexAt`, `read`) |
+| `-re [-stream_loop -1] [-ss S] -i f -vf scale=W:H -pix_fmt rgba -f rawvideo -` (export preview, viewer) | `frames-out f [--start S] --size WxH --format rgba --realtime [--loop]` (rotation applied, as FFmpeg does without `-noautorotate`) |
+| `-f rawvideo -pix_fmt rgb24/rgba/gray -s WxH -r R -i - [-i src -map 1:a:0?] [setpts ...] -c:v mpeg4 -q:v 2 -c:a aac -t END out.mp4` | `frames-in out.mp4 --size WxH --fps R --format rgb24/rgba/gray [--start S] [--audio-from src] [--audio-start A --audio-length L] [--limit END]` |
+| `-af aresample,asetrate,aresample,atempo... -ar 44100 -ac 1 -c:a pcm_s16le out.wav` (speech) | `speech in.aiff out.wav --rate 44100 --speed TEMPO --pitch PITCH` |
+| `-f avfoundation -list_devices true -i ""` | `devices` (tab-separated `video|audio`, id, name; two `access` lines first) |
+| avfoundation input to an MJPEG pipe plus an H.264/AAC file | `capture [out.mp4] --video ID [--audio ID] [--preview WxH --preview-fps 15] [--seconds N]`, BGRA preview frames on stdout, `q` on stdin stops |
+
+Things a caller has to know:
+
+- `--start S` on `frames-in` keeps the timing of the app's `setpts` line: the first frame written sits at 0 and frame N (N >= 1) at
+  `S + (N - 1) / R`. The callers keep writing their extra first frame (the copy in AI video, the black one in the matte) as today.
+- `--fps` on `frames-out` follows FFmpeg's `fps` filter and its start rule: each output slot shows the last picture whose time rounds to
+  that slot or earlier, a file with more than one track starts at slot 0 (the first picture repeated until its own slot), a file with
+  one track starts at the first picture's slot. `--length` keeps `round(L * R)` slots, as `-t` does.
+- A start time picks the first picture at or after it (the app passes `pts - 1 us`); times count from the file's own start.
+- Scaling is bicubic with chroma centred between luma columns, which is what FFmpeg's scaler does. RGB comes from our own conversion
+  (bilinear chroma, matrix from the stream or by height when untagged), so RGB differs from FFmpeg's default fast conversion and is
+  close to its `accurate_rnd+full_chroma_int` one. Untagged 720p and larger is read as BT.709 here and as BT.601 by FFmpeg.
+- `frames-in` writes H.264 (or HEVC with `--codec hevc`) at 0.8 bits per pixel per frame unless `--bitrate` is given: 22 Mb/s for 720p30,
+  50 Mb/s for 1080p30. That is the rate at which it measured at least as good as `mpeg4 -q:v 2` on the same planes. Colours are
+  BT.709 limited range and tagged so. An odd width or height is padded by one repeated column or row, because 4:2:0 H.264 and HEVC
+  cannot store odd sizes; the stored size is printed.
+- Sound from `--audio-from` is copied when it is AAC and starts at 0, otherwise decoded and encoded to AAC (mono stays mono, anything
+  else becomes stereo). It ends with the picture or at `--limit`.
+- `speech` output has exactly `round(input_samples / speed)` samples. The app keeps starting the system voice itself.
+- `capture` never asks for access unless `--ask` is given: without it a camera or microphone that is not already authorised is an
+  error. The ids are AVFoundation unique ids (or `default`); `test` is a built-in test pattern with a tone, the stand-in for the app's
+  fake camera. The preview is BGRA at the asked size; without a size it is the camera size, at most 1920 wide.

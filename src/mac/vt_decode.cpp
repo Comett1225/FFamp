@@ -596,6 +596,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
 
 const char* VideoDecoder::backend() const { return impl->backend; }
 uint32_t VideoDecoder::frames() const { return uint32_t(impl->list.size()); }
+int64_t VideoDecoder::pts(uint32_t index) const { return index < impl->list.size() ? impl->track->samples[impl->list[index].first].pts : 0; }
 uint64_t VideoDecoder::fed() const { return impl->fed; }
 uint64_t VideoDecoder::restarts() const { return impl->restarts; }
 

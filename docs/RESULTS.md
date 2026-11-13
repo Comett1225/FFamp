@@ -59,3 +59,55 @@ sides, so export speed is the same; the gain is in decoding, seeking and in not 
 10-bit and HDR, interlaced video, more than two audio channels, AAC decoding, MOV writing, Matroska reading, files with several video
 sample descriptions, edit lists with more than one segment, edit lists in fragmented files, negative timestamps when copying into
 Matroska, and fuzz testing of the readers. Players other than Apple's engine (VLC, browsers, Windows) have not been tried yet.
+
+# Proof round: probe parity, fuzzing, one real project with no FFmpeg
+
+## Probe against ffprobe
+
+`probeJson` now gives ffprobe's values for Matroska and WebM (1/1000 time base, the length the file states, no `und` language, `eng` when
+none is stored, frame rate from the presentation times), Ogg Opus (length counts the pre-skip, as ffprobe does), WAV and ADTS (no start
+time), MP3 (1/14112000 time base, start time = encoder delay) and PCM in MOV/AIFF (`nb_frames` counts sample frames). 47 committed
+reader, audio and video fixtures are now compared with ffprobe field by field next to the 26 probe fixtures.
+
+Known differences, kept on purpose: ffprobe reads only the first link of a chained Ogg file and puts Ogg tags on the stream; it estimates
+the length of ADTS and VBRI files from the bit rate where ours counts the packets; it gives no usable length for IVF; Apple-encoded and
+HE-AAC M4A files get a start time and a longer length from ffprobe because it does not apply their edit list the way a player does; 8-bit
+AIFF is named `pcm_s8` by ffprobe and `pcm_u8` here.
+
+## Fuzzing
+
+Six targets in `tests/fuzz/` (open, packets, probe, audio, video, resample), built with UBSan (plus float-cast checks), hardened libc++ and
+coverage instrumentation. The compiler on the test machine ships no libFuzzer runtime, so `tests/fuzz/driver.cpp` is a small
+coverage-guided engine with the same entry point and option names; `build.sh` uses the compiler's own engine when it has one. The driver
+saves the input on a crash, on a 25 s hang and when resident memory passes a limit. `GUARD=1` runs a target under guard malloc.
+
+| Found | Where | Fix |
+|---|---|---|
+| Signed overflow in fragment times (undefined behaviour) | `src/mp4_read.cpp`, and the same pattern in other timestamp sums | the library is compiled with `-fwrapv`: timestamp arithmetic on hostile values wraps instead of being undefined |
+| Infinite bit rate converted to an integer (undefined behaviour) | `src/probe.cpp` | every float-to-integer conversion in the probe is clamped |
+| A 60 KB fragmented MP4 made the reader allocate over 3 GB: `trun` boxes without per-sample fields may claim 16 million samples each | `src/mp4_read.cpp` | all fragments of a file together may not claim more samples than the file has bytes |
+| The same for a fixed sample size with a huge sample count | `src/mp4_read.cpp` | the count is limited to file size / sample size |
+
+The inputs are kept in `tests/fixtures/fuzz/` and replayed by `tests/suites/85_fuzz.sh`, which also pushes every committed fixture
+through every target and runs a short burst of mutated inputs per target.
+
+## One real project, imported and exported with no FFmpeg
+
+`experiments/absentmotion/run_zero.sh` runs the desktop app's own import and export of one real project (13.5 s, 1080 x 1080, 60 fps,
+three H.264 clips) with two stand-in programs in place of `ffmpeg` and `ffprobe`, a second engine library that decodes the clips with
+absent-media, and every real FFmpeg program and library on the machine denied by a sandbox for the whole process tree.
+
+| Check | Result |
+|---|---|
+| FFmpeg command lines the app runs for one import and export | 10 calls of 9 kinds; all answered by the stand-ins, none refused |
+| Real FFmpeg programs and libraries tried from inside the sandbox | 36 of 36 blocked |
+| Frames, length | 811 and 13.5167 s on both paths |
+| Checksum of every rendered frame, FFmpeg decoder against absent-media | 811 of 811 identical |
+| The app's audio mix (clip sound decoded by FFmpeg against absent-media) | same length to the sample (596,055); 99.6 % of sample values identical, largest difference 2 of 32,768, 110 dB |
+| The clip's sound alone, with the app's two exact decode commands | same length to the sample, 136 dB |
+| The app's own check of the exported file | passed |
+| Export time, middle of three after a warm-up | 3,017 ms against 3,484 ms with FFmpeg (13 % less) |
+| Exported file in ffprobe, in a full FFmpeg decode and in AVFoundation | no messages, all frames and samples read |
+
+Limits: the stand-ins are separate programs because the app was not changed; they cover only the command lines of this H.264 + AAC MP4
+export; one project on one machine.

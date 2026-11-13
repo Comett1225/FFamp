@@ -109,7 +109,7 @@ struct Fuzzer {
     std::vector<Input> corpus;
     size_t maxLength = 400000;
     unsigned timeout = 25;
-    uint64_t memoryLimit = 3ull << 30;
+    uint64_t memoryLimit = 1ull << 30;
     uint64_t runs = 0;
     uint32_t covered = 0;
 

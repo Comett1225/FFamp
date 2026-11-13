@@ -440,3 +440,62 @@ Test counts: `48_wma.sh` 84 checks with FFmpeg (17 more on the sample files), 27
 Not done: WMA Pro, Lossless and Voice (steps C, F and G); the AVI stream header's time base and length in probe (FFamp gives the
 length of the data and a sample-rate time base); reading only the superframe headers at open (it reads whole packets, which costs
 more on very large WMV files with a cold cache).
+
+
+# Windows Media round 3: Windows Media Audio 9 Professional
+
+`src/wmapro_decode.cpp` decodes Windows Media Audio 9 Professional (`0x0162`) from ASF, AVI and Matroska behind `AudioDecoder`, on the
+framework of round 2 (bit reader, VLC tables, inverse MDCT, sine windows, the run-level coder). It is based on FFmpeg's decoder
+(`docs/NOTICE.md`), rewritten in FFamp's style. Rules in `docs/CONVENTIONS.md`.
+
+FFmpeg cannot encode this codec, so the tests use two kinds of input: the Microsoft-made and FATE sample files (not committed, run when
+`WINMEDIA_SAMPLES` names their folder), and 10 small fixtures in `tests/fixtures/wmapro` (200 KB) written by `make.py`, a bitstream
+writer of FFamp's own that reads the code tables from the decoder's source and covers what no public sample has: 1, 2, 3, 4, 5, 6, 7
+and 8 channels (masks mono, stereo, 3.0, quad, 5.0, 5.1(side), 6.1, 7.1 and none), 16, 20 and 24 bits, 32 to 96 kHz, frames of 2,048
+and 4,096 samples, up to 16 sub-frames with a different layout per channel, M/S pairs, default and coded rotation matrices, per-band
+transform switches, a silent LFE group, scale factors resampled and run-level coded, vector, escaped and run-level coefficients, large
+values up to 24 bits, fill bits, escaped quantiser steps, dynamic range bytes, start and end trims, frames split across packets, in
+ASF (remuxed by FFmpeg), AVI and Matroska. Judge: FFmpeg 9.0.2's `wmapro` decoder, float output.
+
+| Check | Result |
+|---|---|
+| 10 fixtures, 1 to 8 channels | 134.9 to 138.4 dB; lengths equal to the sample; checksums for the runs without FFmpeg |
+| `Classical_44_16_6_256000_0_20.wma` (5.1, 44.1 kHz, 256 kbit/s, frames without length fields, 190 s) | 137.4 dB, lengths equal |
+| `Classical_96_24_2_Q75_2_3.wma` (stereo, 96 kHz, 24 bits, quality-based, 1,024-sample frames, 190 s) | 138.3 dB |
+| `Robotica_720.wmv`, `Robotica_1080.wmv` (5.1, 48 kHz, inside WMV9 video files) | 137.4 dB |
+| FATE `Beethovens_9th-1_small.wma`, `latin_192_mulitchannel_cut.wma` (stereo; 5.1 cut off) | 137.1 and 138.7 dB |
+| `classical_22_16_2_16000_v3c_0_exclusive_0_29.wma` (22.05 kHz, 16 kbit/s) | FFmpeg and FFamp both give silence (bit-exact, no error); probably a low-bit-rate mode FFmpeg does not know (not confirmed) |
+| Random reads (single frames, odd chunk sizes, reads before the start and past the end) on every file | identical to the straight decode |
+| 5.1 and 7.1 mixed to stereo and mono by `ChannelMix` | 144 dB against the expected levels |
+| Probe | `wmapro`, layout named from the mask (`quad`, `5.1(side)`, `7.1`), other fields as for the other ASF streams |
+
+Why not bit-exact: as in round 2, the FFT under the inverse MDCT differs from FFmpeg's; the largest difference is 4.5e-8 to 3.6e-7 of
+full scale. Accelerate's FFT was tried: it gives the same speed here, 2 dB less and different results from run to run (its code path
+depends on where the buffers lie), so the portable FFT stays.
+
+Timing: FFmpeg drops the first decoded frame; FFamp decodes it and plays it as silence, so every later sample is at the same place.
+A start trim in that first frame is spent on the dropped frame in FFmpeg and FFamp alike; later trims cut their frame in both.
+
+Frame counts and seeking: `AudioDecoder` needs the exact number of samples each packet gives. Frames without length fields can only be
+found by parsing their coefficients, so `counts` parses the whole stream once without the transforms. A frame's parse does not depend
+on earlier frames, so the packets are split into runs parsed on all cores, each run started one packet early; this takes 0.013 s for
+the 190-second 5.1 file (0.07 s on one core). Jumps restart a few packets early (enough to cover two frames plus the largest packet)
+and need no state marks; all random reads equal the straight decode.
+
+What the tests found:
+
+- FFmpeg's LFE cut-off (`subwoofer_cutoffs`) has no effect: the coefficients above it are cleared and then overwritten by the
+  inverse quantisation. FFamp leaves it out, with the same output.
+- The FATE `latin_192` file has a silent channel, which fooled the test's lag search (it reported a shift of -4,000); the check now
+  relies on the SNR at zero shift.
+
+Speed, best of three, whole files through the command line (`ffamp adecode` against `ffmpeg -threads 1 ... -f f32le`):
+
+| File | FFamp | FFmpeg, one thread | FFamp / FFmpeg |
+|---|---|---|---|
+| `Classical_44_16_6_256000_0_20.wma`, 5.1, 190 s | 0.238 s | 0.210 s | 1.14 |
+| `Classical_96_24_2_Q75_2_3.wma`, 96 kHz 24 bits, 190 s | 0.161 s | 0.185 s | 0.87 |
+| `Robotica_1080.wmv`, 5.1, 21 s | 0.042 s | 0.053 s | 0.79 |
+
+FFamp's whole-file time includes the counting parse (on all cores) and the parse inside the decode; FFmpeg parses once. The suite
+checks these three files against the 1.5 limit when the samples are there.

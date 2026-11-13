@@ -11,20 +11,25 @@ public:
     BitReader(const uint8_t* data, size_t bytes) : data(data), size(bytes), end(int64_t(bytes) * 8) {}
     BitReader(const uint8_t* data, size_t bytes, int64_t bits) : data(data), size(bytes), end(bits) {}
 
-    uint32_t peek(int n) const { return n ? uint32_t(window() >> (64 - n)) : 0; }
-    uint32_t read(int n) {
+    [[gnu::always_inline]] uint32_t peek(int n) const { return n ? uint32_t(window() >> (64 - n)) : 0; }
+    [[gnu::always_inline]] uint32_t read(int n) {
         uint32_t value = peek(n);
         at += n;
         return value;
     }
-    bool bit() { return read(1) != 0; }
+    [[gnu::always_inline]] bool bit() {
+        const uint64_t byte = uint64_t(at >> 3);
+        const bool value = byte < size && ((data[byte] >> (7 - (at & 7))) & 1);
+        ++at;
+        return value;
+    }
     void skip(int64_t n) { at += n; }
     void align() { at = (at + 7) & ~int64_t(7); }
     int64_t position() const { return at; }
     int64_t left() const { return end - at; }
 
 private:
-    uint64_t window() const {
+    [[gnu::always_inline]] uint64_t window() const {
         const size_t byte = size_t(at >> 3);
         uint64_t value = 0;
         if (byte < size && size - byte >= 8) {

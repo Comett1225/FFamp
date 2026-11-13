@@ -143,9 +143,9 @@ list; `Sample.offset` is then free for the reader's use.
   Language List entry as stored (RFC 1766, `en-us`); ffprobe shows ISO 639-2 (`eng`).
 - `statedSeconds()` is the play duration minus the preroll, except for broadcast files and files whose data object runs past the end.
 - Probe names `wmav1`, `wmav2`, `wmapro`, `wmalossless`, `wmavoice`, `wmv1`, `wmv2`, `wmv3`, `vc1`, `msmpeg4v1`, `msmpeg4v2`,
-  `msmpeg4v3`, from ASF, AVI and (sound) Matroska. Windows Media Audio 1 and 2 decode (next sections); until their codec rounds land,
-  `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9 Professional) is not decoded yet` and `VideoDecoder::open`
-  with `this video codec (Windows Media Video 9) is not decoded yet` (each with its own name).
+  `msmpeg4v3`, from ASF, AVI and (sound) Matroska. Windows Media Audio 1, 2 and 9 Professional decode (next sections); until their
+  codec rounds land, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9 Lossless) is not decoded yet` and
+  `VideoDecoder::open` with `this video codec (Windows Media Video 9) is not decoded yet` (each with its own name).
 - H.263 and Motion JPEG in ASF get their FFamp codes (`h263`, `jpeg`) and decode. Other sound tags keep a track named by the tag in
   hex (`0130`), other video fourccs a track named by the fourcc.
 
@@ -243,3 +243,26 @@ list; `Sample.offset` is then free for the reader's use.
 - On purpose unlike FFmpeg: a superframe whose header ends no frame (count 0) is added to the reservoir by its length in bytes
   (FFmpeg adds eight times the length and loses the frame that continues there), and the first superframe after a restart that ends
   no frame keeps its tail for the next one. Neither occurs in the sample files.
+
+## Windows Media Audio 9 Professional (`wmap`, `src/wmapro_decode.cpp`)
+
+- Based on FFmpeg's decoder (`docs/NOTICE.md`) and checked against it: float output, 1 to 8 channels in the order of the channel mask
+  (or the stated count when the mask is 0), any bits per sample from 1 to 32 (16, 20 and 24 tested), frames of 128 to 8,192 samples,
+  up to 32 sub-frames per channel with their own layout per channel, M/S and multichannel transforms (default matrices up to 6
+  channels, coded rotations for any group), per-band transform switches, scale factors resampled between sub-frame sizes, vector and
+  run-level coefficients, frames with or without length fields, the bit reservoir across packets, dynamic range bytes (read, not
+  applied, as in FFmpeg), start and end trims. Each container packet is cut into `block_align` pieces; FFmpeg's sequence-number check
+  and its handling of lost pieces are kept.
+- Channel order is the mask's bit order, as FFmpeg gives it; 6 channels with mask 0x3F are FL FR FC LFE BL BR, 0x60F FL FR FC LFE SL
+  SR, 8 channels with 0x63F FL FR FC LFE BL BR SL SR, so the mixer and the WAV writer take them as they are. Probe names the layout
+  from the mask (`quad`, `5.1(side)`, `7.1`).
+- Start: FFmpeg drops the first decoded frame; FFamp decodes it and hides it (`skip` = one frame). A start trim in that frame does
+  nothing (FFmpeg applies it to the dropped frame); later trims cut the frame they are in. No frame is added at the end (FFmpeg's
+  decoder has no end flush).
+- Frame counts: `counts` parses every packet once without the transforms, on all cores: frames are parsed independently of earlier
+  frames, so the packets are split into runs, each run started one packet early by its own copy of the decoder. The count is what
+  the straight decode gives (trims included).
+- Jumps restart three packets early and at least two frames plus the largest packet's frame count early (the first packet after a
+  restart loses the frame that started before it, and the first decoded frame lacks its overlap); no state marks are needed.
+- On purpose unlike FFmpeg: a piece that would decode more than 16 million samples is cut off (a guard against crafted streams);
+  an unknown scale-factor code is an error instead of a read before the table.

@@ -48,6 +48,11 @@ bool Vlc::build(int rootBits, size_t count, const uint8_t* lengths, const uint32
 }
 
 bool Vlc::buildInOrder(int rootBits, size_t count, const uint8_t* lengths, const uint8_t* symbols, int offset) {
+    std::vector<uint16_t> wide(symbols, symbols + count);
+    return buildInOrder(rootBits, count, lengths, wide.data(), offset);
+}
+
+bool Vlc::buildInOrder(int rootBits, size_t count, const uint8_t* lengths, const uint16_t* symbols, int offset) {
     std::vector<uint32_t> codes(count);
     std::vector<int32_t> values(count);
     uint64_t code = 0;

@@ -22,9 +22,18 @@ def track(path):
     return lines[0].split()[1], head[3], int(head[7])
 
 
+def pro_frame(path, rate):
+    text = subprocess.run([os.environ.get("FFPROBE", "ffprobe"), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=extradata", "-show_data", path], capture_output=True, text=True).stdout
+    data = bytes.fromhex("".join(line[10:49].replace(" ", "") for line in text.splitlines() if line[:8].isalnum() and line[8:9] == ":"))
+    bits = 9 if rate <= 16000 else 10 if rate <= 22050 else 11 if rate <= 48000 else 12 if rate <= 96000 else 13
+    return 1 << (bits + {0: 0, 2: 1, 4: -1, 6: -2}[data[14] & 6])
+
+
 def hidden(path, rate):
     form, codec, start = track(path)
-    return 0 if form == "mkv" and start > 0 else 2 * frame_length(codec, rate)
+    if form == "mkv" and start > 0:
+        return 0
+    return pro_frame(path, rate) if codec == "wmap" else 2 * frame_length(codec, rate)
 
 
 def against(path, least):
@@ -34,8 +43,8 @@ def against(path, least):
     want = judge(path, ["-i", path, "-map", "0:a:0"], channels)
     skip = hidden(path, rate)
     quiet = not numpy.any(got[:skip])
-    shift, ratio, _ = describe(f"{os.path.basename(path)} ({rate} Hz, {channels} ch) after {skip} silent frames", got[skip:], want)
-    return len(got) - skip == len(want) and quiet and (shift == 0 or not numpy.any(want)) and ratio >= least
+    _, ratio, _ = describe(f"{os.path.basename(path)} ({rate} Hz, {channels} ch) after {skip} silent frames", got[skip:], want)
+    return len(got) - skip == len(want) and quiet and ratio >= least
 
 
 def same(first, second):

@@ -2,6 +2,7 @@
 #include "absent/media.h"
 #include "bytes.h"
 #include "nal.h"
+#include "read_common.h"
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -475,6 +476,22 @@ const char* layoutName(int channels) {
     return channels >= 1 && channels <= 8 ? names[channels] : "";
 }
 
+const char* maskName(uint32_t mask) {
+    static const std::map<uint32_t, const char*> names = {{0x4, "mono"}, {0x3, "stereo"}, {0xB, "2.1"}, {0x7, "3.0"}, {0x103, "3.0(back)"},
+        {0x107, "4.0"}, {0x33, "quad"}, {0x603, "quad(side)"}, {0xF, "3.1"}, {0x37, "5.0"}, {0x607, "5.0(side)"}, {0x10F, "4.1"}, {0x3F, "5.1"},
+        {0x60F, "5.1(side)"}, {0x707, "6.0"}, {0x137, "hexagonal"}, {0x70F, "6.1"}, {0x13F, "6.1(back)"}, {0x637, "7.0"}, {0x63F, "7.1"},
+        {0xFF, "7.1(wide)"}, {0x6CF, "7.1(wide-side)"}, {0x737, "octagonal"}};
+    auto found = names.find(mask);
+    return found == names.end() ? nullptr : found->second;
+}
+
+uint32_t codecMask(const Track& t) {
+    if (t.codec != fourcc("wmap") || t.configType != fourcc("wfex") || t.config.size() < 18) return 0;
+    size_t at = 18;
+    if (le16(t.config.data()) == 0xFFFE) at += 22;
+    return t.config.size() >= at + 6 ? le32(t.config.data() + at + 2) : 0;
+}
+
 int64_t whole(double value) {
     if (!(value == value)) return 0;
     return value >= 9.2e18 ? INT64_MAX : value <= -9.2e18 ? INT64_MIN : int64_t(std::llround(value));
@@ -624,7 +641,9 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
             j.string("sample_rate", std::to_string(t.sampleRate));
             j.number("channels", t.channels);
             bool dolby = t.codec == fourcc("ac-3") || t.codec == fourcc("ec-3");
-            if (*layoutName(t.channels)) j.string("channel_layout", dolby && t.channels == 6 ? "5.1(side)" : layoutName(t.channels));
+            const char* named = maskName(codecMask(t));
+            if (named) j.string("channel_layout", named);
+            else if (*layoutName(t.channels)) j.string("channel_layout", dolby && t.channels == 6 ? "5.1(side)" : layoutName(t.channels));
         }
         char id[32];
         snprintf(id, sizeof id, "0x%x", t.id);

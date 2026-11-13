@@ -309,6 +309,8 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
     a.track = &track;
     if (track.codec == fourcc("wma1") || track.codec == fourcc("wma2")) {
         a.codec = openWmaAudio(track, error);
+    } else if (track.codec == fourcc("wmap")) {
+        a.codec = openWmaProAudio(track, error);
     } else if (const char* name = windowsMediaName(track.codec)) {
         if (error) *error = std::string("this sound codec (") + name + ") is not decoded yet";
         return nullptr;

@@ -42,6 +42,7 @@ std::unique_ptr<Reader> Reader::open(const std::string& path, std::string* error
     uint8_t head[400] = {};
     size_t n = fread(head, 1, sizeof head, file);
     fclose(file);
+    if (n >= 4 && memcmp(head, "DKIF", 4) == 0) return openIvf(path, error);
     switch (sniff(head, n)) {
         case Sniffed::Mp4: return Mp4Reader::open(path, error);
         case Sniffed::Matroska: return openMatroska(path, error);

@@ -1,4 +1,5 @@
 #include "absent/media.h"
+#include "soft_video.h"
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>
 #include <VideoToolbox/VideoToolbox.h>
@@ -49,6 +50,46 @@ struct VideoEncoder::Impl {
     std::deque<Packet> packets;
     std::vector<uint8_t> config;
     bool failed = false;
+    std::unique_ptr<SoftEncoder> soft;
+    std::vector<uint8_t> planar;
+    const char* backend = "videotoolbox";
+
+    PacketSink keep() {
+        return [this](Packet&& packet) {
+            std::lock_guard<std::mutex> hold(lock);
+            packets.push_back(std::move(packet));
+        };
+    }
+
+    bool softPlanar(const uint8_t* data, int64_t pts, int64_t duration) {
+        Picture p;
+        p.width = spec.width;
+        p.height = spec.height;
+        p.chromaWidth = (spec.width + 1) / 2;
+        p.chromaHeight = (spec.height + 1) / 2;
+        p.plane[0] = data;
+        p.plane[1] = data + size_t(p.width) * size_t(p.height);
+        p.plane[2] = p.plane[1] + size_t(p.chromaWidth) * size_t(p.chromaHeight);
+        p.stride[0] = size_t(p.width);
+        p.stride[1] = p.stride[2] = size_t(p.chromaWidth);
+        return soft->encode(p, pts, duration, keep());
+    }
+
+    bool softBuffer(CVPixelBufferRef buffer, int64_t pts, int64_t duration) {
+        if (int(CVPixelBufferGetWidth(buffer)) != spec.width || int(CVPixelBufferGetHeight(buffer)) != spec.height) return false;
+        if (CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA) {
+            if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return false;
+            planar.resize(size_t(spec.width) * size_t(spec.height) + 2 * size_t((spec.width + 1) / 2) * size_t((spec.height + 1) / 2));
+            bgraToI420(static_cast<const uint8_t*>(CVPixelBufferGetBaseAddress(buffer)), CVPixelBufferGetBytesPerRow(buffer), spec.width, spec.height, planar.data());
+            CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
+            return softPlanar(planar.data(), pts, duration);
+        }
+        bool fits = withPixelBuffer(buffer, [&](const Picture& p) {
+            pictureToI420(p, planar);
+            return true;
+        });
+        return fits && softPlanar(planar.data(), pts, duration);
+    }
 
     ~Impl() {
         if (session) {
@@ -109,10 +150,20 @@ std::unique_ptr<VideoEncoder> VideoEncoder::open(const EncodeSpec& spec, std::st
         if (error) *error = text;
         return nullptr;
     };
-    if (spec.width <= 0 || spec.height <= 0 || !spec.timescale) return fail("bad encoder settings");
+    if (spec.width <= 0 || spec.height <= 0 || spec.width > 16384 || spec.height > 16384 || !spec.timescale) return fail("bad encoder settings");
     std::unique_ptr<VideoEncoder> encoder(new VideoEncoder);
     Impl& e = *encoder->impl;
     e.spec = spec;
+    if (!spec.codec) e.spec.codec = spec.hevc ? fourcc("hvc1") : fourcc("avc1");
+    e.spec.hevc = e.spec.codec == fourcc("hvc1") || e.spec.codec == fourcc("hev1");
+    if (e.spec.codec == fourcc("av01") || e.spec.codec == fourcc("vp09")) {
+        e.soft = e.spec.codec == fourcc("av01") ? openSvtAv1(e.spec, error) : openVpxEncoder(e.spec, error);
+        if (!e.soft) return nullptr;
+        e.backend = e.soft->name();
+        e.config = e.soft->config();
+        return encoder;
+    }
+    if (!e.spec.hevc && e.spec.codec != fourcc("avc1")) return fail("video codec not supported by this encoder");
     CFMutableDictionaryRef source = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     number(source, kCVPixelBufferPixelFormatTypeKey, spec.bgra ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
     number(source, kCVPixelBufferWidthKey, spec.width);
@@ -120,12 +171,12 @@ std::unique_ptr<VideoEncoder> VideoEncoder::open(const EncodeSpec& spec, std::st
     CFMutableDictionaryRef surface = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(source, kCVPixelBufferIOSurfacePropertiesKey, surface);
     CFRelease(surface);
-    OSStatus status = VTCompressionSessionCreate(nullptr, spec.width, spec.height, spec.hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264,
+    OSStatus status = VTCompressionSessionCreate(nullptr, spec.width, spec.height, e.spec.hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264,
         nullptr, source, nullptr, Impl::output, &e, &e.session);
     CFRelease(source);
     if (status != noErr) return fail("the system video encoder is not available for this size or codec");
     VTSessionSetProperty(e.session, kVTCompressionPropertyKey_RealTime, kCFBooleanFalse);
-    VTSessionSetProperty(e.session, kVTCompressionPropertyKey_ProfileLevel, spec.hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel);
+    VTSessionSetProperty(e.session, kVTCompressionPropertyKey_ProfileLevel, e.spec.hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel);
     VTSessionSetProperty(e.session, kVTCompressionPropertyKey_AllowFrameReordering, spec.reorder ? kCFBooleanTrue : kCFBooleanFalse);
     property(e.session, kVTCompressionPropertyKey_AverageBitRate, spec.bitrate);
     property(e.session, kVTCompressionPropertyKey_MaxKeyFrameInterval, spec.keyInterval);
@@ -139,6 +190,7 @@ std::unique_ptr<VideoEncoder> VideoEncoder::open(const EncodeSpec& spec, std::st
 
 bool VideoEncoder::encodeI420(const uint8_t* data, int64_t pts, int64_t duration) {
     Impl& e = *impl;
+    if (e.soft) return !e.spec.bgra && e.softPlanar(data, pts, duration);
     CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(e.session);
     CVPixelBufferRef buffer = nullptr;
     if (e.spec.bgra || !pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
@@ -167,6 +219,11 @@ bool VideoEncoder::encodeI420(const uint8_t* data, int64_t pts, int64_t duration
 
 bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration, bool redFirst) {
     Impl& e = *impl;
+    if (e.soft) {
+        e.planar.resize(size_t(e.spec.width) * size_t(e.spec.height) + 2 * size_t((e.spec.width + 1) / 2) * size_t((e.spec.height + 1) / 2));
+        bgraToI420(data, size_t(e.spec.width) * 4, e.spec.width, e.spec.height, e.planar.data(), redFirst);
+        return e.softPlanar(e.planar.data(), pts, duration);
+    }
     CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(e.session);
     CVPixelBufferRef buffer = nullptr;
     if (!e.spec.bgra || !pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
@@ -193,12 +250,26 @@ bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration
     return ok;
 }
 
-bool VideoEncoder::encode(const Frame& frame, int64_t pts, int64_t duration) {
-    auto buffer = static_cast<CVPixelBufferRef>(frame.native.get());
-    return buffer && impl->submit(buffer, pts, duration);
+bool VideoEncoder::encode(const Frame& frame, int64_t pts, int64_t duration) { return encodePixelBuffer(frame.native.get(), pts, duration); }
+
+bool VideoEncoder::encodePixelBuffer(void* pixelBuffer, int64_t pts, int64_t duration) {
+    auto buffer = static_cast<CVPixelBufferRef>(pixelBuffer);
+    if (!buffer) return false;
+    return impl->soft ? impl->softBuffer(buffer, pts, duration) : impl->submit(buffer, pts, duration);
 }
 
+bool VideoEncoder::encodeSurface(void* surface, int64_t pts, int64_t duration) {
+    CVPixelBufferRef buffer = nullptr;
+    if (!surface || CVPixelBufferCreateWithIOSurface(nullptr, static_cast<IOSurfaceRef>(surface), nullptr, &buffer) != kCVReturnSuccess) return false;
+    bool ok = encodePixelBuffer(buffer, pts, duration);
+    CFRelease(buffer);
+    return ok;
+}
+
+const char* VideoEncoder::backend() const { return impl->backend; }
+
 bool VideoEncoder::finish() {
+    if (impl->soft) return impl->soft->finish(impl->keep());
     OSStatus status = VTCompressionSessionCompleteFrames(impl->session, kCMTimeInvalid);
     std::lock_guard<std::mutex> hold(impl->lock);
     return status == noErr && !impl->failed;
@@ -212,7 +283,7 @@ bool VideoEncoder::take(Packet& out) {
     return true;
 }
 
-uint32_t VideoEncoder::configType() const { return impl->spec.hevc ? fourcc("hvcC") : fourcc("avcC"); }
+uint32_t VideoEncoder::configType() const { return impl->soft ? impl->soft->configType() : impl->spec.hevc ? fourcc("hvcC") : fourcc("avcC"); }
 
 std::vector<uint8_t> VideoEncoder::config() const {
     std::lock_guard<std::mutex> hold(impl->lock);

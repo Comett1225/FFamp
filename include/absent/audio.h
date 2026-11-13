@@ -32,6 +32,8 @@ private:
     std::unique_ptr<Impl> impl;
 };
 
+double mixPeak(int inChannels, int outChannels);
+
 class PcmReader {
 public:
     static std::unique_ptr<PcmReader> open(const std::string& path, int rate, int channels, std::string* error = nullptr);

@@ -1,6 +1,7 @@
 #include "read_common.h"
 #include "readers.h"
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <map>
 
@@ -14,16 +15,15 @@ struct Piece {
 };
 
 uint32_t pageChecksum(const uint8_t* p, size_t n) {
-    static uint32_t table[256];
-    static bool ready = false;
-    if (!ready) {
+    static const std::array<uint32_t, 256> table = [] {
+        std::array<uint32_t, 256> filled{};
         for (uint32_t i = 0; i < 256; ++i) {
             uint32_t c = i << 24;
             for (int k = 0; k < 8; ++k) c = (c << 1) ^ (c & 0x80000000u ? 0x04C11DB7u : 0);
-            table[i] = c;
+            filled[i] = c;
         }
-        ready = true;
-    }
+        return filled;
+    }();
     uint32_t c = 0;
     for (size_t i = 0; i < n; ++i) {
         uint8_t byte = i >= 22 && i < 26 ? 0 : p[i];
@@ -290,8 +290,8 @@ std::unique_ptr<Reader> openOgg(const std::string& path, std::string* error) {
             time -= shift;
             shift = 0;
         }
-        int64_t end = pageEnds.back().granule + shift;
-        if (end > track.mediaStart && end < time) track.mediaEnd = end;
+        const __int128 end = __int128(pageEnds.back().granule) + shift;
+        if (end >= track.mediaStart && end < time) track.mediaEnd = int64_t(end);
     }
     indexTrack(track);
     reader->list.push_back(std::move(track));

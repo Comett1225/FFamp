@@ -108,7 +108,7 @@ bool parseAacConfig(View specific, AacConfig& out) {
         core = objectType(b);
         if (core == 22) b.take(4);
     }
-    if (!b.ok || out.rate <= 0) return false;
+    if (!b.ok || out.rate <= 0 || out.outputRate <= 0) return false;
     bool general = core == 1 || core == 2 || core == 3 || core == 4 || core == 6 || core == 7 || core == 17 || (core >= 19 && core <= 23);
     if (general) {
         if (b.take(1)) out.frameLength = 960;

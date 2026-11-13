@@ -37,6 +37,7 @@ public:
     int64_t decoded = 0;
     int64_t pageStart = 0;
     int64_t written = 0;
+    bool trimmed = false;
 
     ~OggWriter() override {
         if (file) {
@@ -62,6 +63,7 @@ public:
         if (track != 0) return;
         spec.skip = skip;
         spec.length = length;
+        trimmed = true;
     }
 
     int64_t ticks(int64_t value) const { return spec.timescale ? value * int64_t(kOpusRate) / int64_t(spec.timescale) : 0; }
@@ -150,7 +152,7 @@ public:
         if (!file || failed) return fail("writing the output file failed");
         if (!started) return fail("nothing was written");
         int64_t end = decoded;
-        if (spec.length > 0) end = std::clamp<int64_t>(ticks(spec.skip) + ticks(spec.length), written, decoded);
+        if (trimmed || spec.length > 0) end = std::clamp<int64_t>(ticks(spec.skip) + ticks(spec.length), written, decoded);
         page(end, 4);
         if (failed) return fail("writing the output file failed");
         bool ok = fclose(file) == 0;

@@ -99,7 +99,7 @@ void riff(Source& source, Layout& w, Tags& tags) {
         } else if (id == fourcc("data") && !w.located) {
             w.dataAt = body;
             w.dataSize = size == 0xFFFFFFFF && wideData ? wideData : size;
-            if (size == 0xFFFFFFFF || size == 0 || w.dataSize > left) w.dataSize = left;
+            if ((size == 0xFFFFFFFF && !wideData) || size == 0 || w.dataSize > left) w.dataSize = left;
             w.located = true;
             size = w.dataSize;
         } else if (id == fourcc("LIST") && size >= 4 && left >= size) {
@@ -141,7 +141,6 @@ void aiff(Source& source, bool compressed, Layout& w, Tags& tags, bool& flip) {
             w.rate = extended(c + 8);
             w.bytes = (bits + 7) / 8;
             w.described = true;
-            flip = w.bytes == 1;
             uint32_t kind = compressed && have >= 22 ? be32(c + 18) : fourcc("NONE");
             if (kind == fourcc("sowt")) {
                 w.bigEndian = false;
@@ -155,11 +154,10 @@ void aiff(Source& source, bool compressed, Layout& w, Tags& tags, bool& flip) {
                 w.bytes = 3;
             } else if (kind == fourcc("in32")) {
                 w.bytes = 4;
-            } else if (kind == fourcc("raw ")) {
-                flip = false;
-            } else if (kind != fourcc("NONE") && kind != fourcc("twos")) {
+            } else if (kind != fourcc("raw ") && kind != fourcc("NONE") && kind != fourcc("twos")) {
                 w.refused = "this AIFF file holds compressed sound, only PCM is supported";
             }
+            flip = w.bytes == 1 && kind != fourcc("raw ");
         } else if (id == fourcc("SSND") && left >= 8 && !w.located) {
             const uint8_t* d = source.view(body, 8);
             if (!d) break;

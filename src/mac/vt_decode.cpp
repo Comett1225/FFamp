@@ -439,8 +439,12 @@ struct VideoDecoder::Impl {
     }
 
     bool feed(uint32_t index, bool async) {
-        if (soft) return feedSoft(index);
         const Sample& s = track->samples[index];
+        if (!s.size) {
+            ++fed;
+            return true;
+        }
+        if (soft) return feedSoft(index);
         CMBlockBufferRef block = nullptr;
         if (CMBlockBufferCreateWithMemoryBlock(nullptr, nullptr, s.size, nullptr, nullptr, 0, s.size, kCMBlockBufferAssureMemoryNowFlag, &block) != noErr) return false;
         char* bytes = nullptr;
@@ -496,7 +500,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         if (error) *error = text;
         return nullptr;
     };
-    if (track.samples.empty() || !track.timescale || track.width <= 0 || track.height <= 0) return fail("track is empty");
+    if (track.samples.empty() || !track.timescale || track.timescale > uint32_t(INT32_MAX) || track.width <= 0 || track.height <= 0) return fail("track is empty");
     const uint32_t codec = track.codec;
     const bool vp9 = codec == fourcc("vp09"), vp8 = codec == fourcc("vp08"), av1 = codec == fourcc("av01");
     const bool prores = codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco") || codec == fourcc("ap4h") || codec == fourcc("ap4x");
@@ -619,7 +623,7 @@ Frame VideoDecoder::frame(uint32_t index) {
             ++d.restarts;
         }
         while (d.next <= target) {
-            if (!d.feed(d.next, true)) break;
+            d.feed(d.next, true);
             ++d.next;
         }
         d.wait();

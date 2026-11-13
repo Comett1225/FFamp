@@ -25,7 +25,7 @@ namespace {
 void avcScalingList(BitReader& r, int size) {
     int last = 8, next = 8;
     for (int j = 0; j < size && r.ok; ++j) {
-        if (next != 0) next = (last + r.se() + 256) % 256;
+        if (next != 0) next = int((last + int64_t(r.se()) + 256) % 256);
         last = next == 0 ? last : next;
     }
 }
@@ -104,21 +104,24 @@ VideoInfo parseAvcSps(const uint8_t* nal, size_t n) {
     r.ue();
     static const int extended[] = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135};
     if (std::find(std::begin(extended), std::end(extended), info.profile) != std::end(extended)) {
-        info.chroma = int(r.ue());
-        if (info.chroma > 3) return info;
+        const uint32_t chroma = r.ue();
+        if (chroma > 3) return info;
+        info.chroma = int(chroma);
         if (info.chroma == 3) info.separatePlanes = r.bit();
-        info.bitDepth = int(r.ue()) + 8;
-        info.bitDepthChroma = int(r.ue()) + 8;
-        if (info.bitDepth > 16 || info.bitDepthChroma > 16) return info;
+        const uint32_t depth = r.ue();
+        const uint32_t depthChroma = r.ue();
+        if (depth > 8 || depthChroma > 8) return info;
+        info.bitDepth = int(depth) + 8;
+        info.bitDepthChroma = int(depthChroma) + 8;
         r.skip(1);
         if (r.bit()) {
             int lists = info.chroma != 3 ? 8 : 12;
             for (int i = 0; i < lists && r.ok; ++i) if (r.bit()) avcScalingList(r, i < 6 ? 16 : 64);
         }
     }
-    uint32_t frameNumBits = r.ue() + 4;
-    if (frameNumBits > 16) return info;
-    info.frameNumBits = int(frameNumBits);
+    const uint32_t frameNumMinus4 = r.ue();
+    if (frameNumMinus4 > 12) return info;
+    info.frameNumBits = int(frameNumMinus4) + 4;
     uint32_t orderType = r.ue();
     if (orderType == 0) {
         r.ue();
@@ -203,8 +206,9 @@ VideoInfo parseHevcSps(const uint8_t* nal, size_t n) {
         if (levelPresent[i]) r.skip(8);
     }
     r.ue();
-    info.chroma = int(r.ue());
-    if (info.chroma > 3) return info;
+    const uint32_t chroma = r.ue();
+    if (chroma > 3) return info;
+    info.chroma = int(chroma);
     if (info.chroma == 3) info.separatePlanes = r.bit();
     uint64_t width = r.ue();
     uint64_t height = r.ue();
@@ -215,9 +219,11 @@ VideoInfo parseHevcSps(const uint8_t* nal, size_t n) {
         cropTop = r.ue();
         cropBottom = r.ue();
     }
-    info.bitDepth = int(r.ue()) + 8;
-    info.bitDepthChroma = int(r.ue()) + 8;
-    if (!r.ok || info.bitDepth > 16 || info.bitDepthChroma > 16 || width > 65536 || height > 65536) return info;
+    const uint32_t depth = r.ue();
+    const uint32_t depthChroma = r.ue();
+    if (!r.ok || depth > 8 || depthChroma > 8 || width > 65536 || height > 65536) return info;
+    info.bitDepth = int(depth) + 8;
+    info.bitDepthChroma = int(depthChroma) + 8;
     bool plain = info.chroma == 0 || info.separatePlanes;
     uint64_t unitX = plain || info.chroma == 3 ? 1 : 2;
     uint64_t unitY = plain || info.chroma != 1 ? 1 : 2;
@@ -227,8 +233,9 @@ VideoInfo parseHevcSps(const uint8_t* nal, size_t n) {
     info.width = int(width - cutX);
     info.height = int(height - cutY);
     info.valid = true;
-    uint32_t orderBits = r.ue() + 4;
-    if (orderBits > 16) return info;
+    const uint32_t orderMinus4 = r.ue();
+    if (orderMinus4 > 12) return info;
+    const uint32_t orderBits = orderMinus4 + 4;
     bool everyLayer = r.bit();
     for (int i = everyLayer ? 0 : subLayersMinus1; i <= subLayersMinus1; ++i) {
         r.ue();

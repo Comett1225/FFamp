@@ -106,10 +106,13 @@ struct VideoEncoder::Impl {
             return;
         }
         CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
-        if (!block) return;
         Packet packet;
-        packet.data.resize(CMBlockBufferGetDataLength(block));
-        if (CMBlockBufferCopyDataBytes(block, 0, packet.data.size(), packet.data.data()) != noErr) return;
+        if (block) packet.data.resize(CMBlockBufferGetDataLength(block));
+        if (!block || CMBlockBufferCopyDataBytes(block, 0, packet.data.size(), packet.data.data()) != noErr) {
+            std::lock_guard<std::mutex> hold(e->lock);
+            e->failed = true;
+            return;
+        }
         CMTime pts = CMSampleBufferGetPresentationTimeStamp(sample);
         CMTime dts = CMSampleBufferGetDecodeTimeStamp(sample);
         CMTime duration = CMSampleBufferGetDuration(sample);

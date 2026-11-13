@@ -71,7 +71,7 @@ struct WaveTarget : Target {
         const uint64_t headBytes = 12 + 36 + 8 + formatBytes + (floating ? 12 : 0) + 8;
         const uint64_t riffBytes = headBytes - 8 + dataBytes + (dataBytes & 1);
         const bool large = forced || riffBytes > 0xFFFFFFFFull;
-        static const uint32_t masks[9] = {0, 0x4, 0x3, 0x7, 0x33, 0x37, 0x3F, 0x13F, 0x63F};
+        static const uint32_t masks[9] = {0, 0x4, 0x3, 0x7, 0x107, 0x37, 0x3F, 0x70F, 0x63F};
         Little h;
         h.text(large ? "RF64" : "RIFF");
         h.u32(large ? 0xFFFFFFFFu : uint32_t(riffBytes));
@@ -253,7 +253,10 @@ struct PacketTarget : Target {
     }
 
     bool finish(std::string* error) override {
-        if (!encoder->finish(sink) || failed) return problem(error, "encoding the sound failed");
+        if (!encoder->finish(sink) || failed) {
+            writer.reset();
+            return problem(error, "encoding the sound failed");
+        }
         writer->trim(track, encoder->priming(), fed);
         return writer->finish(error);
     }

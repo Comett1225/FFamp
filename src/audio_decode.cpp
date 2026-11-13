@@ -80,7 +80,6 @@ const int64_t kHole = 131072;
 const int64_t kSpareSeconds = 3600;
 const int64_t kLongestPacket = 65536;
 const size_t kMostBlockPackets = 1024;
-const size_t kMostHeld = size_t(1) << 24;
 
 }
 
@@ -99,6 +98,8 @@ struct AudioDecoder::Impl {
     size_t next = 0;
     int64_t heldFrom = 0;
     bool ended = false;
+    bool lagKnown = false;
+    int64_t lag = 0;
     std::vector<float> held;
     std::vector<uint8_t> packet;
 
@@ -109,14 +110,14 @@ struct AudioDecoder::Impl {
         const size_t n = t.samples.size();
         const int64_t rate = codec->rate;
         const Sample& tail = t.samples.back();
-        const int64_t endTicks = tail.pts + int64_t(tail.duration);
+        const int64_t endTicks = tail.pts > INT64_MAX - int64_t(tail.duration) ? INT64_MAX : tail.pts + int64_t(tail.duration);
         starts.resize(n + 1);
         bool exact = rate % int64_t(t.timescale) == 0;
         if (exact || !codec->packetFrames) {
             int64_t grain = !exact && t.codec == fourcc("Opus") ? 120 : 1;
             for (size_t i = 0; i <= n; ++i) {
                 int64_t at = scaled(i < n ? t.samples[i].pts : endTicks, rate, t.timescale);
-                starts[i] = (at + grain / 2) / grain * grain;
+                starts[i] = at >= 0 ? (at + grain / 2) / grain * grain : -((grain - grain / 2 - 1 - at) / grain * grain);
             }
         } else {
             int64_t base = scaled(t.samples[0].pts, rate, t.timescale);
@@ -132,7 +133,8 @@ struct AudioDecoder::Impl {
         int64_t spare = rate * kSpareSeconds;
         const int64_t longest = codec->longestPacket > 0 ? codec->longestPacket : codec->packetFrames > 0 ? codec->packetFrames : kLongestPacket;
         int64_t before = starts[0];
-        first = last = -1;
+        first = last = 0;
+        bool haveFirst = false, haveLast = false;
         for (size_t i = 0; i < n; ++i) {
             int64_t from = before;
             int64_t span = starts[i + 1] - from;
@@ -140,13 +142,20 @@ struct AudioDecoder::Impl {
             int64_t extra = std::max<int64_t>(0, span - real);
             int64_t kept = extra > kHole || extra > spare ? std::min(span, real) : span;
             if (kept == span) spare -= extra;
-            if (first < 0 && wantedFirst < from + span) first = from - closed + std::min(wantedFirst - from, kept);
-            if (last < 0 && wantedLast <= from + span) last = from - closed + std::min(wantedLast - from, kept);
+            if (!haveFirst && wantedFirst < from + span) {
+                first = from - closed + std::min(wantedFirst - from, kept);
+                haveFirst = true;
+            }
+            if (!haveLast && wantedLast <= from + span) {
+                last = from - closed + std::min(wantedLast - from, kept);
+                haveLast = true;
+            }
             closed += span - kept;
             before = starts[i + 1];
             starts[i + 1] = before - closed;
         }
-        if (first < 0) first = starts[n];
+        if (!haveFirst) first = starts[n];
+        if (!haveLast) last = starts[n];
         last = std::max(last, first);
         int64_t average = std::max<int64_t>(1, (starts[n] - starts[0]) / int64_t(n));
         blockPackets = size_t(std::clamp<int64_t>((kBlockFrames + average - 1) / average, 1, int64_t(kMostBlockPackets)));
@@ -164,6 +173,8 @@ struct AudioDecoder::Impl {
         heldFrom = starts[feedFrom] - codec->lead;
         held.clear();
         ended = false;
+        lagKnown = codec->packetFrames <= 0;
+        lag = 0;
     }
 
     void forget(int64_t before) {
@@ -191,14 +202,24 @@ struct AudioDecoder::Impl {
         const int64_t group = int64_t(from / runPackets);
         if (run != group || heldFrom > starts[from]) restart(group);
         slot->index = -1;
-        while (!ended && heldFrom + int64_t(held.size() / channels) < starts[to] && held.size() < kMostHeld) {
+        while (!ended && heldFrom + int64_t(held.size() / channels) < starts[to]) {
             if (next >= n) {
                 codec->finish(held);
                 ended = true;
                 break;
             }
+            const int64_t wanted = starts[next] - lag;
+            const int64_t have = heldFrom + int64_t(held.size() / channels);
+            if (lagKnown && have < wanted) held.resize(held.size() + size_t(wanted - have) * channels, 0.0f);
+            const size_t before = held.size();
             packet.resize(track->samples[next].size);
             if (!packet.empty() && file->read(*track, uint32_t(next), packet.data())) codec->feed(packet, held);
+            if (held.size() == before) {
+                held.resize(before + size_t(starts[next + 1] - starts[next]) * channels, 0.0f);
+            } else if (!lagKnown) {
+                lag = std::clamp<int64_t>(starts[next] + codec->packetFrames - heldFrom - int64_t(held.size() / channels), 0, codec->packetFrames);
+                lagKnown = true;
+            }
             ++next;
             forget(starts[from]);
         }

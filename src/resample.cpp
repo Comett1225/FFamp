@@ -31,7 +31,7 @@ double bessel(double x) {
 enum Place { FL, FR, FC, LFE, BL, BR, BC, SL, SR };
 
 const std::vector<Place>& layout(int channels) {
-    static const std::vector<Place> known[9] = {{}, {FC}, {FL, FR}, {FL, FR, LFE}, {FL, FR, FC, BC}, {FL, FR, FC, BL, BR},
+    static const std::vector<Place> known[9] = {{}, {FC}, {FL, FR}, {FL, FR, FC}, {FL, FR, FC, BC}, {FL, FR, FC, BL, BR},
         {FL, FR, FC, LFE, BL, BR}, {FL, FR, FC, LFE, BC, SL, SR}, {FL, FR, FC, LFE, BL, BR, SL, SR}};
     return known[channels >= 1 && channels <= 8 ? channels : 0];
 }
@@ -60,7 +60,7 @@ SincKernel::SincKernel(int inRate, int outRate) {
     down = inRate / common;
     if (identity()) return;
     double scale = std::min(1.0, double(outRate) / inRate);
-    half = (int(std::ceil(kCrossings / scale)) + 3) & ~3;
+    half = (int(std::min(std::ceil(kCrossings / scale), double(kMostTableValues))) + 3) & ~3;
     blended = up > kExactPhases;
     phases = blended ? kBlendPhases : int(up);
     int rows = blended ? phases + 3 : phases;
@@ -96,7 +96,7 @@ int64_t SincKernel::centre(int64_t outIndex) const {
 
 int64_t SincKernel::outputLength(int64_t inFrames) const {
     if (inFrames <= 0) return 0;
-    return int64_t((__int128(inFrames) * up + down - 1) / down);
+    return int64_t(std::min<__int128>((__int128(inFrames) * up + down - 1) / down, INT64_MAX));
 }
 
 void SincKernel::render(const float* in, int64_t inBase, int channels, int64_t outStart, size_t count, float* out) const {

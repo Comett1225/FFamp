@@ -89,3 +89,13 @@ list; `Sample.offset` is then free for the reader's use.
   them with `skip`.
 - A source frame without colour labels is taken as BT.709 and not converted; labelled frames are converted to 8-bit BT.709 limited
   range before encoding (`Scaler` in `src/mac/tools_scale.cpp`).
+
+## Decoded sound (`AudioDecoder`)
+
+- Channel order by count, the same for every codec and for the mixer and the WAV writer: 3 = FL FR FC, 4 = FL FR FC BC (WAV mask 0x107),
+  5 = FL FR FC BL BR, 6 = FL FR FC LFE BL BR, 7 = FL FR FC LFE BC SL SR (WAV mask 0x70F), 8 = FL FR FC LFE BL BR SL SR.
+  FLAC comes out in its own file order, which is this order (4-channel FLAC and Opus are really quad: all four channels are kept).
+- A gap between packets that the reader keeps, a packet that cannot be read and a packet the decoder rejects are played as silence of
+  the same length, so the sound after them stays at its own time.
+- `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
+- `Mp4Writer` writes version 1 (64-bit) `mvhd`, `tkhd`, `mdhd` and `elst` boxes when a length does not fit in 32 bits.

@@ -1,6 +1,7 @@
 #include "absent/media.h"
 #include "aac_config.h"
 #include "bytes.h"
+#include "read_common.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -126,6 +127,12 @@ void audioConfig(uint32_t type, View body, Track& track) {
     } else if (type == fourcc("dfLa") && body.n >= 42 && (body.p[4] & 0x7F) == 0) {
         track.configType = fourcc("fLaC");
         track.config.assign(body.p + 8, body.p + 42);
+        FlacInfo info;
+        if (flacInfo(body.p + 8, 34, info)) {
+            track.sampleRate = info.sampleRate;
+            track.channels = info.channels;
+            track.bits = info.bits;
+        }
     } else if (type == fourcc("alac") && track.codec == fourcc("alac") && body.n >= 28) {
         track.configType = type;
         track.config.assign(body.p + 4, body.p + 28);
@@ -543,7 +550,7 @@ void gapless(View movie, std::vector<Track*>& audio, const std::map<uint32_t, bo
         if (int64_t(priming) >= total || count > uint64_t(total - priming)) return;
         track->mediaStart = priming;
         track->mediaEnd = int64_t(priming + count);
-        std::erase_if(track->order, [&](uint32_t i) { return track->samples[i].pts < track->mediaStart; });
+        std::erase_if(track->order, [&](uint32_t i) { return track->samples[i].pts < track->mediaStart || track->samples[i].pts >= track->mediaEnd; });
         return;
     }
 }
@@ -622,6 +629,7 @@ void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks, uint6
         if (type != fourcc("traf")) return;
         Pending* p = nullptr;
         Defaults d;
+        bool firstRun = true;
         uint64_t base = firstTraf ? start : next;
         firstTraf = false;
         boxes(traf, [&](uint32_t name, View body) {
@@ -641,14 +649,14 @@ void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks, uint6
             } else if (name == fourcc("tfdt") && p) {
                 uint8_t version = body.u8();
                 body.skip(3);
-                p->fragmentTime = version ? int64_t(body.u64()) : int64_t(body.u32());
+                p->fragmentTime = version ? int64_t(std::min<uint64_t>(body.u64(), uint64_t(INT64_MAX / 2))) : int64_t(body.u32());
             } else if (name == fourcc("trun") && p) {
                 uint8_t version = body.u8();
                 (void)version;
                 uint32_t flags = body.u24();
                 uint32_t count = body.u32();
-                uint64_t offset = base;
-                if (flags & 0x1) offset = base + int64_t(int32_t(body.u32()));
+                uint64_t offset = (flags & 0x1) ? base + int64_t(int32_t(body.u32())) : firstRun ? base : next;
+                firstRun = false;
                 uint32_t firstFlags = d.flags;
                 bool hasFirst = flags & 0x4;
                 if (hasFirst) firstFlags = body.u32();

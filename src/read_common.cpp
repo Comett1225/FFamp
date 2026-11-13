@@ -1,5 +1,6 @@
 #include "read_common.h"
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 namespace absent {
@@ -95,16 +96,15 @@ const char* id3Key(const uint8_t* id, bool three) {
 }
 
 uint8_t crc8(const uint8_t* p, size_t n) {
-    static uint8_t table[256];
-    static bool ready = false;
-    if (!ready) {
+    static const std::array<uint8_t, 256> table = [] {
+        std::array<uint8_t, 256> filled{};
         for (int i = 0; i < 256; ++i) {
             uint8_t c = uint8_t(i);
             for (int k = 0; k < 8; ++k) c = uint8_t((c << 1) ^ (c & 0x80 ? 0x07 : 0));
-            table[i] = c;
+            filled[size_t(i)] = c;
         }
-        ready = true;
-    }
+        return filled;
+    }();
     uint8_t c = 0;
     for (size_t i = 0; i < n; ++i) c = table[c ^ p[i]];
     return c;
@@ -386,7 +386,7 @@ uint64_t id3v2(Source& source, uint64_t at, Tags& tags) {
         pos += head;
         if (length > body.size() - pos) break;
         const char* key = id3Key(f, three);
-        if (key && length && !(format & 0x0C)) {
+        if (key && length && !(format & (version == 3 ? 0xE0 : 0x4C))) {
             std::vector<uint8_t> content(body.begin() + pos, body.begin() + pos + length);
             if (version == 4 && ((format & 0x02) || (flags & 0x80))) unsynchronise(content);
             size_t skip = version == 4 && (format & 0x01) ? 4 : 0;

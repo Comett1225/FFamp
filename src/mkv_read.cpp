@@ -233,8 +233,7 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
     } else if (id == "A_VORBIS") {
         set("vorb", fourcc("vorb"), true);
         std::vector<View> packets;
-        if (splitXiph(secret, packets) && packets.size() == 3) lane.modes.parse(packets[0].p, packets[0].n, packets[2].p, packets[2].n);
-        else lane.usable = false;
+        if (!splitXiph(secret, packets) || packets.size() != 3 || !lane.modes.parse(packets[0].p, packets[0].n, packets[2].p, packets[2].n)) lane.usable = false;
     } else if (id == "A_MPEG/L3") set(".mp3", 0, false);
     else if (id == "A_MPEG/L2") set(".mp2", 0, false);
     else if (id == "A_MPEG/L1") set(".mp1", 0, false);
@@ -493,7 +492,7 @@ public:
                 if (pos >= whole.size() || !variable(whole.data() + pos, whole.size() - pos, value, bytes, ones)) return;
                 pos += bytes;
                 last = i == 0 ? int64_t(value) : last + int64_t(value) - ((int64_t(1) << (7 * bytes - 1)) - 1);
-                if (last < 0) return;
+                if (last < 0 || uint64_t(last) > whole.size() - pos) return;
                 sizes.push_back(uint64_t(last));
                 used += uint64_t(last);
             }
@@ -531,7 +530,7 @@ public:
                 const uint8_t* value = source.view(body, size_t(e.size));
                 if (!value) break;
                 View v{value, size_t(e.size)};
-                if (e.id == kBlockDuration) span = int64_t(std::min<uint64_t>(number(v), 1ull << 40)) * int64_t(scale);
+                if (e.id == kBlockDuration) span = int64_t(std::min<uint64_t>({number(v), 1ull << 40, uint64_t((int64_t(1) << 62) / int64_t(scale))})) * int64_t(scale);
                 else discard = signedNumber(v);
             }
             at = body + e.size;

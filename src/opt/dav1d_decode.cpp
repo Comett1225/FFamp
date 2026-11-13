@@ -59,6 +59,7 @@ struct Dav1dDecoder : SoftDecoder {
     }
 
     bool decode(const uint8_t* bytes, size_t size, const PictureSink& sink) override {
+        if (!size) return true;
         Dav1dData data;
         memset(&data, 0, sizeof data);
         uint8_t* room = dav1d_data_create(&data, size);

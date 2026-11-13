@@ -154,8 +154,8 @@ AudioChannelLayoutTag orderOf(int channels) {
         case 4: return kAudioChannelLayoutTag_MPEG_4_0_A;
         case 5: return kAudioChannelLayoutTag_MPEG_5_0_A;
         case 6: return kAudioChannelLayoutTag_MPEG_5_1_A;
-        case 7: return kAudioChannelLayoutTag_MPEG_6_1_A;
-        case 8: return kAudioChannelLayoutTag_MPEG_7_1_C;
+        case 7: return kAudioChannelLayoutTag_WAVE_6_1;
+        case 8: return kAudioChannelLayoutTag_WAVE_7_1;
     }
     return 0;
 }
@@ -233,7 +233,7 @@ std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::ve
         box.close(at);
         cookie = box.d;
     }
-    decoder->order = orderOf(int(from.mChannelsPerFrame));
+    decoder->order = from.mFormatID == kAudioFormatFLAC ? 0 : orderOf(int(from.mChannelsPerFrame));
     decoder->scratch = static_cast<float*>(aligned_alloc(16384, size_t(kPull) * 64 * sizeof(float)));
     if (!decoder->scratch || !decoder->build()) return fail("the system has no decoder for this audio");
     decoder->rate = int(from.mSampleRate);

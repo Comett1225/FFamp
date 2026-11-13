@@ -447,7 +447,7 @@ std::string fraction(int64_t top, int64_t bottom) {
     top /= common;
     bottom /= common;
     double value = double(top) / double(bottom);
-    for (int thousandths = 0; thousandths < 2; ++thousandths) {
+    for (int thousandths = 0; thousandths < 2 && value <= 1e9; ++thousandths) {
         int64_t under = thousandths ? 1001 : 1;
         int64_t over = whole(value * double(under) / (thousandths ? 1000.0 : 1.0)) * (thousandths ? 1000 : 1);
         if (over <= 0) continue;

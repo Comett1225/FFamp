@@ -21,6 +21,7 @@ struct Out {
     uint32_t sourceScale = 0;
     uint32_t frameBytes = 0;
     uint64_t frames = 0;
+    bool trimmed = false;
 };
 
 bool isPcm(const TrackSpec& spec) { return spec.codec == fourcc("lpcm"); }
@@ -303,7 +304,8 @@ void prepare(Out& t) {
         first = std::min(first, s.pts);
         end = std::max(end, s.pts + int64_t(s.duration));
     }
-    t.start = first + t.spec.skip;
+    const bool empty = t.trimmed && t.spec.length <= 0;
+    t.start = empty ? end : first + t.spec.skip;
     t.shown = t.spec.length > 0 ? t.spec.length : std::max<int64_t>(end - t.start, 0);
     Sample& tail = t.samples.back();
     if (t.spec.length > 0 && t.start + t.shown > tail.dts && t.start + t.shown < tail.dts + int64_t(tail.duration)) tail.duration = uint32_t(t.start + t.shown - tail.dts);
@@ -311,7 +313,7 @@ void prepare(Out& t) {
 }
 
 uint64_t scaled(int64_t value, uint32_t from, uint32_t to) {
-    return from ? uint64_t((value * to + from / 2) / from) : 0;
+    return from ? uint64_t((__int128(value) * to + from / 2) / from) : 0;
 }
 
 void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
@@ -478,12 +480,16 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool q
     bool video = spec.kind == Kind::Video;
     size_t trak = b.open(fourcc("trak"));
 
-    size_t tkhd = b.open(fourcc("tkhd"), 0, 3);
-    b.u32(0);
-    b.u32(0);
+    const uint64_t shownLength = scaled(t.shown, spec.timescale, movieScale);
+    const uint64_t trackLength = scaled(t.shown + spec.delay, spec.timescale, movieScale);
+    const uint64_t waitLength = scaled(spec.delay, spec.timescale, movieScale);
+    const bool longTrack = trackLength > 0xFFFFFFFFull;
+    size_t tkhd = b.open(fourcc("tkhd"), longTrack ? 1 : 0, 3);
+    b.zero(longTrack ? 16 : 8);
     b.u32(id);
     b.u32(0);
-    b.u32(uint32_t(scaled(t.shown + spec.delay, spec.timescale, movieScale)));
+    if (longTrack) b.u64(trackLength);
+    else b.u32(uint32_t(trackLength));
     b.zero(8);
     b.u16(0);
     b.u16(video ? 0 : 1);
@@ -496,26 +502,32 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool q
 
     if (t.start != 0 || spec.length > 0 || spec.delay > 0) {
         size_t edts = b.open(fourcc("edts"));
-        size_t elst = b.open(fourcc("elst"), 0, 0);
+        const bool longEdit = shownLength >= 0xFFFFFFFFull || waitLength >= 0xFFFFFFFFull || t.start > 0x7FFFFFFF;
+        size_t elst = b.open(fourcc("elst"), longEdit ? 1 : 0, 0);
         b.u32(spec.delay > 0 ? 2 : 1);
-        if (spec.delay > 0) {
-            b.u32(uint32_t(scaled(spec.delay, spec.timescale, movieScale)));
-            b.u32(0xFFFFFFFFu);
+        auto edit = [&](uint64_t length, int64_t from) {
+            if (longEdit) {
+                b.u64(length);
+                b.u64(uint64_t(from));
+            } else {
+                b.u32(uint32_t(length));
+                b.u32(uint32_t(from));
+            }
             b.u32(0x00010000);
-        }
-        b.u32(uint32_t(scaled(t.shown, spec.timescale, movieScale)));
-        b.u32(uint32_t(t.start));
-        b.u32(0x00010000);
+        };
+        if (spec.delay > 0) edit(waitLength, -1);
+        edit(shownLength, t.start);
         b.close(elst);
         b.close(edts);
     }
 
     size_t mdia = b.open(fourcc("mdia"));
-    size_t mdhd = b.open(fourcc("mdhd"), 0, 0);
-    b.u32(0);
-    b.u32(0);
+    const bool longMedia = t.mediaDuration > 0xFFFFFFFFll;
+    size_t mdhd = b.open(fourcc("mdhd"), longMedia ? 1 : 0, 0);
+    b.zero(longMedia ? 16 : 8);
     b.u32(spec.timescale);
-    b.u32(uint32_t(t.mediaDuration));
+    if (longMedia) b.u64(uint64_t(t.mediaDuration));
+    else b.u32(uint32_t(t.mediaDuration));
     b.u16(0x55C4);
     b.u16(0);
     b.close(mdhd);
@@ -581,11 +593,12 @@ struct Mp4Writer::Impl {
             duration = std::max(duration, scaled(t.shown + t.spec.delay, t.spec.timescale, movieScale));
             ++used;
         }
-        size_t mvhd = b.open(fourcc("mvhd"), 0, 0);
-        b.u32(0);
-        b.u32(0);
+        const bool longMovie = duration > 0xFFFFFFFFull;
+        size_t mvhd = b.open(fourcc("mvhd"), longMovie ? 1 : 0, 0);
+        b.zero(longMovie ? 16 : 8);
         b.u32(movieScale);
-        b.u32(uint32_t(duration));
+        if (longMovie) b.u64(duration);
+        else b.u32(uint32_t(duration));
         b.u32(0x00010000);
         b.u16(0x0100);
         b.zero(10);
@@ -640,8 +653,14 @@ int Mp4Writer::add(const TrackSpec& spec) {
 
 void Mp4Writer::trim(int track, int64_t skip, int64_t length) {
     if (track < 0 || track >= int(impl->tracks.size())) return;
-    impl->tracks[track].spec.skip = skip;
-    impl->tracks[track].spec.length = length;
+    Out& t = impl->tracks[track];
+    if (isPcm(t.spec) && t.sourceScale && t.spec.timescale) {
+        skip = int64_t(__int128(skip) * t.spec.timescale / t.sourceScale);
+        length = int64_t(__int128(length) * t.spec.timescale / t.sourceScale);
+    }
+    t.spec.skip = skip;
+    t.spec.length = length;
+    t.trimmed = true;
 }
 
 void Mp4Writer::configure(int track, uint32_t type, const std::vector<uint8_t>& config) {
@@ -651,16 +670,16 @@ void Mp4Writer::configure(int track, uint32_t type, const std::vector<uint8_t>& 
 }
 
 bool Mp4Writer::write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) {
-    if (track < 0 || track >= int(impl->tracks.size()) || impl->failed || size > 0xFFFFFFFFu) return false;
+    if (track < 0 || track >= int(impl->tracks.size()) || impl->failed || !impl->data || size > 0xFFFFFFFFu) return false;
+    Out& t = impl->tracks[track];
+    const bool pcm = isPcm(t.spec);
+    if (pcm && (!t.frameBytes || !t.sourceScale || !t.spec.timescale || size % t.frameBytes)) return false;
     if (fwrite(data, 1, size, impl->data) != size) {
         impl->failed = true;
         return false;
     }
-    Out& t = impl->tracks[track];
-    const bool pcm = isPcm(t.spec);
     uint32_t frames = 1;
     if (pcm) {
-        if (!t.frameBytes || !t.sourceScale || !t.spec.timescale || size % t.frameBytes) return false;
         frames = uint32_t(size / t.frameBytes);
         pts = t.samples.empty() ? pts * int64_t(t.spec.timescale) / int64_t(t.sourceScale) : t.samples.back().pts + t.samples.back().duration;
         dts = pts;
@@ -735,6 +754,10 @@ bool Mp4Writer::finish(std::string* error) {
     bool large = impl->size + 8 > 0xFFFFFFFFull;
     uint64_t dataHeader = large ? 16 : 8;
     Bytes probe = impl->movie(0, wide);
+    if (!wide && head.d.size() + probe.d.size() + dataHeader + impl->size > 0xFFFFFFFFull) {
+        wide = true;
+        probe = impl->movie(0, wide);
+    }
     uint64_t base = head.d.size() + probe.d.size() + dataHeader;
     Bytes moov = impl->movie(base, wide);
     if (moov.d.size() != probe.d.size()) return fail("internal layout error");

@@ -1,4 +1,5 @@
 #include "absent/media.h"
+#include "aac_config.h"
 #include "bytes.h"
 #include "writers.h"
 #include <algorithm>
@@ -115,24 +116,9 @@ Entry describe(const TrackSpec& spec) {
 }
 
 std::vector<uint8_t> audioConfig(const std::vector<uint8_t>& esds) {
-    View v{esds.data(), esds.size()};
-    v.skip(4);
-    while (v.left() >= 2) {
-        uint8_t tag = v.u8();
-        uint32_t size = 0;
-        for (int i = 0; i < 4; ++i) {
-            uint8_t c = v.u8();
-            size = (size << 7) | (c & 0x7F);
-            if (!(c & 0x80)) break;
-        }
-        if (tag == 0x03) v.skip(3);
-        else if (tag == 0x04) v.skip(13);
-        else if (tag == 0x05) {
-            View body = v.sub(size);
-            return body.ok ? std::vector<uint8_t>(body.p, body.p + body.n) : std::vector<uint8_t>();
-        } else v.skip(size);
-    }
-    return {};
+    ElementaryStream stream;
+    if (!parseElementaryStream(View{esds.data(), esds.size()}, stream) || !stream.specific.p) return {};
+    return {stream.specific.p, stream.specific.p + stream.specific.n};
 }
 
 struct Held {
@@ -245,7 +231,7 @@ std::unique_ptr<MkvWriter> MkvWriter::open(const std::string& path, std::string*
 int MkvWriter::add(const TrackSpec& spec) {
     Out out;
     out.spec = spec;
-    out.trims = spec.kind == Kind::Audio && (spec.codec == fourcc("mp4a") || spec.codec == fourcc("Opus") || spec.skip > 0 || spec.length > 0);
+    out.trims = spec.kind == Kind::Audio;
     impl->tracks.push_back(std::move(out));
     return int(impl->tracks.size()) - 1;
 }
@@ -263,7 +249,7 @@ void MkvWriter::configure(int track, uint32_t type, const std::vector<uint8_t>& 
 }
 
 bool MkvWriter::write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t, uint32_t duration, bool sync) {
-    if (track < 0 || track >= int(impl->tracks.size()) || impl->failed) return false;
+    if (track < 0 || track >= int(impl->tracks.size()) || impl->failed || !impl->data) return false;
     Out& t = impl->tracks[track];
     if (!t.spec.timescale) return false;
     pts += t.spec.delay;

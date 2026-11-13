@@ -308,13 +308,15 @@ bool h264Layout(const std::vector<uint8_t>& c, H264Layout& layout) {
                 if (!b.take(1)) continue;
                 int last = 8, next = 8;
                 for (int j = 0; j < (i < 6 ? 16 : 64) && b.ok; ++j) {
-                    if (next != 0) next = (last + b.se() + 256) % 256;
+                    if (next != 0) next = int((last + int64_t(b.se()) + 256) % 256);
                     last = next == 0 ? last : next;
                 }
             }
         }
     }
-    layout.frameNumBits = int(b.ue()) + 4;
+    const uint32_t frameNumMinus4 = b.ue();
+    if (frameNumMinus4 > 12) return false;
+    layout.frameNumBits = int(frameNumMinus4) + 4;
     const uint32_t order = b.ue();
     if (order == 0) {
         b.ue();

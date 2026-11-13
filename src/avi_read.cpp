@@ -78,6 +78,7 @@ struct Stream {
     uint64_t indexAt = 0;
     uint64_t indexSize = 0;
     std::vector<uint8_t> extra;
+    std::vector<uint8_t> bitmap;
     std::vector<Chunk> chunks;
     std::vector<uint64_t> ends;
     std::vector<uint32_t> raw;
@@ -253,6 +254,7 @@ public:
                 uint32_t compression = be32(format.data() + 16);
                 if (compression) s.handler = compression;
                 s.extra.assign(format.begin() + 40, format.end());
+                s.bitmap = format;
             } else if (id == fourcc("strf") && kind == fourcc("auds") && size >= 16) {
                 std::vector<uint8_t> format;
                 if (!source.load(body, size, format, 1 << 20)) break;
@@ -506,6 +508,10 @@ public:
         Track& t = s.track;
         t.codec = videoFourcc(s.handler, t.height);
         if (!t.codec) t.codec = s.handler;
+        if (vc1Codec(t.codec)) {
+            t.configType = fourcc("bmih");
+            t.config = s.bitmap;
+        }
         if (!s.scale || !s.rate || t.width <= 0 || t.height <= 0 || t.width > 32768 || t.height > 32768) return;
         const uint32_t shared = std::gcd(s.scale, s.rate);
         const uint32_t step = s.scale / shared;
@@ -513,6 +519,7 @@ public:
         const bool part2 = t.codec == fourcc("mp4v");
         const bool mpeg = t.codec == fourcc("mp1v") || t.codec == fourcc("mp2v");
         const bool avc = t.codec == fourcc("avc1");
+        const bool vc1 = vc1Codec(t.codec) && !t.config.empty();
         std::vector<Shown> frames;
         frames.reserve(s.chunks.size());
         NalList sps, pps;
@@ -573,6 +580,12 @@ public:
                 f.type = key ? 0 : 1;
                 f.count = count;
                 f.empty = packed == 0;
+            } else if (vc1 && !f.empty) {
+                const size_t want = std::min<size_t>(c.size, kHead);
+                const uint8_t* p = source.view(c.at, want);
+                if (!p) continue;
+                f.type = vc1PictureType(t.codec, t.config, p, want);
+                if (f.type < 0) f.type = 1;
             } else if ((part2 || mpeg) && !f.empty) {
                 const size_t want = packedStream ? c.size : std::min<size_t>(c.size, kHead);
                 const uint8_t* p = source.view(c.at, want);
@@ -629,9 +642,9 @@ public:
             t.configType = fourcc("esds");
             t.config = mpeg4Descriptor(chosen.data(), chosen.size());
         }
-        const bool typed = avc || part2 || mpeg;
+        const bool typed = avc || part2 || mpeg || vc1;
         bool reordered = false;
-        if (part2 || mpeg) for (const Shown& f : frames) reordered = reordered || (!f.empty && f.type == 2);
+        if (part2 || mpeg || vc1) for (const Shown& f : frames) reordered = reordered || (!f.empty && f.type == 2);
         std::vector<int64_t> slots(frames.size(), 0);
         int64_t slot = 0;
         size_t held = frames.size();

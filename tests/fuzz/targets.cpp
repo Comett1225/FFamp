@@ -161,6 +161,40 @@ void mpeg4(const uint8_t* data, size_t size) {
     decoder->drain(look);
 }
 
+void vc1(const uint8_t* data, size_t size) {
+    if (size < 8) return;
+    static const int sizes[4][2] = {{176, 144}, {64, 48}, {33, 17}, {320, 240}};
+    const int* shape = sizes[(data[0] >> 1) & 3];
+    const bool advanced = data[0] & 1;
+    std::vector<uint8_t> config(40, 0);
+    size_t start = 1;
+    if (advanced) {
+        size_t end = start;
+        while (end + 4 <= size && end < 256 && !(data[end] == 0 && data[end + 1] == 0 && data[end + 2] == 1 && data[end + 3] == 0x0D)) ++end;
+        config.insert(config.end(), data + start, data + end);
+        start = end;
+    } else {
+        config.insert(config.end(), data + 1, data + 5);
+        start = 5;
+    }
+    auto decoder = openVc1(advanced ? fourcc("WVC1") : fourcc("WMV3"), config, shape[0], shape[1], nullptr);
+    if (!decoder) return;
+    PictureSink look = [&](const Picture& p) {
+        for (int i = 0; i < 3; ++i) {
+            const int rows = i ? p.chromaHeight : p.height, columns = i ? p.chromaWidth : p.width;
+            picturesSeen += p.plane[i][0] + p.plane[i][size_t(rows - 1) * p.stride[i] + size_t(columns - 1)];
+        }
+    };
+    int64_t stamp = 0;
+    while (start + 2 <= size) {
+        const size_t length = std::min<size_t>(size - start - 2, size_t(data[start]) << 8 | data[start + 1]);
+        decoder->decode(data + start + 2, length, stamp++, look);
+        start += 2 + length;
+        if ((stamp & 15) == 9) decoder->reset();
+    }
+    decoder->drain(look);
+}
+
 void resample(const uint8_t* data, size_t size) {
     if (size < 8) return;
     static const int rates[] = {4000, 6000, 8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000, 384000, 47999, 48001};

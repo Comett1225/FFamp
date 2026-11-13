@@ -374,3 +374,49 @@ Not done: the Windows Media decoders themselves (plan and order in the private n
 payload extension data past the standard 8 replicated bytes; Stream Bitrate Properties; mutual exclusion (every stream of a
 multi-bitrate file is listed); ISO 639-2 language codes.
 
+
+# Windows Media step B: VC-1 (WMV3, WVC1, WMVA)
+
+FFamp's own VC-1 decoder (`src/vc1_*.cpp`, `src/video_bits.h`; backend `vc1`), based on FFmpeg's VC-1 decoder as the owner's rule of
+2026-11-13 allows: the FFmpeg C was turned into FFamp's C++ (one `Vc1` context in place of `VC1Context` and `MpegEncContext`, member
+functions, no comments), the tables were copied by script from FFmpeg's data headers, and every derived file is listed in
+`docs/NOTICE.md`. How it is driven is in `docs/CONVENTIONS.md`.
+
+FFmpeg cannot encode VC-1, so the committed fixtures are written by `tests/fixtures/vc1/make.py`, a small WMV3 writer of FFamp's own:
+Main profile with B-pictures (direct and interpolated), intensity compensation, range reduction, overlap smoothing and the loop
+filter, and Simple profile with bilinear, half-pel and quarter-pel motion (`main_bframes.avi` 1.7 KB, `simple.avi` 1.2 KB). The
+public sample files of the plan's appendix A are tested when `WINMEDIA_SAMPLES` names their folder; they are not committed.
+
+| File | What it is | Result against FFmpeg's decode |
+|---|---|---|
+| `main_bframes.avi`, `simple.avi` (fixtures) | Main with B, IC, range reduction; Simple | every frame bit-exact, in order |
+| `sample-wmv9-simple-SP@ML.wmv`, `sb-spl-q94.avi` | WMV3 Simple, CIF and 640x480 | 595 and 193 frames bit-exact |
+| `sample-wmv9-main-MP@LL.wmv`, `sb-main-q94.avi` | WMV3 Main | 595 and 193 frames bit-exact |
+| `sb-adv-q94.avi` | WMV3 Complex without X8 (simple IDCT) | 193 frames bit-exact |
+| `Robotica_720.wmv`, `Robotica_1080.wmv` | WMV3 Main 1280x720 and 1440x1080 | 480 and 480 frames bit-exact |
+| `480i30__codec_WVC1__...wmv` | WVC1 Advanced, interlaced field pictures, B | 66 frames bit-exact |
+| `wmva-smpl-bdsm.wmv` | WMVA (old Advanced profile framing), B | 1,004 frames bit-exact; FFmpeg shows one more picture from the media object the end of the file cuts off |
+| FATE `SA00040`, `SA00050`, `SA10091`, `SA20021` | Advanced, progressive, B, slices | every picture bit-exact |
+| FATE `SA10143`, `ilaced_twomv` | Advanced, interlaced field and frame pictures, 2-MV | every picture bit-exact |
+| FATE `SMM0005.rcv`, `SMM0015.rcv` | WMV3 Main with and without B | every picture bit-exact; also in display order from an AVI |
+
+The raw `.vc1` and `.rcv` files have no display times, so FFmpeg's Matroska copy of them is compared picture by picture without the
+order. Random frames (12 to 16 per file, in random order) equal the straight decode and FFmpeg's frame at that time on every file.
+
+Where FFmpeg is wrong or silent (plan section 3.6), ST 421 decides:
+
+- **Range mapping** (Advanced profile `RANGE_MAPY`, `RANGE_MAPUV` in the entry point): FFmpeg reads the values and ignores them.
+  FFamp applies ST 421 6.2.15 and 6.2.16 to the output pictures only (the references stay unmapped, ST 421 5.6). Test: the
+  interlaced WVC1 sample with its entry point patched to `RANGE_MAPY` 2 and `RANGE_MAPUV` 5 gives FFmpeg's pictures mapped by the
+  formula, every pixel of 66 frames.
+- **Pan-scan** (`PANSCAN_FLAG`): FFmpeg does not read the pan-scan windows and loses its place in the picture header. FFamp skips
+  them as ST 421 8.9.1 counts them (no sample file has them).
+- **Progressive segmented frames** (`PSF`): FFmpeg refuses the stream; the flag only changes how frames are shown, so FFamp decodes
+  them as progressive frames (no sample file has it).
+- Not changed (FFmpeg's behaviour kept, no sample to check against): direct mode in a B field picture whose anchor is a frame picture
+  (an error, as in FFmpeg), the chroma motion vector pull-back FFmpeg marks as a FIXME, old interlaced mode (`res_y411`, refused),
+  multiresolution pictures (`RESPIC` read, not scaled), and X8 intra pictures of the Complex profile (refused with a message; the
+  plan puts X8 in step D).
+
+Test counts (milestones 1 to 4): `QUICK=1 tests/run.sh` 2,376 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh`
+1,544 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 74 checks (43 without FFmpeg), all pass.

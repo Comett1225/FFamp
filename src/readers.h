@@ -13,6 +13,8 @@ std::unique_ptr<Reader> openAvi(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openAsf(const std::string& path, std::string* error);
 const char* windowsMediaName(uint32_t codec);
+int vc1PictureType(uint32_t codec, const std::vector<uint8_t>& config, const uint8_t* sample, size_t size);
+inline bool vc1Codec(uint32_t codec) { return codec == fourcc("WMV3") || codec == fourcc("WVC1") || codec == fourcc("WMVA"); }
 
 struct DolbyFrame {
     uint32_t codec = 0;

@@ -144,8 +144,8 @@ list; `Sample.offset` is then free for the reader's use.
 - `statedSeconds()` is the play duration minus the preroll, except for broadcast files and files whose data object runs past the end.
 - Probe names `wmav1`, `wmav2`, `wmapro`, `wmalossless`, `wmavoice`, `wmv1`, `wmv2`, `wmv3`, `vc1`, `msmpeg4v1`, `msmpeg4v2`,
   `msmpeg4v3`, from ASF and AVI. Until their codec rounds land, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio
-  2) is not decoded yet` and `VideoDecoder::open` with `this video codec (Windows Media Video 9) is not decoded yet` (each with its own
-  name).
+  2) is not decoded yet` and `VideoDecoder::open` with `this video codec (Windows Media Video 8) is not decoded yet` (each with its own
+  name). `WMV3`, `WVC1` and `WMVA` decode (VC-1 section below).
 - H.263 and Motion JPEG in ASF get their FFamp codes (`h263`, `jpeg`) and decode. Other sound tags keep a track named by the tag in
   hex (`0130`), other video fourccs a track named by the fourcc.
 
@@ -175,6 +175,9 @@ list; `Sample.offset` is then free for the reader's use.
   (not premultiplied), scaled with the picture. I420 and RGB24 output have no alpha.
 - A sample the decoder rejects does not end the stream: `VideoDecoder::frame` returns the nearest earlier frame that decoded, with the
   asked frame's time, as FFmpeg's concealment shows a repeat.
+- VC-1 in AVI and in Matroska (`V_MS/VFW/FOURCC`) keeps its fourcc (`WMV3`, `WVC1`, `WMVA`) with configType `bmih`, as in ASF. In
+  AVI its key frames (I pictures and field pairs that start with an I field) and its shown order (a B or BI picture is shown before
+  the anchor stored ahead of it) come from the picture types, as for MPEG-4; the index's key flags are not used.
 - A Matroska video codec no decoder here knows is kept as a track named by its VFW fourcc or the first letters of its codec ID, so
   probe reports its name, start and length; `VideoDecoder::open` fails with `video codec not supported by this decoder`.
 
@@ -199,3 +202,25 @@ list; `Sample.offset` is then free for the reader's use.
   `XVID_SAFE_BS_TAIL`) stops at the end of the stated length but still reads the next two words.
 - Xvid takes a stream without an `XviD` user data string as bug free; FFmpeg's workarounds for old Xvid builds (no user data and
   the `XVID` fourcc) and for DivX 5 quarter-pixel chroma before build 1814 are not applied.
+
+## VC-1: WMV3, WVC1 and WMVA (`src/vc1_*.cpp`, backend `vc1`)
+
+- FFamp's own software decoder, based on FFmpeg's VC-1 decoder (the files are listed in `docs/NOTICE.md`), behind `SoftDecoder`
+  (`openVc1`). `WMV3` is Simple, Main and Complex profile; `WVC1` and `WMVA` are Advanced profile: progressive, interlaced frame and
+  interlaced field pictures, slices, I, P, B, BI and skipped pictures, 1 and 4 motion vectors, intensity compensation, range
+  reduction, overlap smoothing, the loop filter, quantiser and transform switching per macroblock.
+- The track needs configType `bmih` (the ASF, AVI and Matroska readers give it for these three fourccs: the BITMAPINFOHEADER and the
+  codec data behind it). `WMV3` takes its sequence header from the codec data and its size from the header; `WVC1` and `WMVA` take
+  the sequence header and entry point from the start-code framed codec data, and the coded size from the entry point. A sample may
+  carry start codes (frame, field, slice, entry point, sequence header) or be one bare picture; a bare interlaced field pair is split at
+  its field start code.
+- Complex profile streams with X8 intra pictures (`kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv`) are refused with `this VC-1 stream
+  uses X8 intra pictures (Windows Media Video 9 Complex profile), which are not decoded yet`; Complex profile without X8 (the
+  `sb-adv-q94.avi` sample) decodes, with the simple IDCT those streams ask for. Sprite streams (`WMVP`, `WVP2`) are refused.
+- Every sample's picture comes out as soon as it is decoded, with that sample's time: B-pictures need no reorder delay because the
+  reader's presentation times put them in order (`drain` has nothing to give). Output is 8-bit 4:2:0 at the coded size, cut to the
+  track size when the track is smaller.
+- A B-picture with no earlier reference (right after a jump) and a picture that does not decode return `false`, so `VideoDecoder`
+  shows the nearest earlier picture as FFmpeg's concealment does; a jump destroys the decoder state and starts again at a key frame.
+- Frame buffers come from a small pool owned by the decoder: a picture handed to the sink stays valid until the next `decode`.
+

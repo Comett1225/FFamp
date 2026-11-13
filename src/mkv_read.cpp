@@ -268,7 +268,14 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
     } else if (id == "A_EAC3") set("ec-3", 0, false);
     else if (starts(id, "A_AC3")) set("ac-3", 0, false);
     else if (id == "A_ALAC") set("alac", fourcc("alac"), true);
-    else lane.usable = false;
+    else if (id == "A_MS/ACM" && secret.size() >= 18) {
+        uint32_t tag = le16(secret.data());
+        if (tag == 0xFFFE && secret.size() >= 40) tag = le16(secret.data() + 24);
+        t.codec = windowsMediaAudio(tag);
+        t.configType = fourcc("wfex");
+        t.config = secret;
+        if (!t.codec) lane.usable = false;
+    } else lane.usable = false;
 }
 
 uint32_t samplesIn(Lane& lane, const uint8_t* p, size_t have, uint32_t size) {

@@ -33,9 +33,6 @@ TABLE
 while read command f text; do
     check "$f: $command says the codec is not decoded yet" ax_refuses $command $AX/$f "$text) is not decoded yet"
 done <<TABLE
-adecode wma1.wma Windows Media Audio 1
-adecode wma2.wma Windows Media Audio 2
-adecode wmv1_wma2.wmv Windows Media Audio 2
 decode wmv1_wma2.wmv Windows Media Video 7
 decode wmv2.wmv Windows Media Video 8
 decode msmpeg4v3.asf Microsoft MPEG-4 version 3

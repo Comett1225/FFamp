@@ -266,6 +266,7 @@ public:
                     s.track.channelMask = le32(format.data() + 20);
                     s.tag = le16(format.data() + 24);
                 }
+                s.extra = format;
             } else if (id == fourcc("indx")) {
                 s.indexAt = body;
                 s.indexSize = size;
@@ -448,6 +449,30 @@ public:
                 sample.duration = uint32_t(count);
                 sample.sync = true;
                 t.samples.push_back(sample);
+            }
+            return;
+        }
+        if (const uint32_t wma = windowsMediaAudio(s.tag)) {
+            const uint64_t bytesPerSecond = s.extra.size() >= 12 ? le32(s.extra.data() + 8) : 0;
+            if (t.channels < 1 || t.sampleRate < 1 || !bytesPerSecond) return;
+            t.codec = wma;
+            t.configType = fourcc("wfex");
+            t.config = s.extra;
+            t.timescale = uint32_t(t.sampleRate);
+            uint64_t before = 0;
+            for (const Chunk& c : s.chunks) {
+                if (!c.size) continue;
+                Sample sample;
+                sample.offset = before;
+                sample.size = c.size;
+                sample.pts = sample.dts = int64_t(before * uint64_t(t.sampleRate) / bytesPerSecond);
+                sample.sync = true;
+                before += c.size;
+                t.samples.push_back(sample);
+            }
+            for (size_t i = 0; i < t.samples.size(); ++i) {
+                const int64_t next = i + 1 < t.samples.size() ? t.samples[i + 1].pts : int64_t(before * uint64_t(t.sampleRate) / bytesPerSecond);
+                t.samples[i].duration = uint32_t(std::clamp<int64_t>(next - t.samples[i].pts, 0, 0x7FFFFFFF));
             }
             return;
         }

@@ -103,6 +103,11 @@ struct AudioDecoder::Impl {
     int64_t lag = 0;
     std::vector<float> held;
     std::vector<uint8_t> packet;
+    int64_t hidden = INT64_MIN;
+    std::vector<size_t> feeds;
+    std::vector<std::vector<uint8_t>> marks;
+    std::vector<char> marked;
+    bool marking = false;
 
     size_t count() const { return starts.size() - 1; }
 
@@ -113,8 +118,13 @@ struct AudioDecoder::Impl {
         const Sample& tail = t.samples.back();
         const int64_t endTicks = tail.pts > INT64_MAX - int64_t(tail.duration) ? INT64_MAX : tail.pts + int64_t(tail.duration);
         starts.resize(n + 1);
+        std::vector<int64_t> counted;
+        const bool known = codec->counts(*file, t, counted) && counted.size() == n;
         bool exact = rate % int64_t(t.timescale) == 0;
-        if (exact || !codec->packetFrames) {
+        if (known) {
+            starts[0] = scaled(t.samples[0].pts, rate, t.timescale);
+            for (size_t i = 0; i < n; ++i) starts[i + 1] = starts[i] + counted[i];
+        } else if (exact || !codec->packetFrames) {
             int64_t grain = !exact && t.codec == fourcc("Opus") ? 120 : 1;
             for (size_t i = 0; i <= n; ++i) {
                 int64_t at = scaled(i < n ? t.samples[i].pts : endTicks, rate, t.timescale);
@@ -139,7 +149,7 @@ struct AudioDecoder::Impl {
         for (size_t i = 0; i < n; ++i) {
             int64_t from = before;
             int64_t span = starts[i + 1] - from;
-            int64_t real = pcm ? int64_t(t.samples[i].size) / frameBytes : longest;
+            int64_t real = known ? span : pcm ? int64_t(t.samples[i].size) / frameBytes : longest;
             int64_t extra = std::max<int64_t>(0, span - real);
             int64_t kept = extra > kHole || extra > spare ? std::min(span, real) : span;
             if (kept == span) spare -= extra;
@@ -162,13 +172,52 @@ struct AudioDecoder::Impl {
         blockPackets = size_t(std::clamp<int64_t>((kBlockFrames + average - 1) / average, 1, int64_t(kMostBlockPackets)));
         int64_t blockFrames = int64_t(blockPackets) * average;
         runPackets = codec->stateless ? blockPackets : blockPackets * size_t(std::max<int64_t>(1, kRunSeconds * rate / blockFrames));
+        hidden = wantedFirst > starts[0] ? INT64_MIN : starts[0] + codec->skip;
+        feeds.resize((n + runPackets - 1) / runPackets);
+        for (size_t g = 0; g < feeds.size(); ++g) feeds[g] = feedPoint(int64_t(g));
+        std::vector<uint8_t> state;
+        marking = codec->save(state);
+        if (marking) {
+            marks.assign(feeds.size(), {});
+            marked.assign(feeds.size(), 0);
+            marks[0] = std::move(state);
+            marked[0] = 1;
+        }
     }
 
-    void restart(int64_t group) {
+    size_t feedPoint(int64_t group) const {
         size_t from = size_t(group) * runPackets;
         size_t feedFrom = from - std::min(from, size_t(codec->prerollPackets));
         while (feedFrom > 0 && starts[from] - starts[feedFrom] < codec->prerollFrames) --feedFrom;
+        return feedFrom;
+    }
+
+    void remember(size_t at) {
+        for (auto it = std::lower_bound(feeds.begin(), feeds.end(), at); it != feeds.end() && *it == at; ++it) {
+            size_t g = size_t(it - feeds.begin());
+            if (!marked[g]) marked[g] = codec->save(marks[g]) ? 1 : 0;
+        }
+    }
+
+    void feedOne(size_t at, std::vector<float>* out) {
+        packet.resize(track->samples[at].size);
+        if (packet.empty() || !file->read(*track, uint32_t(at), packet.data())) return;
+        if (out) codec->feed(packet, *out);
+        else codec->skim(packet);
+    }
+
+    void restart(int64_t group) {
+        const size_t feedFrom = feeds[size_t(group)];
         codec->reset();
+        if (marking) {
+            size_t k = size_t(group);
+            while (!marked[k]) --k;
+            codec->load(marks[k]);
+            for (size_t i = feeds[k]; i < feedFrom; ++i) {
+                remember(i);
+                feedOne(i, nullptr);
+            }
+        }
         run = group;
         next = feedFrom;
         heldFrom = starts[feedFrom] - codec->lead;
@@ -213,8 +262,8 @@ struct AudioDecoder::Impl {
             const int64_t have = heldFrom + int64_t(held.size() / channels);
             if (lagKnown && have < wanted) held.resize(held.size() + size_t(wanted - have) * channels, 0.0f);
             const size_t before = held.size();
-            packet.resize(track->samples[next].size);
-            if (!packet.empty() && file->read(*track, uint32_t(next), packet.data())) codec->feed(packet, held);
+            if (marking) remember(next);
+            feedOne(next, &held);
             if (held.size() == before) {
                 held.resize(before + size_t(starts[next + 1] - starts[next]) * channels, 0.0f);
             } else if (!lagKnown) {
@@ -230,6 +279,10 @@ struct AudioDecoder::Impl {
         if (copyTo > copyFrom) {
             memcpy(slot->pcm.data() + size_t(copyFrom - starts[from]) * channels, held.data() + size_t(copyFrom - heldFrom) * channels,
                    size_t(copyTo - copyFrom) * channels * sizeof(float));
+        }
+        if (starts[from] < hidden) {
+            const size_t quiet = size_t(std::min<int64_t>(hidden - starts[from], int64_t(slot->pcm.size() / channels)));
+            std::fill(slot->pcm.begin(), slot->pcm.begin() + long(quiet * channels), 0.0f);
         }
         forget(starts[to]);
         if (ended) run = -1;
@@ -254,11 +307,12 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
     Impl& a = *decoder->impl;
     a.file = &file;
     a.track = &track;
-    if (const char* name = windowsMediaName(track.codec)) {
+    if (track.codec == fourcc("wma1") || track.codec == fourcc("wma2")) {
+        a.codec = openWmaAudio(track, error);
+    } else if (const char* name = windowsMediaName(track.codec)) {
         if (error) *error = std::string("this sound codec (") + name + ") is not decoded yet";
         return nullptr;
-    }
-    if (track.codec == fourcc("lpcm")) {
+    } else if (track.codec == fourcc("lpcm")) {
         if (track.channels < 1 || track.channels > 64 || track.sampleRate < 1) return fail("PCM layout not supported");
         a.codec = openPcm(track, error);
     } else if (track.codec == fourcc("Opus")) {

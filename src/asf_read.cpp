@@ -131,17 +131,6 @@ struct Extended {
     uint64_t frameTime = 0;
 };
 
-uint32_t wmaCodec(uint16_t tag) {
-    switch (tag) {
-        case 0x0160: return fourcc("wma1");
-        case 0x0161: return fourcc("wma2");
-        case 0x0162: return fourcc("wmap");
-        case 0x0163: return fourcc("wmal");
-        case 0x000A: return fourcc("wmas");
-        default: return 0;
-    }
-}
-
 uint32_t wmvCodec(uint32_t handler) {
     char name[5] = {char(handler >> 24), char(handler >> 16), char(handler >> 8), char(handler), 0};
     for (char& c : name) if (c >= 'a' && c <= 'z') c = char(c - 32);
@@ -924,7 +913,7 @@ public:
         if (s.audio) {
             t.configType = fourcc("wfex");
             t.config = s.format;
-            t.codec = wmaCodec(s.tag);
+            t.codec = windowsMediaAudio(s.tag);
             const bool cut = s.tag == 1 || s.tag == 3 || s.tag == 0x55 || s.tag == 0x50 || s.tag == 0x2000;
             if (cut) {
                 t.configType = 0;
@@ -982,6 +971,17 @@ public:
     }
 };
 
+}
+
+uint32_t windowsMediaAudio(uint32_t tag) {
+    switch (tag) {
+        case 0x0160: return fourcc("wma1");
+        case 0x0161: return fourcc("wma2");
+        case 0x0162: return fourcc("wmap");
+        case 0x0163: return fourcc("wmal");
+        case 0x000A: return fourcc("wmas");
+        default: return 0;
+    }
 }
 
 const char* windowsMediaName(uint32_t codec) {

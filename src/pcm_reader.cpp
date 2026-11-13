@@ -1,12 +1,13 @@
 #include "absent/audio.h"
 #include "resample.h"
 #include <algorithm>
+#include <future>
 
 namespace absent {
 
 namespace {
 
-const size_t kStep = 4096;
+const size_t kAhead = 65536;
 
 }
 
@@ -23,17 +24,38 @@ struct PcmReader::Impl {
     std::vector<float> native;
     std::vector<float> mixed;
     std::vector<float> shaped;
+    std::vector<float> window;
+    int64_t windowStart = 0;
+    int64_t windowEnd = 0;
 
-    const float* source(int64_t from, size_t frames) {
+    std::vector<float> early;
+    int64_t earlyFrom = 0;
+    size_t earlyFrames = 0;
+    std::future<void> earlyTask;
+
+    void decode(int64_t from, size_t frames, std::vector<float>& into) {
         native.resize(frames * size_t(decoder->channels()));
         decoder->read(from, frames, native.data());
-        if (!mixFirst) return native.data();
-        mixed.resize(frames * size_t(width));
-        mix->apply(native.data(), frames, mixed.data());
+        if (!mixFirst) return into.swap(native);
+        into.resize(frames * size_t(width));
+        mix->apply(native.data(), frames, into.data());
+    }
+
+    const float* source(int64_t from, size_t frames) {
+        bool ready = earlyTask.valid() && earlyFrom == from && earlyFrames == frames;
+        if (earlyTask.valid()) earlyTask.get();
+        if (ready) mixed.swap(early);
+        else decode(from, frames, mixed);
         return mixed.data();
     }
 
-    void step(int64_t start, size_t frames, float* out) {
+    void prepare(int64_t start, size_t frames) {
+        earlyFrom = kernel->firstInput(start);
+        earlyFrames = size_t(kernel->endInput(start + int64_t(frames) - 1) - earlyFrom);
+        earlyTask = std::async(std::launch::async, [this] { decode(earlyFrom, earlyFrames, early); });
+    }
+
+    void step(int64_t start, size_t frames, float* out, bool more) {
         float* target = out;
         if (!mixFirst) {
             shaped.resize(frames * size_t(width));
@@ -45,7 +67,10 @@ struct PcmReader::Impl {
         } else {
             int64_t from = kernel->firstInput(start);
             int64_t to = kernel->endInput(start + int64_t(frames) - 1);
-            kernel->render(source(from, size_t(to - from)), from, width, start, frames, target);
+            const float* in = source(from, size_t(to - from));
+            int64_t next = start + int64_t(frames);
+            if (more && next < length) prepare(next, size_t(std::min<int64_t>(int64_t(kAhead), length - next)));
+            kernel->render(in, from, width, start, frames, target);
         }
         if (!mixFirst) mix->apply(target, frames, out);
     }
@@ -91,8 +116,17 @@ bool PcmReader::read(int64_t start, size_t frames, float* out) {
     int64_t from = start + int64_t(skip);
     int64_t to = from + int64_t(std::min<uint64_t>(frames - skip, uint64_t(r.length - from)));
     for (int64_t at = from; at < to;) {
-        size_t count = size_t(std::min<int64_t>(int64_t(kStep), to - at));
-        r.step(at, count, out + size_t(at - start) * channels);
+        if (at < r.windowStart || at >= r.windowEnd) {
+            size_t wanted = at == r.windowEnd && at > 0 ? kAhead : size_t(std::min<int64_t>(int64_t(kAhead), to - at));
+            size_t made = size_t(std::min<int64_t>(int64_t(wanted), r.length - at));
+            r.window.resize(made * channels);
+            r.step(at, made, r.window.data(), wanted == kAhead);
+            r.windowStart = at;
+            r.windowEnd = at + int64_t(made);
+        }
+        size_t count = size_t(std::min(to, r.windowEnd) - at);
+        const float* ready = r.window.data() + size_t(at - r.windowStart) * channels;
+        std::copy(ready, ready + count * channels, out + size_t(at - start) * channels);
         at += int64_t(count);
     }
     return true;

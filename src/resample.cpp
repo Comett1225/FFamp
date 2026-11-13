@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstring>
 #include <numeric>
+#include "dot.h"
+#include "parallel.h"
 
 namespace absent {
 
@@ -16,6 +18,8 @@ const double kBeta = 12.57;
 const int kExactPhases = 1024;
 const int kBlendPhases = 256;
 const int kMostTableValues = 1 << 24;
+const size_t kParallelFrames = 16384;
+const size_t kPartFrames = 4096;
 
 double bessel(double x) {
     double sum = 1;
@@ -67,7 +71,6 @@ SincKernel::SincKernel(int inRate, int outRate) {
     half = std::max(4, std::min(half, (kMostTableValues / 2 / rows) & ~3));
     int taps = 2 * half;
     table.resize(size_t(rows) * size_t(taps));
-    row.resize(size_t(taps));
     double window = bessel(kBeta);
     double pass = scale * kCutoff;
     std::vector<double> exact(table.size() / size_t(rows));
@@ -99,18 +102,10 @@ int64_t SincKernel::outputLength(int64_t inFrames) const {
     return int64_t(std::min<__int128>((__int128(inFrames) * up + down - 1) / down, INT64_MAX));
 }
 
-void SincKernel::render(const float* in, int64_t inBase, int channels, int64_t outStart, size_t count, float* out) const {
-    if (!count) return;
+void SincKernel::renderPart(const float* planes, size_t span, int64_t first, int channels, int64_t outStart, size_t count, float* out) const {
     const size_t taps = size_t(2 * half);
     const size_t width = size_t(channels);
-    const int64_t first = firstInput(outStart);
-    const size_t span = size_t(endInput(outStart + int64_t(count) - 1) - first);
-    planes.resize(span * width);
-    const float* source = in + size_t(first - inBase) * width;
-    for (size_t c = 0; c < width; ++c) {
-        float* plane = planes.data() + c * span;
-        for (size_t i = 0; i < span; ++i) plane[i] = source[i * width + c];
-    }
+    std::vector<float> row(blended ? taps : 0);
     for (size_t n = 0; n < count; ++n) {
         int64_t index = outStart + int64_t(n);
         int64_t whole = centre(index);
@@ -134,15 +129,31 @@ void SincKernel::render(const float* in, int64_t inBase, int channels, int64_t o
             h = table.data() + size_t(phase) * taps;
         }
         const size_t offset = size_t(whole - half + 1 - first);
-        for (size_t c = 0; c < width; ++c) {
-            const float* x = planes.data() + c * span + offset;
-            float sum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-            for (size_t k = 0; k < taps; k += 8) {
-                for (size_t j = 0; j < 8; ++j) sum[j] += x[k + j] * h[k + j];
-            }
-            out[n * width + c] = ((sum[0] + sum[4]) + (sum[1] + sum[5])) + ((sum[2] + sum[6]) + (sum[3] + sum[7]));
-        }
+        float* y = out + n * width;
+        size_t c = 0;
+        for (; c + 2 <= width; c += 2) dotPair(planes + c * span + offset, planes + (c + 1) * span + offset, h, taps, y + c);
+        if (c < width) y[c] = dotOne(planes + c * span + offset, h, taps);
     }
+}
+
+void SincKernel::render(const float* in, int64_t inBase, int channels, int64_t outStart, size_t count, float* out) const {
+    if (!count) return;
+    const size_t width = size_t(channels);
+    const int64_t first = firstInput(outStart);
+    const size_t span = size_t(endInput(outStart + int64_t(count) - 1) - first);
+    planes.resize(span * width);
+    const float* source = in + size_t(first - inBase) * width;
+    for (size_t c = 0; c < width; ++c) {
+        float* plane = planes.data() + c * span;
+        for (size_t i = 0; i < span; ++i) plane[i] = source[i * width + c];
+    }
+    const size_t parts = count >= kParallelFrames ? std::min(parallelWidth(), count / kPartFrames) : 1;
+    if (parts < 2) return renderPart(planes.data(), span, first, channels, outStart, count, out);
+    parallelFor(parts, [&](size_t part) {
+        size_t from = count * part / parts;
+        size_t to = count * (part + 1) / parts;
+        renderPart(planes.data(), span, first, channels, outStart + int64_t(from), to - from, out + from * width);
+    });
 }
 
 ChannelMix::ChannelMix(int inChannels, int outChannels) : from(std::max(1, inChannels)), to(std::max(1, outChannels)) {

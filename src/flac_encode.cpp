@@ -1,4 +1,6 @@
 #include "flac_encode.h"
+#include "dot.h"
+#include "parallel.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -53,6 +55,7 @@ void md5Round(uint32_t state[4], const uint8_t block[64]) {
 const int kMaxOrder = 12;
 const int kPrecision = 15;
 const int kMaxPartitionOrder = 8;
+const size_t kBatchBlocks = 32;
 
 struct Tables {
     uint8_t crc8[256];
@@ -77,18 +80,22 @@ const Tables& tables() {
 
 struct BitWriter {
     std::vector<uint8_t> d;
+    size_t at = 0;
     uint64_t hold = 0;
     int used = 0;
 
     void put(uint32_t value, int bits) {
-        if (bits <= 0) return;
-        uint64_t mask = bits >= 32 ? 0xFFFFFFFFull : ((1ull << bits) - 1);
-        hold = (hold << bits) | (value & mask);
+        hold = (hold << bits) | (value & ((1ull << bits) - 1));
         used += bits;
-        while (used >= 8) {
-            used -= 8;
-            d.push_back(uint8_t(hold >> used));
-        }
+        if (used < 32) return;
+        used -= 32;
+        if (at + 4 > d.size()) d.resize(std::max<size_t>(d.size() * 2, 4096));
+        uint32_t word = uint32_t(hold >> used);
+        d[at] = uint8_t(word >> 24);
+        d[at + 1] = uint8_t(word >> 16);
+        d[at + 2] = uint8_t(word >> 8);
+        d[at + 3] = uint8_t(word);
+        at += 4;
     }
     void unary(uint32_t zeros) {
         while (zeros >= 32) {
@@ -97,7 +104,21 @@ struct BitWriter {
         }
         put(1, int(zeros) + 1);
     }
-    void align() { if (used) put(0, 8 - used); }
+    void rice(uint32_t folded, int k) {
+        uint32_t high = folded >> k;
+        if (high + 1 + uint32_t(k) <= 32) {
+            put((1u << k) | (folded & ((1u << k) - 1)), int(high) + 1 + k);
+        } else {
+            unary(high);
+            put(folded, k);
+        }
+    }
+    void align() {
+        if (used & 7) put(0, 8 - (used & 7));
+        if (at + 4 > d.size()) d.resize(d.size() + 4);
+        for (; used > 0; used -= 8) d[at++] = uint8_t(hold >> (used - 8));
+        d.resize(at);
+    }
 };
 
 enum class Shape { Constant, Verbatim, Fixed, Linear };
@@ -106,15 +127,23 @@ struct Plan {
     Shape shape = Shape::Verbatim;
     int order = 0;
     int shift = 0;
-    int wasted = 0;
-    int depth = 0;
     int partitionOrder = 0;
-    bool wideRice = false;
     int32_t coefficients[kMaxOrder] = {};
     std::vector<uint8_t> rice;
     std::vector<int32_t> residual;
-    std::vector<int32_t> samples;
     uint64_t bits = 0;
+};
+
+struct Study {
+    std::vector<int32_t> samples;
+    int wasted = 0;
+    int depth = 0;
+    bool constant = false;
+    uint32_t most = 0;
+    int best = 0;
+    double bits = 0;
+    double predictor[kMaxOrder + 1][kMaxOrder] = {};
+    Plan plan;
 };
 
 struct RiceChoice {
@@ -131,116 +160,105 @@ RiceChoice chooseRice(const int32_t* residual, int count, int order, bool wide) 
     const int largest = wide ? 30 : 14;
     int top = 0;
     while (top < kMaxPartitionOrder && !(blockSize & ((1 << (top + 1)) - 1)) && (blockSize >> (top + 1)) > order) ++top;
-    std::vector<uint64_t> sums(size_t(1) << top);
+    uint64_t sums[1 << kMaxPartitionOrder];
     int at = 0;
     for (int p = 0; p < (1 << top); ++p) {
         int length = (blockSize >> top) - (p ? 0 : order);
         uint64_t sum = 0;
         for (int i = 0; i < length; ++i) sum += fold(residual[at + i]);
-        sums[size_t(p)] = sum;
+        sums[p] = sum;
         at += length;
     }
     RiceChoice best;
-    std::vector<uint8_t> parameters;
+    uint8_t parameters[1 << kMaxPartitionOrder];
     for (int level = top; level >= 0; --level) {
         int parts = 1 << level;
         uint64_t total = 6;
-        parameters.assign(size_t(parts), 0);
         for (int p = 0; p < parts; ++p) {
             uint64_t length = uint64_t((blockSize >> level) - (p ? 0 : order));
-            uint64_t sum = sums[size_t(p)];
+            uint64_t sum = sums[p];
             uint64_t trimmed = sum > (length >> 1) ? sum - (length >> 1) : 0;
+            int guess = length && trimmed > length ? std::min(largest, int(std::bit_width(trimmed / length)) - 1) : 0;
             uint64_t least = ~0ull;
             int pick = 0;
-            for (int k = 0; k <= largest; ++k) {
+            for (int k = std::max(0, guess - 1); k <= std::min(largest, guess + 1); ++k) {
                 uint64_t cost = length * uint64_t(k + 1) + (trimmed >> k);
                 if (cost < least) {
                     least = cost;
                     pick = k;
                 }
             }
-            parameters[size_t(p)] = uint8_t(pick);
+            parameters[p] = uint8_t(pick);
             total += uint64_t(parameterBits) + least;
         }
         if (total < best.bits) {
             best.bits = total;
             best.partitionOrder = level;
-            best.parameters = parameters;
+            best.parameters.assign(parameters, parameters + parts);
         }
-        for (int p = 0; p < parts / 2; ++p) sums[size_t(p)] = sums[size_t(2 * p)] + sums[size_t(2 * p + 1)];
+        for (int p = 0; p < parts / 2; ++p) sums[p] = sums[2 * p] + sums[2 * p + 1];
     }
     return best;
 }
 
-void take(Plan& plan, RiceChoice& choice, uint64_t headBits) {
-    plan.partitionOrder = choice.partitionOrder;
-    plan.rice = std::move(choice.parameters);
-    plan.bits = headBits + choice.bits;
+template <class Sum>
+bool predict(const int32_t* s, int count, const int32_t* quantised, int order, int shift, int32_t* out) {
+    const int kTile = 256;
+    Sum sums[kTile];
+    bool fits = true;
+    for (int from = order; from < count; from += kTile) {
+        const int n = std::min(kTile, count - from);
+        std::fill(sums, sums + n, Sum(0));
+        for (int j = 0; j < order; ++j) {
+            const Sum weight = quantised[j];
+            const int32_t* past = s + from - 1 - j;
+            for (int i = 0; i < n; ++i) sums[i] += weight * Sum(past[i]);
+        }
+        for (int i = 0; i < n; ++i) {
+            int64_t value = int64_t(s[from + i]) - int64_t(sums[i] >> shift);
+            fits = fits && value > INT32_MIN && value <= INT32_MAX;
+            out[from + i] = int32_t(value);
+        }
+    }
+    return fits;
 }
 
-Plan analyse(const int32_t* input, int count, int depth) {
-    Plan plan;
-    plan.samples.assign(input, input + count);
-    int32_t* s = plan.samples.data();
+void study(Study& lane, int depth) {
+    const int count = int(lane.samples.size());
+    int32_t* s = lane.samples.data();
     uint32_t any = 0;
     bool same = true;
     for (int i = 0; i < count; ++i) {
         any |= uint32_t(s[i]);
         same = same && s[i] == s[0];
     }
+    lane.wasted = 0;
     if (any && depth > 1) {
-        plan.wasted = std::min(std::countr_zero(any), depth - 1);
-        if (plan.wasted) for (int i = 0; i < count; ++i) s[i] >>= plan.wasted;
+        lane.wasted = std::min(std::countr_zero(any), depth - 1);
+        if (lane.wasted) for (int i = 0; i < count; ++i) s[i] >>= lane.wasted;
     }
-    depth -= plan.wasted;
-    plan.depth = depth;
-    plan.wideRice = depth > 16;
-    const uint64_t head = 8 + uint64_t(plan.wasted);
-    if (same) {
-        plan.shape = Shape::Constant;
-        plan.bits = head + uint64_t(depth);
-        return plan;
-    }
-    plan.shape = Shape::Verbatim;
-    plan.bits = head + uint64_t(count) * uint64_t(depth);
-
-    std::vector<int32_t> work(static_cast<size_t>(count));
-    std::vector<int64_t> wide(s, s + count);
-    for (int order = 0; order <= 4 && order < count; ++order) {
-        bool fits = true;
-        for (int i = order; i < count; ++i) {
-            int64_t value = wide[size_t(i)];
-            fits = fits && value > INT32_MIN && value <= INT32_MAX;
-            work[size_t(i)] = int32_t(value);
-        }
-        if (fits) {
-            RiceChoice choice = chooseRice(work.data() + order, count - order, order, plan.wideRice);
-            uint64_t bits = head + uint64_t(order) * uint64_t(depth) + choice.bits;
-            if (bits < plan.bits) {
-                plan.shape = Shape::Fixed;
-                plan.order = order;
-                plan.residual.assign(work.begin() + order, work.end());
-                take(plan, choice, head + uint64_t(order) * uint64_t(depth));
-            }
-        }
-        for (int i = count - 1; i > order; --i) wide[size_t(i)] -= wide[size_t(i - 1)];
-    }
-
+    depth -= lane.wasted;
+    lane.depth = depth;
+    lane.constant = same;
+    lane.best = 0;
+    lane.bits = same ? double(depth) : double(count) * depth;
     int highest = std::min(kMaxOrder, count - 1);
-    if (highest < 1) return plan;
+    if (same || highest < 1) return;
     std::vector<double> windowed(static_cast<size_t>(count));
     const double middle = (count - 1) / 2.0;
+    double weightEnergy = 0;
+    uint32_t most = 0;
     for (int i = 0; i < count; ++i) {
         double x = middle > 0 ? (i - middle) / (middle + 1) : 0;
-        windowed[size_t(i)] = s[i] * (1.0 - x * x);
+        double weight = 1.0 - x * x;
+        windowed[size_t(i)] = s[i] * weight;
+        weightEnergy += weight * weight;
+        most = std::max(most, uint32_t(s[i] < 0 ? -int64_t(s[i]) : int64_t(s[i])));
     }
+    lane.most = most;
     double correlation[kMaxOrder + 1] = {};
-    for (int lag = 0; lag <= highest; ++lag) {
-        double sum = 0;
-        for (int i = lag; i < count; ++i) sum += windowed[size_t(i)] * windowed[size_t(i - lag)];
-        correlation[lag] = sum;
-    }
-    if (correlation[0] <= 0) return plan;
+    for (int lag = 0; lag <= highest; ++lag) correlation[lag] = dotWide(windowed.data() + lag, windowed.data(), size_t(count - lag));
+    if (!(correlation[0] > 0) || !(weightEnergy > 0)) return;
     double predictor[kMaxOrder + 1] = {};
     double previous[kMaxOrder + 1] = {};
     double error = correlation[0];
@@ -252,79 +270,133 @@ Plan analyse(const int32_t* input, int count, int depth) {
         predictor[order] = reflection;
         for (int j = 1; j < order; ++j) predictor[j] = previous[j] - reflection * previous[order - j];
         error *= 1.0 - reflection * reflection;
-
-        double largest = 0;
-        for (int j = 1; j <= order; ++j) largest = std::max(largest, std::fabs(predictor[j]));
-        if (!(largest > 0) || !std::isfinite(largest)) continue;
-        int exponent = 0;
-        std::frexp(largest, &exponent);
-        int shift = std::min(kPrecision - 1 - exponent, 15);
-        if (shift < 0) continue;
-        int32_t quantised[kMaxOrder];
-        double carried = 0;
-        const int32_t limit = (1 << (kPrecision - 1)) - 1;
-        for (int j = 0; j < order; ++j) {
-            carried += predictor[j + 1] * double(1 << shift);
-            int32_t q = int32_t(std::clamp<long>(std::lround(carried), -limit - 1, limit));
-            quantised[j] = q;
-            carried -= q;
-        }
-        bool fits = true;
-        for (int i = order; i < count; ++i) {
-            int64_t sum = 0;
-            for (int j = 0; j < order; ++j) sum += int64_t(quantised[j]) * s[i - 1 - j];
-            int64_t value = int64_t(s[i]) - (sum >> shift);
-            fits = fits && value > INT32_MIN && value <= INT32_MAX;
-            work[size_t(i)] = int32_t(value);
-        }
-        if (!fits) continue;
-        RiceChoice choice = chooseRice(work.data() + order, count - order, order, plan.wideRice);
-        uint64_t fixedBits = head + uint64_t(order) * uint64_t(depth) + 9 + uint64_t(order) * kPrecision;
-        if (fixedBits + choice.bits < plan.bits) {
-            plan.shape = Shape::Linear;
-            plan.order = order;
-            plan.shift = shift;
-            std::copy(quantised, quantised + order, plan.coefficients);
-            plan.residual.assign(work.begin() + order, work.end());
-            take(plan, choice, fixedBits);
+        if (!std::isfinite(error)) break;
+        std::copy(predictor + 1, predictor + order + 1, lane.predictor[order]);
+        double each = error > 0 ? std::max(1.0, 1.94 + 0.5 * std::log2(error / weightEnergy)) : 1.0;
+        double bits = each * (count - order) + double(order) * (depth + kPrecision) + 9;
+        if (bits < lane.bits) {
+            lane.bits = bits;
+            lane.best = order;
         }
     }
-    return plan;
 }
 
-void writeSubframe(BitWriter& w, const Plan& plan) {
-    int count = int(plan.samples.size());
+void consider(Study& lane, Shape shape, int order, const int32_t* work, uint64_t fixedBits, int shift, const int32_t* quantised) {
+    const int count = int(lane.samples.size());
+    RiceChoice choice = chooseRice(work + order, count - order, order, lane.depth > 16);
+    if (fixedBits + choice.bits >= lane.plan.bits) return;
+    Plan& plan = lane.plan;
+    plan.shape = shape;
+    plan.order = order;
+    plan.shift = shift;
+    if (quantised) std::copy(quantised, quantised + order, plan.coefficients);
+    plan.residual.assign(work + order, work + count);
+    plan.partitionOrder = choice.partitionOrder;
+    plan.rice = std::move(choice.parameters);
+    plan.bits = fixedBits + choice.bits;
+}
+
+void linear(Study& lane, int order, int32_t* work) {
+    const int count = int(lane.samples.size());
+    const double* predictor = lane.predictor[order];
+    double largest = 0;
+    for (int j = 0; j < order; ++j) largest = std::max(largest, std::fabs(predictor[j]));
+    if (!(largest > 0) || !std::isfinite(largest)) return;
+    int exponent = 0;
+    std::frexp(largest, &exponent);
+    int shift = std::min(kPrecision - 1 - exponent, 15);
+    if (shift < 0) return;
+    int32_t quantised[kMaxOrder];
+    double carried = 0;
+    const int32_t limit = (1 << (kPrecision - 1)) - 1;
+    uint64_t reach = 0;
+    for (int j = 0; j < order; ++j) {
+        carried += predictor[j] * double(1 << shift);
+        int32_t q = int32_t(std::clamp<long>(std::lround(carried), -limit - 1, limit));
+        quantised[j] = q;
+        carried -= q;
+        reach += uint64_t(q < 0 ? -q : q);
+    }
+    const int32_t* s = lane.samples.data();
+    bool fits = reach * lane.most < (1ull << 31) ? predict<int32_t>(s, count, quantised, order, shift, work) : predict<int64_t>(s, count, quantised, order, shift, work);
+    if (!fits) return;
+    consider(lane, Shape::Linear, order, work, 8 + uint64_t(lane.wasted) + uint64_t(order) * uint64_t(lane.depth) + 9 + uint64_t(order) * kPrecision, shift, quantised);
+}
+
+void settle(Study& lane) {
+    const int count = int(lane.samples.size());
+    const int32_t* s = lane.samples.data();
+    const uint64_t head = 8 + uint64_t(lane.wasted);
+    Plan& plan = lane.plan;
+    plan = Plan();
+    if (lane.constant) {
+        plan.shape = Shape::Constant;
+        plan.bits = head + uint64_t(lane.depth);
+        return;
+    }
+    plan.bits = head + uint64_t(count) * uint64_t(lane.depth);
+    std::vector<int32_t> work(static_cast<size_t>(count));
+    std::vector<int64_t> wide(s, s + count);
+    int fixedOrder = 0;
+    uint64_t fixedSum = ~0ull;
+    bool fixedFits = false;
+    for (int order = 0; order <= 4 && order < count; ++order) {
+        uint64_t sum = 0;
+        bool fits = true;
+        for (int i = order; i < count; ++i) {
+            int64_t value = wide[size_t(i)];
+            fits = fits && value > INT32_MIN && value <= INT32_MAX;
+            sum += uint64_t(value < 0 ? -value : value);
+        }
+        if (fits && sum < fixedSum) {
+            fixedSum = sum;
+            fixedOrder = order;
+            fixedFits = true;
+        }
+        for (int i = count - 1; i > order; --i) wide[size_t(i)] -= wide[size_t(i - 1)];
+    }
+    if (fixedFits) {
+        wide.assign(s, s + count);
+        for (int order = 0; order < fixedOrder; ++order) for (int i = count - 1; i > order; --i) wide[size_t(i)] -= wide[size_t(i - 1)];
+        for (int i = fixedOrder; i < count; ++i) work[size_t(i)] = int32_t(wide[size_t(i)]);
+        consider(lane, Shape::Fixed, fixedOrder, work.data(), head + uint64_t(fixedOrder) * uint64_t(lane.depth), 0, nullptr);
+    }
+    if (lane.best > 0) linear(lane, lane.best, work.data());
+}
+
+void writeSubframe(BitWriter& w, const Study& lane) {
+    const Plan& plan = lane.plan;
+    const int count = int(lane.samples.size());
+    const int depth = lane.depth;
+    const bool wideRice = depth > 16;
     int code = plan.shape == Shape::Constant ? 0 : plan.shape == Shape::Verbatim ? 1 : plan.shape == Shape::Fixed ? 8 + plan.order : 32 + plan.order - 1;
     w.put(0, 1);
     w.put(uint32_t(code), 6);
-    w.put(plan.wasted ? 1 : 0, 1);
-    if (plan.wasted) w.unary(uint32_t(plan.wasted - 1));
+    w.put(lane.wasted ? 1 : 0, 1);
+    if (lane.wasted) w.unary(uint32_t(lane.wasted - 1));
     if (plan.shape == Shape::Constant) {
-        w.put(uint32_t(plan.samples[0]), plan.depth);
+        w.put(uint32_t(lane.samples[0]), depth);
         return;
     }
     if (plan.shape == Shape::Verbatim) {
-        for (int32_t value : plan.samples) w.put(uint32_t(value), plan.depth);
+        for (int32_t value : lane.samples) w.put(uint32_t(value), depth);
         return;
     }
-    for (int i = 0; i < plan.order; ++i) w.put(uint32_t(plan.samples[size_t(i)]), plan.depth);
+    for (int i = 0; i < plan.order; ++i) w.put(uint32_t(lane.samples[size_t(i)]), depth);
     if (plan.shape == Shape::Linear) {
         w.put(kPrecision - 1, 4);
         w.put(uint32_t(plan.shift), 5);
         for (int i = 0; i < plan.order; ++i) w.put(uint32_t(plan.coefficients[i]), kPrecision);
     }
-    w.put(plan.wideRice ? 1 : 0, 2);
+    w.put(wideRice ? 1 : 0, 2);
     w.put(uint32_t(plan.partitionOrder), 4);
     int at = 0;
     for (int p = 0; p < (1 << plan.partitionOrder); ++p) {
         int length = (count >> plan.partitionOrder) - (p ? 0 : plan.order);
         int k = plan.rice[size_t(p)];
-        w.put(uint32_t(k), plan.wideRice ? 5 : 4);
-        for (int i = 0; i < length; ++i) {
-            uint32_t folded = fold(plan.residual[size_t(at + i)]);
-            w.unary(folded >> k);
-            w.put(folded, k);
-        }
+        w.put(uint32_t(k), wideRice ? 5 : 4);
+        const int32_t* residual = plan.residual.data() + at;
+        for (int i = 0; i < length; ++i) w.rice(fold(residual[i]), k);
         at += length;
     }
 }
@@ -395,92 +467,106 @@ struct FlacEncoder::Impl {
     uint32_t smallest = 0;
     uint32_t largest = 0;
     Md5 digest;
-    std::vector<uint8_t> packed;
-    std::vector<int32_t> lanes[4];
 
-    void block(const int32_t* interleaved, int count, const FlacSink& sink) {
-        std::vector<Plan> plans;
+    std::vector<uint8_t> frame(const int32_t* interleaved, int count, uint32_t number) const {
+        std::vector<Study> lanes(size_t(channels == 2 ? 4 : channels));
+        for (Study& lane : lanes) lane.samples.resize(size_t(count));
+        std::vector<const Study*> chosen;
         int assignment = channels - 1;
         if (channels == 2) {
-            for (auto& lane : lanes) lane.resize(size_t(count));
             for (int i = 0; i < count; ++i) {
                 int32_t left = interleaved[i * 2], right = interleaved[i * 2 + 1];
-                lanes[0][size_t(i)] = left;
-                lanes[1][size_t(i)] = right;
-                lanes[2][size_t(i)] = (left + right) >> 1;
-                lanes[3][size_t(i)] = left - right;
+                lanes[0].samples[size_t(i)] = left;
+                lanes[1].samples[size_t(i)] = right;
+                lanes[2].samples[size_t(i)] = (left + right) >> 1;
+                lanes[3].samples[size_t(i)] = left - right;
             }
-            Plan left = analyse(lanes[0].data(), count, bits);
-            Plan right = analyse(lanes[1].data(), count, bits);
-            Plan mid = analyse(lanes[2].data(), count, bits);
-            Plan side = analyse(lanes[3].data(), count, bits + 1);
-            uint64_t costs[4] = {left.bits + right.bits, left.bits + side.bits, side.bits + right.bits, mid.bits + side.bits};
+            for (int c = 0; c < 4; ++c) study(lanes[size_t(c)], c == 3 ? bits + 1 : bits);
+            double costs[4] = {lanes[0].bits + lanes[1].bits, lanes[0].bits + lanes[3].bits, lanes[3].bits + lanes[1].bits, lanes[2].bits + lanes[3].bits};
             int pick = int(std::min_element(costs, costs + 4) - costs);
             assignment = pick == 0 ? 1 : 7 + pick;
-            if (pick == 0) {
-                plans.push_back(std::move(left));
-                plans.push_back(std::move(right));
-            } else if (pick == 1) {
-                plans.push_back(std::move(left));
-                plans.push_back(std::move(side));
-            } else if (pick == 2) {
-                plans.push_back(std::move(side));
-                plans.push_back(std::move(right));
-            } else {
-                plans.push_back(std::move(mid));
-                plans.push_back(std::move(side));
-            }
+            static const int first[4] = {0, 0, 3, 2}, second[4] = {1, 3, 1, 3};
+            chosen = {&lanes[size_t(first[pick])], &lanes[size_t(second[pick])]};
         } else {
             for (int c = 0; c < channels; ++c) {
-                lanes[0].resize(size_t(count));
-                for (int i = 0; i < count; ++i) lanes[0][size_t(i)] = interleaved[i * channels + c];
-                plans.push_back(analyse(lanes[0].data(), count, bits));
+                for (int i = 0; i < count; ++i) lanes[size_t(c)].samples[size_t(i)] = interleaved[i * channels + c];
+                study(lanes[size_t(c)], bits);
+                chosen.push_back(&lanes[size_t(c)]);
             }
         }
+        for (const Study* lane : chosen) settle(*const_cast<Study*>(lane));
 
         BitWriter w;
-        w.d.reserve(size_t(count) * size_t(channels) * 2);
+        w.d.resize(size_t(count) * size_t(channels) * 2 + 64);
         int sizeCode = blockSizeCode(count);
         int rateCode = sampleRateCode(rate);
-        w.put(0xFFF8, 16);
-        w.put(uint32_t(sizeCode), 4);
-        w.put(uint32_t(rateCode), 4);
-        w.put(uint32_t(assignment), 4);
-        w.put(uint32_t(sampleSizeCode(bits)), 3);
-        w.put(0, 1);
-        if (frameNumber < 0x80) {
-            w.put(frameNumber, 8);
+        uint8_t head[16];
+        size_t n = 0;
+        head[n++] = 0xFF;
+        head[n++] = 0xF8;
+        head[n++] = uint8_t((sizeCode << 4) | rateCode);
+        head[n++] = uint8_t((assignment << 4) | (sampleSizeCode(bits) << 1));
+        if (number < 0x80) {
+            head[n++] = uint8_t(number);
         } else {
-            int extra = frameNumber < 0x800 ? 1 : frameNumber < 0x10000 ? 2 : frameNumber < 0x200000 ? 3 : frameNumber < 0x4000000 ? 4 : 5;
-            w.put((0xFF00u >> (extra + 1)) | (frameNumber >> (6 * extra)), 8);
-            for (int i = extra - 1; i >= 0; --i) w.put(0x80 | ((frameNumber >> (6 * i)) & 0x3F), 8);
+            int extra = number < 0x800 ? 1 : number < 0x10000 ? 2 : number < 0x200000 ? 3 : number < 0x4000000 ? 4 : 5;
+            head[n++] = uint8_t((0xFF00u >> (extra + 1)) | (number >> (6 * extra)));
+            for (int i = extra - 1; i >= 0; --i) head[n++] = uint8_t(0x80 | ((number >> (6 * i)) & 0x3F));
         }
-        if (sizeCode == 6) w.put(uint32_t(count - 1), 8);
-        if (sizeCode == 7) w.put(uint32_t(count - 1), 16);
-        if (rateCode == 12) w.put(uint32_t(rate / 1000), 8);
-        if (rateCode == 13) w.put(uint32_t(rate), 16);
-        if (rateCode == 14) w.put(uint32_t(rate / 10), 16);
+        if (sizeCode == 6) head[n++] = uint8_t(count - 1);
+        if (sizeCode == 7) {
+            head[n++] = uint8_t((count - 1) >> 8);
+            head[n++] = uint8_t(count - 1);
+        }
+        if (rateCode == 12) head[n++] = uint8_t(rate / 1000);
+        if (rateCode == 13 || rateCode == 14) {
+            int value = rateCode == 13 ? rate : rate / 10;
+            head[n++] = uint8_t(value >> 8);
+            head[n++] = uint8_t(value);
+        }
         uint8_t headCheck = 0;
-        for (uint8_t byte : w.d) headCheck = tables().crc8[headCheck ^ byte];
-        w.put(headCheck, 8);
-        for (const Plan& plan : plans) writeSubframe(w, plan);
+        for (size_t i = 0; i < n; ++i) headCheck = tables().crc8[headCheck ^ head[i]];
+        head[n++] = headCheck;
+        for (size_t i = 0; i < n; ++i) w.put(head[i], 8);
+        for (const Study* lane : chosen) writeSubframe(w, *lane);
         w.align();
         uint16_t check = 0;
         for (uint8_t byte : w.d) check = uint16_t((check << 8) ^ tables().crc16[(check >> 8) ^ byte]);
-        w.put(check, 16);
+        w.d.push_back(uint8_t(check >> 8));
+        w.d.push_back(uint8_t(check));
+        return std::move(w.d);
+    }
 
-        int width = (bits + 7) / 8;
-        packed.resize(size_t(count) * size_t(channels) * size_t(width));
-        size_t at = 0;
-        for (int i = 0; i < count * channels; ++i) for (int k = 0; k < width; ++k) packed[at++] = uint8_t(uint32_t(interleaved[i]) >> (8 * k));
-        digest.add(packed.data(), packed.size());
+    void digestOf(const int32_t* interleaved, size_t values) {
+        const size_t width = size_t((bits + 7) / 8);
+        const size_t kStep = 16384;
+        std::vector<uint8_t> packed(kStep * width);
+        for (size_t from = 0; from < values; from += kStep) {
+            size_t n = std::min(kStep, values - from);
+            size_t at = 0;
+            for (size_t i = 0; i < n; ++i) for (size_t k = 0; k < width; ++k) packed[at++] = uint8_t(uint32_t(interleaved[from + i]) >> (8 * k));
+            digest.add(packed.data(), at);
+        }
+    }
 
-        uint32_t size = uint32_t(w.d.size());
-        smallest = smallest ? std::min(smallest, size) : size;
-        largest = std::max(largest, size);
-        total += uint64_t(count);
-        ++frameNumber;
-        sink(w.d.data(), w.d.size(), uint32_t(count));
+    void flush(size_t frames, const FlacSink& sink) {
+        const size_t blocks = (frames + size_t(kBlock) - 1) / size_t(kBlock);
+        std::vector<std::vector<uint8_t>> made(blocks);
+        parallelFor(blocks + 1, [&](size_t i) {
+            if (i == blocks) return digestOf(pending.data(), frames * size_t(channels));
+            size_t from = i * size_t(kBlock);
+            made[i] = frame(pending.data() + from * size_t(channels), int(std::min(size_t(kBlock), frames - from)), frameNumber + uint32_t(i));
+        });
+        for (size_t i = 0; i < blocks; ++i) {
+            uint32_t count = uint32_t(std::min(size_t(kBlock), frames - i * size_t(kBlock)));
+            uint32_t size = uint32_t(made[i].size());
+            smallest = smallest ? std::min(smallest, size) : size;
+            largest = std::max(largest, size);
+            total += count;
+            ++frameNumber;
+            sink(made[i].data(), made[i].size(), count);
+        }
+        pending.erase(pending.begin(), pending.begin() + long(frames * size_t(channels)));
     }
 };
 
@@ -495,19 +581,13 @@ FlacEncoder::~FlacEncoder() = default;
 void FlacEncoder::encode(const int32_t* interleaved, size_t frames, const FlacSink& sink) {
     Impl& f = *impl;
     f.pending.insert(f.pending.end(), interleaved, interleaved + frames * size_t(f.channels));
-    size_t step = size_t(kBlock) * size_t(f.channels);
-    size_t at = 0;
-    while (f.pending.size() - at >= step) {
-        f.block(f.pending.data() + at, kBlock, sink);
-        at += step;
-    }
-    f.pending.erase(f.pending.begin(), f.pending.begin() + long(at));
+    const size_t batch = size_t(kBlock) * kBatchBlocks;
+    while (f.pending.size() / size_t(f.channels) >= batch) f.flush(batch, sink);
 }
 
 void FlacEncoder::finish(const FlacSink& sink) {
     Impl& f = *impl;
-    if (!f.pending.empty()) f.block(f.pending.data(), int(f.pending.size() / size_t(f.channels)), sink);
-    f.pending.clear();
+    if (!f.pending.empty()) f.flush(f.pending.size() / size_t(f.channels), sink);
 }
 
 std::vector<uint8_t> FlacEncoder::streamInfo() const {

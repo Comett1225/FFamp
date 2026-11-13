@@ -24,7 +24,7 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 
 The test script needs `ffmpeg`, `ffprobe`, Python 3 with NumPy and the Xcode command line tools. FFmpeg is only the judge: it makes the
 test clips and is the reference every frame is compared against. Set `FFMPEG` and `FFPROBE` to use other binaries. Nothing from FFmpeg
-is linked or copied.
+is linked; parts based on FFmpeg are listed in `docs/NOTICE.md`.
 
 ## Layout
 
@@ -40,7 +40,7 @@ is linked or copied.
 
 ## Rules
 
-- Written from the specifications and the operating-system documentation. No code is copied or translated from FFmpeg, GStreamer or any
-  other GPL or LGPL project.
+- FFamp is inspired by FFmpeg.
+- Written from the specifications and the operating-system documentation. Parts based on FFmpeg are listed in `docs/NOTICE.md`.
 - No comments in source files; explanations go in `docs/`.
-- Licence: not chosen yet.
+- Licence: GPL-3.0-or-later.

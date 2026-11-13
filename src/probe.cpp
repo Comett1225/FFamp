@@ -486,11 +486,11 @@ Timing timingOf(const Track& t) {
 
 bool onGrid(const Track& t, int64_t top, int64_t bottom) {
     double step = double(t.timescale) * double(bottom) / double(top);
-    int64_t origin = t.samples[0].dts;
+    int64_t origin = t.samples[0].pts;
     double slack = t.timescale >= 10000 ? 1.0 : 0.5001;
     if (step < 2 * slack + 1) return false;
     for (const Sample& s : t.samples) {
-        double at = double(int64_t(uint64_t(s.dts) - uint64_t(origin)));
+        double at = double(int64_t(uint64_t(s.pts) - uint64_t(origin)));
         if (std::fabs(at - std::round(at / step) * step) > slack) return false;
     }
     return true;
@@ -519,7 +519,7 @@ const char* formatName(const std::string& name) {
         {"mp4", "mov,mp4,m4a,3gp,3g2,mj2"}, {"mov", "mov,mp4,m4a,3gp,3g2,mj2"}, {"m4a", "mov,mp4,m4a,3gp,3g2,mj2"},
         {"matroska", "matroska,webm"}, {"mkv", "matroska,webm"}, {"webm", "matroska,webm"},
         {"ogg", "ogg"}, {"opus", "ogg"}, {"wav", "wav"}, {"wave", "wav"}, {"aiff", "aiff"}, {"aifc", "aiff"},
-        {"mp3", "mp3"}, {"flac", "flac"}, {"aac", "aac"}, {"adts", "aac"}, {"mpegts", "mpegts"}, {"ts", "mpegts"}, {"m2ts", "mpegts"},
+        {"mp3", "mp3"}, {"mp2", "mp3"}, {"mp1", "mp3"}, {"flac", "flac"}, {"aac", "aac"}, {"adts", "aac"}, {"mpegts", "mpegts"}, {"ts", "mpegts"}, {"m2ts", "mpegts"},
     };
     for (auto& entry : names) if (name == entry.first) return entry.second;
     return nullptr;
@@ -533,14 +533,25 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
     struct stat status;
     int64_t fileSize = stat(path.c_str(), &status) == 0 ? int64_t(status.st_size) : 0;
     const std::vector<Track>& tracks = reader->tracks();
+    const char* name = formatName(reader->format());
+    const std::string family = name ? name : reader->format();
+    const bool matroska = family == "matroska,webm", mpegAudio = family == "mp3", adts = family == "aac", wave = family == "wav", ogg = family == "ogg";
+    const bool counted = family == "aiff" || family == "mov,mp4,m4a,3gp,3g2,mj2";
     Json j;
     j.open('{');
     j.array("streams");
+
     double begin = 1e300, finish = -1e300;
     for (size_t index = 0; index < tracks.size(); ++index) {
         const Track& t = tracks[index];
         Look look = lookOf(*reader, t);
         Timing timing = timingOf(t);
+        int64_t clock = matroska ? 1000 : mpegAudio ? 14112000 : adts ? 28224000 : t.timescale;
+        if (t.timescale && !t.samples.empty()) {
+            if (mpegAudio && t.mediaStart > 0) timing.start += double(t.mediaStart) / t.timescale;
+            if (ogg && t.codec == fourcc("Opus") && t.mediaStart > 0) timing.duration += double(t.mediaStart) / t.timescale;
+        }
+        if (look.codec == "av1" || look.codec == "prores" || look.codec == "vp8") look.rangeKnown = true;
         j.item();
         j.number("index", int64_t(index));
         j.string("codec_name", look.codec);
@@ -568,14 +579,17 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
         bool video = t.kind == Kind::Video && timing.ticks > 0;
         j.string("r_frame_rate", baseRate(t, timing));
         j.string("avg_frame_rate", video ? fraction(int64_t(t.samples.size()) * t.timescale, timing.ticks) : "0/0");
-        j.string("time_base", "1/" + std::to_string(t.timescale));
+        j.string("time_base", "1/" + std::to_string(clock));
         if (!t.samples.empty() && t.timescale) {
-            j.number("start_pts", int64_t(std::llround(timing.start * t.timescale)));
-            j.seconds("start_time", timing.start);
-            j.number("duration_ts", int64_t(std::llround(timing.duration * t.timescale)));
+            if (!wave) {
+                j.number("start_pts", int64_t(std::llround(timing.start * double(clock))));
+                j.seconds("start_time", timing.start);
+            }
+            j.number("duration_ts", int64_t(std::llround(timing.duration * double(clock))));
             j.seconds("duration", timing.duration);
             if (timing.ticks > 0) j.string("bit_rate", std::to_string(int64_t(double(timing.bytes) * 8 * t.timescale / double(timing.ticks))));
-            j.string("nb_frames", std::to_string(t.samples.size()));
+            bool frames = counted && t.codec == fourcc("lpcm") && t.sampleRate > 0;
+            j.string("nb_frames", std::to_string(frames ? int64_t(std::llround(double(timing.ticks) * t.sampleRate / t.timescale)) : int64_t(t.samples.size())));
             begin = std::min(begin, timing.start);
             finish = std::max(finish, timing.start + timing.duration);
         }
@@ -587,9 +601,10 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
             j.close('}');
             j.close(']');
         }
-        if (!t.language.empty()) {
+        std::string language = matroska ? (t.language.empty() ? "eng" : t.language == "und" ? "" : t.language) : t.language;
+        if (!language.empty()) {
             j.object("tags");
-            j.string("language", t.language);
+            j.string("language", language);
             j.close('}');
         }
         j.close('}');
@@ -625,10 +640,10 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
     j.object("format");
     j.string("filename", path);
     j.number("nb_streams", int64_t(tracks.size()));
-    const char* name = formatName(reader->format());
-    j.string("format_name", name ? name : reader->format());
+    j.string("format_name", family);
+    if (finish > begin && reader->statedSeconds() > 0) finish = begin + reader->statedSeconds();
     if (finish > begin) {
-        j.seconds("start_time", begin);
+        if (!wave && !adts) j.seconds("start_time", begin);
         j.seconds("duration", finish - begin);
         j.string("size", std::to_string(fileSize));
         j.string("bit_rate", std::to_string(int64_t(double(fileSize) * 8 / (finish - begin))));

@@ -71,6 +71,7 @@ public:
     virtual const std::vector<Track>& tracks() const = 0;
     virtual bool read(const Track& track, uint32_t index, uint8_t* out) = 0;
     virtual const std::map<std::string, std::string>& tags() const;
+    virtual double statedSeconds() const;
     const Track* first(Kind kind) const;
 };
 

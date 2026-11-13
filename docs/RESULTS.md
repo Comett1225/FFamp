@@ -146,3 +146,69 @@ absent-media, and every real FFmpeg program and library on the machine denied by
 
 Limits: the stand-ins are separate programs because the app was not changed; they cover only the command lines of this H.264 + AAC MP4
 export; one project on one machine.
+
+# Speed round: every video path that was slower than FFmpeg
+
+The owner's 1080p, 30 fps, 30 second clip (901 frames) in each codec. Whole-program wall time, best of three, with the old build,
+the new build and FFmpeg run one after another in the same minute (another job was running on the machine, so every figure is a
+little slower than on an idle Mac, but all three saw the same load). "Before" is the build before this round.
+
+| Path | Before | After | FFmpeg 9.0.2 |
+|---|---|---|---|
+| HEVC 10-bit decode into memory | 1.43 s | 0.39 s | 0.83 s (`-hwaccel videotoolbox`) |
+| AV1 software decode into memory (dav1d) | 2.05 s | 0.64 s | 0.82 s (libdav1d) |
+| VP9 software decode into memory (libvpx) | 1.21 s | 0.94 s | 0.68 s (FFmpeg's own VP9 decoder) |
+| VP9 through the system decoder into memory | 1.24 s | 0.96 s | 0.76 s (software) |
+| H.264 decode into memory | 0.78 s | 0.45 s | 1.74 s (`-hwaccel videotoolbox`) |
+| HEVC 8-bit decode into memory | 0.55 s | 0.37 s | 1.50 s |
+| AV1 through the system decoder into memory | 0.61 s | 0.38 s | 1.53 s |
+| VP9 encode, 6 Mbit/s, from the H.264 clip | 4.67 s | 4.00 s | 4.29 s (libvpx-vp9, realtime, cpu-used 8, row-mt) |
+| AV1 encode, 6 Mbit/s, from the H.264 clip | 3.46 s | 3.38 s | 3.46 s (libsvtav1 preset 10) |
+| H.264 / HEVC encode, 6 Mbit/s (hardware) | 4.05 / 4.20 s | 4.05 / 4.26 s | 4.09 / 4.30 s |
+| Frames out, 1080p to 720p RGBA, bicubic | 4.36 s (207 fps) | 0.95 s (950 fps) | 1.20 s (`flags=bicubic`), 1.62 s (`accurate_rnd+full_chroma_int+bicubic`, the same quality) |
+| Frames out, 1080p RGBA, no scaling | 3.47 s | 0.56 s | 0.74 s |
+| Frames out, 1080p to 720p I420, bicubic | 2.62 s | 0.66 s | 0.71 s |
+| Compress 60 s of 1080p to 720p, 4 Mbit/s, AAC | 4.17 s | 4.13 s | 4.24 s |
+| Jump to a random frame, mean of 20: H.264 / HEVC / HEVC 10-bit / AV1 (system decoder) | 24.1 / 20.4 / 21.4 / 34.8 ms | 24.1 / 20.4 / 20.6 / 34.8 ms | 76 to 141 ms (one program start per jump) |
+| Jump to a random frame in software: AV1 / VP9 | 187 / 72 ms | 66 / 62 ms | |
+
+What changed:
+
+- The decoder reads ahead when frames are taken in order: up to 8 packets (4 above 2304 x 1296) are already in the hardware decoder,
+  or in a worker thread for dav1d and libvpx, while the caller copies or converts the current frame. A jump to another frame does not
+  read ahead, so random seeks cost what they did before. After a run of frames, a jump first waits for the frames in flight.
+- dav1d decodes several frames at once (frame delay 8, or 4 for large pictures) and is drained at the end of the stream and after a
+  jump. libvpx filters with all its threads. Peak memory for 1080p AV1 software decode went from 54 MB to about 190 MB.
+- The 10-bit and interleaved plane copies are plain loops the compiler turns into NEON code.
+- Scaling and colour conversion run as one pass over bands of rows that fit the cache: the three planes are scaled and converted to
+  RGBA inside the band, straight from the decoder's planes, on a thread crew that lives as long as the program instead of new
+  threads for every frame. The bicubic weights and the arithmetic are the same as before.
+- SVT-AV1 gets `under_shoot_pct` 5.
+
+Exactness: `tests/suites/89_speedcheck.sh` reads runs of frames after jumps in 12 fixture cases and compares them with the straight
+decode; the frame-exact checks against FFmpeg in the video suites are unchanged and pass. Scaled and converted frames were compared
+with the build before this round in twenty cases (ten sizes and layouts, an 8-bit and a 10-bit clip): seventeen byte-identical,
+three with 1 to 75 bytes out of 16 to 43 million differing by at most 2 (a value that lands exactly on a rounding tie). Against FFmpeg's bicubic scaling
+(`accurate_rnd+full_chroma_int`) the 720p RGBA frames measure 74.7 dB on the owner's clip before and after, 53.4 dB on the suite's
+moving test clip.
+
+Not faster than FFmpeg:
+
+- VP9 software decode: 0.94 s against 0.68 s. libvpx decodes one frame at a time and spreads only tiles and the loop filter over
+  threads; FFmpeg's own decoder works on several frames at once and needs a quarter less processor time. Closing the gap needs a
+  second decoder instance running ahead in the next group of pictures (about 130 MB more memory at 1080p for, at best, a tie) or a
+  frame-threaded VP9 decoder. Not done.
+- Compress and the hardware encodes: the hardware encoder sets the pace (446 fps for 720p H.264 when fed from memory), ours and
+  FFmpeg's times are within 3 %. The 5.6 to 6.8 s measured earlier was a single run on a busy machine.
+
+AV1 size at a 6 Mbit/s target (22.5 MB for this clip):
+
+| Key frame every | Ours before | Ours after | FFmpeg libsvtav1, preset 10 |
+|---|---|---|---|
+| 30 frames (what our tools and the app ask for) | 14.35 MB, 43.89 dB | 16.77 MB, 44.44 dB | 14.60 MB, 43.91 dB (`-g 30`) |
+| 150 frames (the encoder's own choice, FFmpeg's default) | 18.95 MB, 45.14 dB | 21.21 MB, 45.49 dB | 18.47 MB, 44.93 dB |
+
+The earlier comparison set our 30-frame groups against FFmpeg's 150-frame default; with the same spacing the two were equal. The
+one-pass rate control of SVT-AV1 falls short of the target with short groups, and it cannot be steered while it runs (a bitrate
+change is only accepted in its low-delay constant-rate mode). On two other clips the new setting gave 77 % and 100 % of the target
+with 30-frame groups (66 % and 100 % before) and 95 % and 102 % with 150-frame groups. `amedia transcode` takes `--gop`.

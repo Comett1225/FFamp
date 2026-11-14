@@ -709,3 +709,59 @@ Not done: FFmpeg's error concealment (a picture that stops decoding part way kee
 before, FFmpeg guesses motion), so damaged pictures differ from FFmpeg's; WMV8 tools that FFmpeg's encoder cannot make (mspel motion,
 8x4 and 4x8 transforms, X8) are covered only by the two sample files, Microsoft MPEG-4 v1 only by the FATE sample, slices (FFmpeg's encoder writes
 one per picture) only by `mp43.wmv`; no frame threads (every picture needs the one before; the decoder already matches FFmpeg's one-thread speed).
+
+# Windows Media step G: Windows Media Audio 9 Voice
+
+`src/wmavoice_decode.cpp` decodes Windows Media Audio 9 Voice (`0x000A`) from ASF, AVI and Matroska behind `AudioDecoder`, based on
+FFmpeg's decoder (`docs/NOTICE.md`): the CELP helpers it uses and the small transforms of its postfilter are in
+`src/wmavoice_dsp.cpp`, its tables in `src/wmavoice_tables.cpp` (converted by script). Rules in `docs/CONVENTIONS.md`.
+
+FFmpeg cannot encode this codec. Fixtures: 5 files in `tests/fixtures/wmavoice` (18 KB) written by `make.py`, FFamp's own bitstream
+writer: 8,000, 11,025, 16,000 and 22,050 Hz, 10 and 16 LSPs, independent and residual LSPs, every frame type, with and without the
+postfilter, denoise strengths 3, 9 and 11, tilt correction, the DC filter, both quantiser and default-LSP modes, superframes split
+across packets, two or three `block_align` units per packet, short superframes (401 and 300 samples), statistics fields, in ASF
+(remuxed by FFmpeg), AVI and Matroska; one more has a music superframe. Judge: FFmpeg 9.0.2's `wmavoice` decoder.
+
+Exactness: FFmpeg's own C code built from the reference source (`docs/NOTICE.md` names the files; a scratch harness compiled
+`wmavoice.c` and its helpers with this Mac's compiler and ran it with `-cpuflags 0`) gives the same bits as FFamp on all 7 streams
+below, postfilter included; the transforms alone were also checked against libavutil's C code on 2,000 random inputs each. The
+installed FFmpeg 9.0.2 is newer (libavcodec 63, the reference copy is 62.28) and differs from that build in rare last bits
+(first at sample 2,202 of `streaming_CBR-7K.wma` with the postfilter switched off), and its arm64 build runs a NEON FFT in the
+postfilter. Against it:
+
+| Stream | FFamp against FFmpeg 9.0.2 (default / `-cpuflags 0`) | FFmpeg 9.0.2's NEON against its own C code |
+|---|---|---|
+| `streaming_CBR-7K.wma` (8 kHz, 10 LSPs, residual, postfilter, 16.5 s) | 121.9 / 121.9 dB | 136.4 dB |
+| FATE `streaming_CBR-11K.wma` (8 kHz, tilt correction) | 121.2 / 121.2 dB | 136.6 dB |
+| `streaming_CBR-19K.wma` (16 kHz, 16 LSPs) | 74.7 / 75.6 dB | 82.2 dB |
+| 4 fixtures | 93.3 to 112.3 dB | |
+| `wmav_8.wma` (music frames inside Voice) | refused with its own message; FFmpeg stops on the same frames (`Not yet implemented`) and decodes the rest | |
+
+Lengths equal FFmpeg's to the sample on every stream. The 19K file is the sensitive one: the postfilter's Kalman search and
+denoise table indexes take other branches after a last-bit change, which is why FFmpeg's own two builds differ by 82 dB there.
+Suite floors: 90 dB for the fixtures, 70 dB for the sample files.
+
+| Check | Result |
+|---|---|
+| Random reads (single frames, odd chunk sizes, reads before the start and past the end) | identical to the straight decode on the fixtures, the sample files and a 70 s stream (four 20-second runs, so the marks are used) |
+| Probe | `wmavoice`, `flt`, `mono`, other fields as for the other ASF streams |
+| Fuzzing with undefined-behaviour checks: `fuzz_wma` on Voice seeds (fixtures and the three sample files) | 2 x 60 s, 76,000 runs, no finds |
+
+Speed, best of three, whole files through the command line (`ffamp adecode` against `ffmpeg -threads 1 ... -f f32le`):
+
+| File | FFamp | FFmpeg, one thread | FFamp / FFmpeg |
+|---|---|---|---|
+| 600 s written by `make.py` (16 kHz, 16 LSPs, postfilter) | 0.381 s (1,570 times real time) | 0.499 s | 0.76 |
+| `streaming_CBR-19K.wma`, 16.5 s | 0.015 s | 0.035 s | 0.41 |
+| `streaming_CBR-7K.wma`, 16.5 s | 0.014 s | 0.030 s | 0.46 |
+
+A first version decoded each 20-second run twice on a straight read (the run's mark sat on its first packet, which a straight read
+reaches only after the restart that wants it); one preroll packet moved the mark into the run before, which halved the time.
+
+Test counts after the merge with main (WMV7/8): `48_wma.sh` 164 checks with FFmpeg (215 with the sample files of
+`WINMEDIA_SAMPLES`), 76 without; `QUICK=1 tests/run.sh` 2,601 pass, 3 skipped (the VC-1 and WMV7/8 sample files, a real camera);
+`QUICK=1 NOFFMPEG=1 tests/run.sh` 1,659 pass, 93 skipped.
+
+What is left: music frames (Windows Media Audio 9 Professional inside Voice; FFmpeg has no decoder for them and only one public
+sample uses them); last-bit agreement with the installed FFmpeg 9.0.2, whose sources are newer than the reference copy, and with its
+NEON FFT.

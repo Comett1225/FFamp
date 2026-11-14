@@ -143,9 +143,8 @@ list; `Sample.offset` is then free for the reader's use.
   Language List entry as stored (RFC 1766, `en-us`); ffprobe shows ISO 639-2 (`eng`).
 - `statedSeconds()` is the play duration minus the preroll, except for broadcast files and files whose data object runs past the end.
 - Probe names `wmav1`, `wmav2`, `wmapro`, `wmalossless`, `wmavoice`, `wmv1`, `wmv2`, `wmv3`, `vc1`, `msmpeg4v1`, `msmpeg4v2`,
-  `msmpeg4v3`, from ASF, AVI and Matroska. Windows Media Audio 1, 2, 9 Professional and 9 Lossless and every Windows Media video codec
-  decode (sections below); until its codec round lands, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9
-  Voice) is not decoded yet`.
+  `msmpeg4v3`, from ASF, AVI and Matroska. Every Windows Media audio and video codec decodes (sections
+  below).
 - H.263 and Motion JPEG in ASF get their FFamp codes (`h263`, `jpeg`) and decode. Other sound tags keep a track named by the tag in
   hex (`0130`), other video fourccs a track named by the fourcc.
 
@@ -260,6 +259,7 @@ list; `Sample.offset` is then free for the reader's use.
     a run with no mark loads the nearest earlier one and brings the decoder forward with `skim`.
   - `skim(packet)`: advance the state through a packet without making sound (WMA parses the packet and moves the noise generator but
     skips the transforms).
+  - `refusal`: set by `counts` when the stream turns out to use a mode the decoder refuses; `AudioDecoder::open` then fails with it.
 
 ## Windows Media Audio 1 and 2 (`wma1`, `wma2`, `src/wma_decode.cpp`)
 
@@ -320,6 +320,27 @@ list; `Sample.offset` is then free for the reader's use.
 - On purpose unlike FFmpeg: at the end of a cut file, a last frame that reads past the data takes the bytes that follow in the
   reservoir; FFmpeg's reader stops moving at the end and repeats bits, so that frame differs (FATE `Mega_Weird_Audio_Test_24bit`
   and `g2_24bit`).
+
+## Windows Media Audio 9 Voice (`wmas`, `src/wmavoice_decode.cpp`)
+
+- Based on FFmpeg's decoder (`docs/NOTICE.md`) and bit-exact with it when FFmpeg runs its C code (`-cpuflags 0`) built from the
+  reference source: mono float output, 322 to 22,097 Hz (FFmpeg's limits), 10 or 16 LSPs coded per frame or once per superframe
+  (residual), all 17 frame types (comfort noise, hardcoded codebook, pitch-adaptive window pulses, single and double excitation
+  pulses, per-frame asymmetric and per-block Hamming pitch), the averaging projection postfilter (Kalman smoothing, the Wiener denoise
+  filter with its tilt correction, gain control, the DC filter), superframes split across packets, sample counts below 480,
+  statistics fields. Packets that carry several `block_align` units (AVI chunks, ASF media objects) are split as FFmpeg splits them.
+- The postfilter's transforms (real FFT of 128, DCT-I and DST-I of 64) are FFmpeg's C transforms with its butterflies, PFA maps and
+  tables (`src/wmavoice_dsp.cpp`), and every float expression keeps FFmpeg's order and types, so the compiler fuses the same
+  multiply-adds. FFmpeg's arm64 build runs its NEON FFT for the 128-point transform, which rounds differently (see `docs/RESULTS.md`).
+- Bits are read as FFmpeg's checked reader reads them (the position stops 8 bits past the end, bits behind the end come from the rest
+  of the packet), so a superframe that runs past its data fails as in FFmpeg, with the decoder state FFmpeg is left with.
+- Music frames (the first bit of a superframe clear: Windows Media Audio 9 Professional inside Voice) are not decoded by FFmpeg either.
+  `counts` finds them, and `AudioDecoder::open` refuses such a stream with `this Windows Media Audio 9 Voice stream has music frames
+  (Windows Media Audio 9 Professional inside Voice), which are not decoded` (`PacketDecoder::refusal`).
+- Every superframe feeds the next (excitation, synthesis, postfilter memories, the noise generator's frame counter), so `save` keeps
+  the whole decoder state (about 7 KB) and jumps go through the marks; one preroll packet puts each run's mark inside the run before,
+  so a straight read never decodes anything twice.
+- Frame counts: one parse of every packet at open without synthesis (about 4 % of the decode time; 16 ms for 600 s).
 
 ## The H.263-family core (`src/h263.h`, `src/h263.cpp`)
 

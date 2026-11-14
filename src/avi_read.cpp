@@ -269,10 +269,8 @@ public:
                 s.track.channels = int(le16(format.data() + 2));
                 s.track.sampleRate = int(le32(format.data() + 4));
                 s.track.bits = int(le16(format.data() + 14));
-                if (s.tag == 0xFFFE && format.size() >= 40) {
-                    s.track.channelMask = le32(format.data() + 20);
-                    s.tag = le16(format.data() + 24);
-                }
+                if (s.tag == 0xFFFE && format.size() >= 40) s.track.channelMask = le32(format.data() + 20);
+                s.tag = extensibleTag(format.data(), format.size());
                 s.extra = format;
             } else if (id == fourcc("indx")) {
                 s.indexAt = body;
@@ -459,7 +457,7 @@ public:
             }
             return;
         }
-        if (const uint32_t wma = windowsMediaAudio(s.tag)) {
+        if (const uint32_t wma = waveAudio(s.tag)) {
             const uint64_t bytesPerSecond = s.extra.size() >= 12 ? le32(s.extra.data() + 8) : 0;
             if (t.channels < 1 || t.sampleRate < 1 || !bytesPerSecond) return;
             t.codec = wma;
@@ -481,10 +479,48 @@ public:
                 const int64_t next = i + 1 < t.samples.size() ? t.samples[i + 1].pts : int64_t(before * uint64_t(t.sampleRate) / bytesPerSecond);
                 t.samples[i].duration = uint32_t(std::clamp<int64_t>(next - t.samples[i].pts, 0, 0x7FFFFFFF));
             }
+            if (waveDecoded(wma)) {
+                int64_t time = 0;
+                for (Sample& sample : t.samples) {
+                    sample.pts = sample.dts = time;
+                    sample.duration = uint32_t(std::min<int64_t>(waveFrames(t, sample.size), 0x7FFFFFFF));
+                    time += sample.duration;
+                }
+            }
+            return;
+        }
+        if ((s.tag == 0xFF || s.tag == 0xF1AC) && s.extra.size() > 18) {
+            const size_t extra = std::min<size_t>(le16(s.extra.data() + 16), s.extra.size() - 18);
+            FlacInfo info;
+            if (s.tag == 0xF1AC && !(extra >= 34 && flacInfo(s.extra.data() + 18, 34, info))) return;
+            t.codec = s.tag == 0xFF ? fourcc("mp4a") : fourcc("fLaC");
+            t.configType = s.tag == 0xFF ? fourcc("ASC ") : fourcc("fLaC");
+            t.config.assign(s.extra.begin() + 18, s.extra.begin() + 18 + long(s.tag == 0xFF ? extra : 34));
+            if (s.tag == 0xF1AC) t.bits = info.bits;
+            t.timescale = uint32_t(t.sampleRate);
+            uint64_t before = 0;
+            int64_t time = 0;
+            for (const Chunk& c : s.chunks) {
+                if (!c.size) continue;
+                Sample sample;
+                sample.offset = before;
+                sample.size = c.size;
+                uint8_t head[16];
+                FlacFrame f;
+                const uint32_t frames = s.tag == 0xFF ? 1024 : fetch(s, before, head, std::min<size_t>(16, c.size)) && flacFrame(head, std::min<size_t>(16, c.size), f) ? f.blockSize : 0;
+                sample.pts = sample.dts = time;
+                sample.duration = frames;
+                sample.sync = true;
+                time += frames;
+                before += c.size;
+                t.samples.push_back(sample);
+            }
             return;
         }
         const bool mpeg = s.tag == 0x55 || s.tag == 0x50;
-        if (!mpeg && s.tag != 0x2000) return;
+        uint8_t sync[2] = {0, 0};
+        const bool sniffed = s.tag == 0 && fetch(s, 0, sync, 2) && sync[0] == 0x0B && sync[1] == 0x77;
+        if (!mpeg && s.tag != 0x2000 && !sniffed) return;
         t.bits = 0;
         uint64_t at = 0;
         int64_t time = 0;

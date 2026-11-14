@@ -18,6 +18,9 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 - Microsoft MPEG-4 v1 to v3 (`MPG4`, `MP42`, `MP43`, the DivX 3 AVIs), Windows Media Video 7 and 8 (`WMV1`, `WMV2`, with X8 intra
   pictures) through FFamp's own decoder, based on FFmpeg's.
 - Windows Media Audio 1, 2, 9 Professional, 9 Lossless and 9 Voice through FFamp's own decoders, based on FFmpeg's.
+- A-law, mu-law, IMA ADPCM (WAV, QuickTime, DK3, DK4), Microsoft and Yamaha ADPCM, G.722, G.726 and TTA through FFamp's own decoders,
+  based on FFmpeg's, in WAV, AIFF-C, CAF, AVI, Matroska, QuickTime and ASF; FLAC, AAC, MP3, AC-3 and E-AC-3 in the WAV, AVI and CAF
+  layouts FFmpeg writes.
 - `ffamp`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
 - File tools (`docs/TOOLS.md`): `compress`, `trim`, `extract-audio`, `reverse`, `gif-video`, `merge`, `strip-audio`, `rewrap`, with progress
   lines and a clean stop; `docs/YTDLP.md` describes the downloader without FFmpeg.

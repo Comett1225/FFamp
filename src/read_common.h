@@ -81,6 +81,7 @@ struct FlacInfo {
 };
 
 bool flacInfo(const uint8_t* p, size_t n, FlacInfo& out);
+int64_t flacFrames(Source& source, uint64_t at, uint64_t limit, const FlacInfo& info, Track& track);
 
 uint32_t opusSamples(const uint8_t* p, size_t n);
 

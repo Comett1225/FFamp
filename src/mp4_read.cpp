@@ -152,6 +152,9 @@ void audioConfig(uint32_t type, View body, Track& track) {
         int mode = int(r.bits(3));
         track.channels = fronts[mode] + int(r.bit());
         if (rate) track.sampleRate = rate;
+    } else if ((type >> 16) == 0x6D73 && type == track.codec && body.n >= 16) {
+        track.configType = fourcc("wfex");
+        track.config.assign(body.p, body.p + body.n);
     } else if (type == fourcc("enda") && body.n >= 2 && track.codec == fourcc("lpcm")) {
         track.bigEndian = body.p[1] == 0;
     } else if (type == fourcc("pcmC") && body.n >= 6 && track.codec == fourcc("lpcm")) {
@@ -160,7 +163,12 @@ void audioConfig(uint32_t type, View body, Track& track) {
     }
 }
 
-void audioEntry(uint32_t format, View v, Track& track) {
+struct SoundUnit {
+    uint32_t frames = 0;
+    uint32_t bytes = 0;
+};
+
+void audioEntry(uint32_t format, View v, Track& track, SoundUnit& unit) {
     uint16_t version = v.u16();
     v.skip(6);
     track.channels = v.u16();
@@ -169,7 +177,10 @@ void audioEntry(uint32_t format, View v, Track& track) {
     track.sampleRate = int(v.u32() >> 16);
     uint32_t flags = 0;
     if (version == 1) {
-        v.skip(16);
+        unit.frames = v.u32();
+        v.skip(4);
+        unit.bytes = v.u32();
+        v.skip(4);
     } else if (version == 2) {
         v.skip(4);
         uint64_t raw = v.u64();
@@ -180,10 +191,12 @@ void audioEntry(uint32_t format, View v, Track& track) {
         v.skip(4);
         bits = int(v.u32() & 0xFFFF);
         flags = v.u32();
-        v.skip(8);
+        unit.bytes = v.u32();
+        unit.frames = v.u32();
     }
     if (format == fourcc("sowt") && bits == 16) pcm(track, 16, false, false);
     else if (format == fourcc("twos") && bits == 16) pcm(track, 16, false, true);
+    else if ((format == fourcc("twos") || format == fourcc("sowt")) && bits == 8) pcm(track, 8, false, true);
     else if ((format == fourcc("raw ") || format == fourcc("NONE")) && bits == 8) pcm(track, 8, false, false);
     else if (format == fourcc("in24")) pcm(track, 24, false, true);
     else if (format == fourcc("in32")) pcm(track, 32, false, true);
@@ -198,6 +211,8 @@ void audioEntry(uint32_t format, View v, Track& track) {
         track.channels = 1;
         track.sampleRate = format == fourcc("sawb") ? 16000 : 8000;
     }
+    if (format == fourcc("alaw") || format == fourcc("ulaw")) unit = {1, uint32_t(track.channels)};
+    else if (format == fourcc("ima4")) unit = {64, 34 * uint32_t(track.channels)};
     boxes(v, [&](uint32_t type, View body) {
         if (type == fourcc("wave")) boxes(body, [&](uint32_t inner, View content) { audioConfig(inner, content, track); });
         else audioConfig(type, body, track);
@@ -223,7 +238,7 @@ void videoKind(Track& track) {
     }
 }
 
-void entry(uint32_t format, View v, Track& track) {
+void entry(uint32_t format, View v, Track& track, SoundUnit& unit) {
     track.codec = format;
     v.skip(8);
     if (track.kind == Kind::Video) {
@@ -248,7 +263,7 @@ void entry(uint32_t format, View v, Track& track) {
         });
         videoKind(track);
     } else if (track.kind == Kind::Audio) {
-        audioEntry(format, v, track);
+        audioEntry(format, v, track, unit);
     }
 }
 
@@ -531,14 +546,12 @@ void trak(View v, Pending& p) {
     });
 }
 
-void placePcm(Pending& p, uint64_t fileSize) {
+void placePcm(Pending& p, uint64_t fileSize, uint32_t unit, uint32_t frames, uint64_t group) {
     Track& track = p.track;
-    uint32_t unit = p.fixedSize == 1 ? uint32_t(track.channels) * uint32_t(track.bits / 8) : p.fixedSize;
     uint32_t delta = p.stts[0].second;
     uint64_t left = std::min(p.sampleCount, p.stts[0].first);
-    if (unit < 1 || unit > 65536 || delta > 65536) return;
-    left = std::min(left, fileSize / unit);
-    const uint64_t group = 4096;
+    if (unit < 1 || unit > 65536 || delta > 65536 || frames < 1 || frames > 65536) return;
+    left = std::min(left, fileSize / unit * frames);
     int64_t dts = 0;
     for (size_t r = 0; r < p.stsc.size() && left; ++r) {
         uint64_t first = p.stsc[r].first;
@@ -546,15 +559,16 @@ void placePcm(Pending& p, uint64_t fileSize) {
         if (first < 1) break;
         for (uint64_t c = first; c < last && c <= p.chunks.size() && left; ++c) {
             uint64_t offset = p.chunks[c - 1];
-            uint64_t inChunk = std::min<uint64_t>(p.stsc[r].count, left);
-            left -= inChunk;
+            uint64_t taken = std::min<uint64_t>(p.stsc[r].count, left);
+            left -= taken;
+            uint64_t inChunk = taken / frames;
             while (inChunk) {
                 uint64_t take = std::min(inChunk, group);
                 Sample s;
                 s.offset = offset;
                 s.size = uint32_t(take * unit);
                 s.dts = s.pts = dts;
-                s.duration = uint32_t(take * delta);
+                s.duration = uint32_t(take * frames * delta);
                 s.sync = true;
                 track.samples.push_back(s);
                 offset += s.size;
@@ -594,17 +608,27 @@ void gapless(View movie, std::vector<Track*>& audio, const std::map<uint32_t, bo
 
 void place(Pending& p, uint64_t fileSize) {
     Track& track = p.track;
+    SoundUnit unit;
     if (p.stsd.n >= 8) {
         View v = p.stsd;
         v.skip(8);
         bool taken = false;
         boxes(v, [&](uint32_t format, View body) {
-            if (!taken) entry(format, body, track);
+            if (!taken) entry(format, body, track, unit);
             taken = true;
         });
     }
-    if (track.codec == fourcc("lpcm") && p.fixedSize && p.stts.size() == 1 && track.channels > 0 && track.bits >= 8) {
-        placePcm(p, fileSize);
+    if (track.kind == Kind::Audio && (track.codec >> 16) == 0x6D73 && track.config.empty() && unit.bytes) {
+        const uint32_t tag = track.codec & 0xFFFF, ch = uint32_t(track.channels), rate = uint32_t(track.sampleRate);
+        const uint8_t form[18] = {uint8_t(tag), uint8_t(tag >> 8), uint8_t(ch), uint8_t(ch >> 8), uint8_t(rate), uint8_t(rate >> 8), uint8_t(rate >> 16),
+            uint8_t(rate >> 24), 0, 0, 0, 0, uint8_t(unit.bytes), uint8_t(unit.bytes >> 8), 4, 0, 0, 0};
+        track.configType = fourcc("wfex");
+        track.config.assign(form, form + 18);
+    }
+    const bool framed = p.fixedSize == 1 && unit.frames && unit.bytes && waveDecoded(track.codec);
+    if (track.kind == Kind::Audio && p.fixedSize && p.stts.size() == 1 && track.channels > 0 && (framed || (track.codec == fourcc("lpcm") && track.bits >= 8))) {
+        if (framed) placePcm(p, fileSize, unit.bytes, unit.frames, unit.frames >= 160 ? 1 : std::max<uint32_t>(1, 1024 / unit.frames));
+        else placePcm(p, fileSize, p.fixedSize == 1 ? uint32_t(track.channels) * uint32_t(track.bits / 8) : p.fixedSize, 1, 4096);
         return;
     }
     uint32_t count = p.sampleCount;
@@ -835,6 +859,12 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
         size_t keep = 0;
         while (keep < track.samples.size() && track.samples[keep].offset <= total && track.samples[keep].size <= total - track.samples[keep].offset) ++keep;
         track.samples.resize(keep);
+        if (waveDecoded(track.codec) && track.mediaEnd >= 0) {
+            for (const Sample& s : track.samples) {
+                const int64_t end = s.pts + std::max<int64_t>(s.duration, waveFrames(track, s.size));
+                if (s.pts < track.mediaEnd && end > track.mediaEnd) track.mediaEnd = end;
+            }
+        }
         for (uint32_t i = 0; i < track.samples.size(); ++i) {
             if (track.samples[i].pts >= track.mediaStart && (track.mediaEnd < 0 || track.samples[i].pts < track.mediaEnd)) track.order.push_back(i);
             if (track.samples[i].sync) track.syncs.push_back(i);

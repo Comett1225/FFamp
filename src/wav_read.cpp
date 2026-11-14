@@ -33,6 +33,10 @@ struct Layout {
     uint64_t dataAt = 0;
     uint64_t dataSize = 0;
     uint64_t frames = ~0ull;
+    uint32_t codec = 0;
+    uint32_t unitBytes = 0;
+    uint32_t unitFrames = 0;
+    std::vector<uint8_t> format;
     bool described = false;
     bool located = false;
     const char* refused = nullptr;
@@ -89,19 +93,32 @@ void riff(Source& source, Layout& w, Tags& tags) {
             size_t have = size_t(std::min<uint64_t>({size, left, 40}));
             const uint8_t* f = source.view(body, have);
             if (!f) break;
+            source.load(body, std::min<uint64_t>({size, left, 65536}), w.format, 65536);
             uint32_t tag = le16(f);
             w.channels = int(le16(f + 2));
             w.rate = le32(f + 4);
             uint32_t align = le16(f + 12), bits = le16(f + 14);
-            if (tag == 0xFFFE && have >= 40) {
-                static const uint8_t base[14] = {0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71};
-                w.mask = le32(f + 20);
-                tag = memcmp(f + 26, base, 14) == 0 ? le16(f + 24) : 0;
-            }
+            if (tag == 0xFFFE && have >= 40) w.mask = le32(f + 20);
+            tag = extensibleTag(f, have);
             w.bytes = w.channels > 0 && align % uint32_t(w.channels) == 0 && align ? int(align) / w.channels : int(bits + 7) / 8;
             w.floating = tag == 3;
             w.described = true;
-            if (tag != 1 && tag != 3) w.refused = "this WAV file holds compressed sound, only PCM is supported";
+            if (tag == 0xF1AC) {
+                w.codec = fourcc("fLaC");
+                w.unitBytes = 1;
+            } else if (tag == 0x55 || tag == 0x50 || tag == 0x2000) {
+                w.codec = tag == 0x2000 ? fourcc("ac-3") : fourcc(".mp3");
+                w.unitBytes = 1;
+            } else if (tag != 1 && tag != 3) {
+                w.codec = waveAudio(tag);
+                if (tag == 2 && w.channels > 2 && align * uint32_t(w.channels) <= 0xFFFF && w.format.size() >= 14) {
+                    align *= uint32_t(w.channels);
+                    w.format[12] = uint8_t(align);
+                    w.format[13] = uint8_t(align >> 8);
+                }
+                w.unitBytes = std::max<uint32_t>(1, align);
+                if (!w.codec) w.refused = "this WAV file holds sound in a format that is not supported";
+            }
         } else if (id == fourcc("data") && !w.located) {
             w.dataAt = body;
             w.dataSize = size == 0xFFFFFFFF && wideData ? wideData : size;
@@ -160,10 +177,18 @@ void aiff(Source& source, bool compressed, Layout& w, Tags& tags, bool& flip) {
                 w.bytes = 3;
             } else if (kind == fourcc("in32")) {
                 w.bytes = 4;
+            } else if (kind == fourcc("alaw") || kind == fourcc("ALAW") || kind == fourcc("ulaw") || kind == fourcc("ULAW")) {
+                w.codec = (kind | 0x20202020) == fourcc("alaw") ? fourcc("alaw") : fourcc("ulaw");
+                w.unitBytes = uint32_t(w.channels);
+                w.unitFrames = 1;
+            } else if (kind == fourcc("ima4")) {
+                w.codec = kind;
+                w.unitBytes = 34 * uint32_t(w.channels);
+                w.unitFrames = 64;
             } else if (kind != fourcc("raw ") && kind != fourcc("NONE") && kind != fourcc("twos")) {
                 w.refused = "this AIFF file holds compressed sound, only PCM is supported";
             }
-            flip = w.bytes == 1 && kind != fourcc("raw ");
+            flip = w.bytes == 1 && kind != fourcc("raw ") && !w.codec;
         } else if (id == fourcc("SSND") && left >= 8 && !w.located) {
             const uint8_t* d = source.view(body, 8);
             if (!d) break;
@@ -215,7 +240,98 @@ std::unique_ptr<Reader> openWave(const std::string& path, std::string* error) {
     if (!w.described) return fail("no sound format description in this file");
     if (w.refused) return fail(w.refused);
     if (!w.located) return fail("no sound data in this file");
-    const bool sized = w.floating ? w.bytes == 4 || w.bytes == 8 : w.bytes >= 1 && w.bytes <= 4;
+    if (w.codec) {
+        if (w.channels < 1 || w.channels > 255 || !(w.rate >= 1 && w.rate <= 16777216) || w.unitBytes < 1 || w.unitBytes > (1u << 20)) return fail("unsupported sound layout");
+        Track track;
+        track.id = 1;
+        track.kind = Kind::Audio;
+        track.codec = w.codec;
+        track.sampleRate = int(std::lround(w.rate));
+        track.timescale = uint32_t(track.sampleRate);
+        track.channels = w.channels;
+        track.channelMask = w.mask;
+        if (!w.format.empty()) {
+            track.configType = fourcc("wfex");
+            track.config = std::move(w.format);
+        }
+        if (track.codec == fourcc("fLaC")) {
+            FlacInfo info;
+            if (track.config.size() < 18 + 34 || !flacInfo(track.config.data() + 18, 34, info)) return fail("FLAC in this WAV file has no stream description");
+            track.config.erase(track.config.begin(), track.config.begin() + 18);
+            track.config.resize(34);
+            track.configType = fourcc("fLaC");
+            track.bits = info.bits;
+            if (flacFrames(source, w.dataAt, w.dataAt + w.dataSize, info, track) < 0) return fail("no sound frames in this file");
+            indexTrack(track);
+            reader->list.push_back(std::move(track));
+            return reader;
+        }
+        if (track.codec == fourcc("ac-3") || track.codec == fourcc(".mp3")) {
+            const bool mpeg = track.codec == fourcc(".mp3");
+            track.configType = 0;
+            track.config.clear();
+            uint64_t at = 0, lost = 0;
+            int64_t time = 0;
+            while (w.dataSize - at >= 8 && lost < (1u << 20)) {
+                const uint8_t* head = source.view(w.dataAt + at, 8);
+                if (!head) break;
+                MpegAudio m;
+                DolbyFrame d;
+                uint32_t size = 0, samples = 0, codec = 0;
+                int rate = 0, channels = 0;
+                if (mpeg && mpegAudio(head, m)) {
+                    size = uint32_t(m.size), samples = uint32_t(m.samples), rate = m.sampleRate, channels = m.channels;
+                    codec = m.layer == 3 ? fourcc(".mp3") : m.layer == 2 ? fourcc(".mp2") : fourcc(".mp1");
+                } else if (!mpeg && dolbyFrame(head, d) && !d.dependent) {
+                    size = d.bytes, samples = d.samples, rate = d.rate, channels = d.channels, codec = d.codec;
+                }
+                if (size < 8 || size > w.dataSize - at || rate < 1 || (!track.samples.empty() && (codec != track.codec || rate != track.sampleRate))) {
+                    ++at;
+                    ++lost;
+                    continue;
+                }
+                lost = 0;
+                if (track.samples.empty()) {
+                    track.codec = codec;
+                    track.sampleRate = rate;
+                    track.channels = channels;
+                    track.timescale = uint32_t(rate);
+                }
+                Sample s;
+                s.offset = w.dataAt + at;
+                s.size = size;
+                s.pts = s.dts = time;
+                s.duration = samples;
+                s.sync = true;
+                time += samples;
+                track.samples.push_back(s);
+                at += size;
+            }
+            if (track.samples.empty()) return fail("no sound frames in this file");
+            indexTrack(track);
+            reader->list.push_back(std::move(track));
+            return reader;
+        }
+        const uint64_t units = w.dataSize / w.unitBytes + (w.unitFrames ? 0 : w.dataSize % w.unitBytes != 0);
+        const uint64_t group = std::max<uint64_t>(1, (w.unitFrames ? kPacketFrames / w.unitFrames : 4096 / w.unitBytes));
+        uint64_t time = 0;
+        for (uint64_t done = 0; done < units; done += group) {
+            Sample s;
+            s.offset = w.dataAt + done * w.unitBytes;
+            s.size = uint32_t(std::min<uint64_t>(group * w.unitBytes, w.dataAt + w.dataSize - s.offset));
+            const uint64_t frames = w.unitFrames ? std::min(group, units - done) * w.unitFrames : uint64_t(waveFrames(track, s.size));
+            s.pts = s.dts = int64_t(time);
+            s.duration = uint32_t(frames);
+            s.sync = true;
+            time += frames;
+            track.samples.push_back(s);
+        }
+        if (track.samples.empty()) return fail("no sound data in this file");
+        indexTrack(track);
+        reader->list.push_back(std::move(track));
+        return reader;
+    }
+    const bool sized = w.floating ? w.bytes == 4 || w.bytes == 8 : (w.bytes >= 1 && w.bytes <= 4) || w.bytes == 8;
     if (w.channels < 1 || w.channels > 255 || !sized || !(w.rate >= 1 && w.rate <= 16777216)) return fail("unsupported PCM layout");
     const uint64_t frameBytes = uint64_t(w.channels) * w.bytes;
     const uint64_t frames = std::min(w.frames, w.dataSize / frameBytes);

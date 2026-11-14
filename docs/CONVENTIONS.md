@@ -26,7 +26,11 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | Motion JPEG | `jpeg` | 0 | empty; one whole JPEG picture per sample |
 | DV | `dvc ` (NTSC), `dvcp` (PAL), `dv5n`, `dv5p`, or the QuickTime fourcc as found | 0 | empty |
 | H.263 | `h263` | 0 | empty |
-| PCM | `lpcm` | 0 | empty; `bits` (8, 16, 24, 32, 64), `floating`, `bigEndian` describe it; 8-bit is unsigned, others signed |
+| PCM | `lpcm` | 0 | empty; `bits` (8, 16, 24, 32, 64), `floating`, `bigEndian` describe it; 8-bit is unsigned unless `bigEndian` is set (QuickTime `twos` and CAF 8-bit are signed; AIFF readers flip the sign bit while reading), others signed; 64-bit integers too |
+| G.711 A-law / mu-law | `alaw` / `ulaw` | 0 or `wfex` | empty, or the WAVEFORMATEX it came with |
+| QuickTime IMA ADPCM | `ima4` | 0 | empty; blocks of 34 bytes (64 samples) per channel |
+| TTA (True Audio) | `TTA1` | `TTA1` | the 22-byte TTA1 header; Matroska builds it as FFmpeg does (format 1, channels, bit depth, rate, the segment duration in frames) |
+| Sound named by a WAVE format tag: Microsoft ADPCM (0x0002), IMA ADPCM (0x0011, 2 to 5 bits), Yamaha ADPCM (0x0020), IMA DK4 (0x0061), IMA DK3 (0x0062), G.726 (0x0014, 0x0040, 0x0045, 0x0064), G.722 (0x028F) | `ms` and the 16-bit tag, as QuickTime names them (`ms\0\x02` = 0x6D730002) | `wfex` | the WAVEFORMATEX and its codec data; QuickTime takes it from the atom of that name inside `wave`, CAF and QuickTime files without one get a made-up one from their description |
 | Windows Media Video 7, 8, 9, VC-1, Microsoft MPEG-4 v1 to v3 | `WMV1`, `WMV2`, `WMV3`, `WVC1`, `WMVA`, `MPG4`, `MP42`, `MP43` (every reader gives these names for the fourccs that mean the same codec: `DIV3`, `DIV4`, `DIV5`, `DIV6`, `MPG3`, `DVX3`, `AP41`, `COL0`, `COL1` are `MP43`; `DIV2` is `MP42`; `MP41` is `MPG4`; `GXVE` is `WMV2`) | `bmih` | the stream's BITMAPINFOHEADER (40 bytes, little-endian) followed by its codec data (WMV2: 4 bytes of stream settings; WMV3: the 4-byte sequence header; WVC1: sequence header and entry point); Matroska `V_MPEG4/MS/V3` gives `MP43` with no config |
 | Windows Media Audio 1, 2, 9 Pro, 9 Lossless, 9 Voice | `wma1`, `wma2`, `wmap`, `wmal`, `wmas` | `wfex` | the stream's WAVEFORMATEX (18 bytes, little-endian; WAVEFORMATEXTENSIBLE when the tag is 0xFFFE) followed by its codec data; one sample is one ASF media object |
 
@@ -369,3 +373,33 @@ list; `Sample.offset` is then free for the reader's use.
   decoded and fills the rest from the picture before (grey at the start); FFmpeg conceals with its error resilience, so such pictures
   differ. A jump starts a fresh decoder at the key frame before; the prediction state FFmpeg keeps across pictures is rebuilt by every
   I-picture, so jumps give the straight decode.
+
+## G.711, ADPCM and sound in more containers (`src/wave_audio.cpp`, gaps round)
+
+- One decoder, based on FFmpeg's (`docs/NOTICE.md`), bit-exact with it (16-bit output as `x / 32768`): A-law and mu-law, IMA ADPCM
+  of WAV (2, 3, 4 and 5 bits), QuickTime IMA (`ima4`, which carries its predictor from block to block as FFmpeg does), Microsoft
+  ADPCM (1 to 6 channels), Yamaha, IMA DK3 and DK4, G.726 (2 to 5 bits, mono) and G.722 (mono, 8 bits per code word).
+- Each packet is cut into `block_align` blocks (34 bytes per channel for `ima4`) and every block is decoded as FFmpeg decodes it,
+  a short last block included; FFmpeg's sample counts per block are kept, so `counts` is exact without decoding and readers ask
+  `waveFrames` for the frames in a packet.
+- Yamaha, G.726, G.722 and QuickTime IMA carry state across packets: `save` keeps it (a few hundred bytes) and jumps go through
+  the marks. The others decode every block on its own.
+- WAV and AIFF-C: any of the tags above, and `alaw`, `ulaw`, `ALAW`, `ULAW`, `ima4` in AIFF-C, in packets of whole blocks;
+  WAVE_FORMAT_EXTENSIBLE follows its sub-format (the AC-3 and E-AC-3 GUIDs mean tag 0x2000). MP3, MP2, AC-3 and E-AC-3 in WAV are
+  cut into frames, FLAC (0xF1AC) into frames with the STREAMINFO of its format block, Windows Media Audio tags go to their
+  decoders. Microsoft ADPCM with more than two channels states its block size per channel in WAV; it is multiplied by the channel
+  count, as FFmpeg's WAV reader does. 64-bit integer PCM is read.
+- AVI: the same tags, one packet per chunk with times from the exact frame counts; AAC (0x00FF, the AudioSpecificConfig behind
+  the WAVEFORMATEX) and FLAC (0xF1AC) one frame per chunk; a sound stream with tag 0 whose data starts with an AC-3 sync word
+  (FFmpeg's E-AC-3 in AVI) is cut into AC-3 / E-AC-3 frames.
+- Matroska `A_MS/ACM` and ASF: the same tags. A Matroska block's frames come from its size, so DiscardPadding is taken off the
+  decoded length, as in FFmpeg.
+- QuickTime: `alaw`, `ulaw`, `ima4`, `twos`/`sowt` 8-bit (signed) and the `ms` codecs. Sound counted in frames (sample size 1) is
+  cut into packets as FFmpeg cuts it (one block when a block holds 160 frames or more, else 1024 frames' worth of blocks), and the
+  packet in which the edit list ends is played whole, as FFmpeg plays it.
+- CAF: `alaw`, `ulaw`, `ima4`, the `ms` codecs (block size and bits from the description), 8-bit PCM (signed), and FLAC without
+  a `kuki` chunk (FFmpeg writes none): the STREAMINFO is built from the first frame header.
+- AAC in WAV is not read: FFmpeg writes it without framing and cannot decode it either.
+- TTA (`src/tta_decode.cpp`, Matroska `A_TTA1`): based on FFmpeg's decoder and bit-exact with it, 8, 16 and 24 bits, 1 to 16 channels,
+  one frame per block; the last frame is cut to the header's length when its bits end there, as in FFmpeg. Encrypted streams (a
+  password) are refused, as FFmpeg refuses them without one.

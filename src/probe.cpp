@@ -3,6 +3,7 @@
 #include "bytes.h"
 #include "nal.h"
 #include "read_common.h"
+#include "readers.h"
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -438,11 +439,20 @@ Look lookOf(Reader& reader, const Track& t) {
     } else if (c == fourcc("MPG4") || c == fourcc("MP42") || c == fourcc("MP43")) {
         look.codec = c == fourcc("MPG4") ? "msmpeg4v1" : c == fourcc("MP42") ? "msmpeg4v2" : "msmpeg4v3";
         look.pixels = "yuv420p";
+    } else if (waveDecoded(c)) {
+        static const std::map<uint32_t, const char*> names = {{fourcc("alaw"), "pcm_alaw"}, {fourcc("ulaw"), "pcm_mulaw"}, {fourcc("ima4"), "adpcm_ima_qt"},
+            {0x6D730002, "adpcm_ms"}, {0x6D730011, "adpcm_ima_wav"}, {0x6D730020, "adpcm_yamaha"}, {0x6D730061, "adpcm_ima_dk4"}, {0x6D730062, "adpcm_ima_dk3"},
+            {0x6D730014, "g726"}, {0x6D730040, "g726"}, {0x6D730045, "g726"}, {0x6D730064, "g726"}, {0x6D73028F, "g722"}};
+        look.codec = names.at(c);
+        look.sampleFormat = c == fourcc("ima4") || c == 0x6D730011 || (c == 0x6D730002 && t.channels > 2) ? "s16p" : "s16";
+    } else if (c == fourcc("TTA1")) {
+        look.codec = "tta";
+        look.sampleFormat = t.bits <= 8 ? "u8" : t.bits <= 16 ? "s16" : "s32";
     } else if (c == fourcc("lpcm")) {
         int bits = t.bits ? t.bits : 16;
         std::string order = bits == 8 ? "" : t.bigEndian ? "be" : "le";
-        look.codec = "pcm_" + std::string(t.floating ? "f" : bits == 8 ? "u" : "s") + std::to_string(bits) + order;
-        look.sampleFormat = t.floating ? (bits == 64 ? "dbl" : "flt") : bits == 8 ? "u8" : bits == 16 ? "s16" : "s32";
+        look.codec = "pcm_" + std::string(t.floating ? "f" : bits == 8 && !t.bigEndian ? "u" : "s") + std::to_string(bits) + order;
+        look.sampleFormat = t.floating ? (bits == 64 ? "dbl" : "flt") : bits == 8 ? (t.bigEndian ? "s8" : "u8") : bits == 16 ? "s16" : bits == 64 ? "s64" : "s32";
     } else {
         look.codec = trimmed(c);
     }

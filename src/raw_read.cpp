@@ -322,6 +322,62 @@ struct Candidate {
     bool variable;
 };
 
+}
+
+int64_t flacFrames(Source& source, uint64_t at, uint64_t limit, const FlacInfo& info, Track& track) {
+    std::vector<Candidate> found;
+    uint64_t from = at;
+    while (limit - from >= 6) {
+        size_t want = size_t(std::min<uint64_t>(limit - from, 1 << 16));
+        const uint8_t* w = source.view(from, want);
+        if (!w) break;
+        size_t usable = want == limit - from ? want : want - 16;
+        for (size_t i = 0; i < usable && i + 6 <= want; ++i) {
+            if (w[i] != 0xFF || (w[i + 1] & 0xFE) != 0xF8) continue;
+            FlacFrame f;
+            if (!flacFrame(w + i, want - i, f)) continue;
+            if ((f.sampleRate && f.sampleRate != info.sampleRate) || (f.bits && f.bits != info.bits) || f.channels != info.channels) continue;
+            if (!found.empty() && f.variable != found.front().variable) continue;
+            found.push_back({from + i, f.number, f.blockSize, f.variable});
+        }
+        from += usable;
+    }
+    if (found.empty()) return -1;
+    const uint64_t fixedBlock = found.front().block;
+    for (Candidate& c : found) if (!c.variable) c.number *= fixedBlock;
+    const uint64_t reach = info.maxBlock ? uint64_t(info.maxBlock) * info.channels * 5 + 64 : 4u << 20;
+    int64_t end = 0;
+    size_t current = 0;
+    while (current < found.size()) {
+        const Candidate& c = found[current];
+        size_t next = found.size();
+        for (size_t j = current + 1; j < found.size() && found[j].at - c.at <= reach; ++j) {
+            if (found[j].number == c.number + c.block) {
+                next = j;
+                break;
+            }
+        }
+        for (size_t j = current + 1; next == found.size() && j < found.size(); ++j) {
+            if (found[j].number >= c.number + c.block) next = j;
+        }
+        uint64_t stop = next < found.size() ? found[next].at : limit;
+        if (stop - c.at <= 0x7FFFFFFF) {
+            Sample s;
+            s.offset = c.at;
+            s.size = uint32_t(stop - c.at);
+            s.pts = s.dts = int64_t(c.number);
+            s.duration = c.block;
+            s.sync = true;
+            end = std::max(end, s.pts + int64_t(s.duration));
+            track.samples.push_back(s);
+        }
+        current = next;
+    }
+    return end;
+}
+
+namespace {
+
 const char* flac(FileReader& reader, uint64_t start) {
     Source& source = reader.source;
     const uint64_t total = source.size();
@@ -352,54 +408,8 @@ const char* flac(FileReader& reader, uint64_t start) {
     track.channels = info.channels;
     track.bits = info.bits;
 
-    std::vector<Candidate> found;
-    uint64_t from = at;
-    while (total - from >= 6) {
-        size_t want = size_t(std::min<uint64_t>(total - from, 1 << 16));
-        const uint8_t* w = source.view(from, want);
-        if (!w) break;
-        size_t usable = want == total - from ? want : want - 16;
-        for (size_t i = 0; i < usable && i + 6 <= want; ++i) {
-            if (w[i] != 0xFF || (w[i + 1] & 0xFE) != 0xF8) continue;
-            FlacFrame f;
-            if (!flacFrame(w + i, want - i, f)) continue;
-            if ((f.sampleRate && f.sampleRate != info.sampleRate) || (f.bits && f.bits != info.bits) || f.channels != info.channels) continue;
-            if (!found.empty() && f.variable != found.front().variable) continue;
-            found.push_back({from + i, f.number, f.blockSize, f.variable});
-        }
-        from += usable;
-    }
-    if (found.empty()) return "no sound frames in this FLAC file";
-    const uint64_t fixedBlock = found.front().block;
-    for (Candidate& c : found) if (!c.variable) c.number *= fixedBlock;
-    const uint64_t reach = info.maxBlock ? uint64_t(info.maxBlock) * info.channels * 5 + 64 : 4u << 20;
-    int64_t end = 0;
-    size_t current = 0;
-    while (current < found.size()) {
-        const Candidate& c = found[current];
-        size_t next = found.size();
-        for (size_t j = current + 1; j < found.size() && found[j].at - c.at <= reach; ++j) {
-            if (found[j].number == c.number + c.block) {
-                next = j;
-                break;
-            }
-        }
-        for (size_t j = current + 1; next == found.size() && j < found.size(); ++j) {
-            if (found[j].number >= c.number + c.block) next = j;
-        }
-        uint64_t stop = next < found.size() ? found[next].at : total;
-        if (stop - c.at <= 0x7FFFFFFF) {
-            Sample s;
-            s.offset = c.at;
-            s.size = uint32_t(stop - c.at);
-            s.pts = s.dts = int64_t(c.number);
-            s.duration = c.block;
-            s.sync = true;
-            end = std::max(end, s.pts + int64_t(s.duration));
-            track.samples.push_back(s);
-        }
-        current = next;
-    }
+    const int64_t end = flacFrames(source, at, total, info, track);
+    if (end < 0) return "no sound frames in this FLAC file";
     if (info.total > 0 && int64_t(info.total) < end) track.mediaEnd = int64_t(info.total);
     indexTrack(track);
     reader.list.push_back(std::move(track));

@@ -82,15 +82,17 @@ std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error) {
     track.sampleRate = int(std::lround(rate));
     track.timescale = uint32_t(track.sampleRate);
     track.channels = int(channels);
-    if (format == fourcc("lpcm")) {
+    const bool law = format == fourcc("alaw") || format == fourcc("ulaw");
+    if (format == fourcc("lpcm") || law) {
         const bool floating = flags & 1;
+        if (law) bits = 8;
         const bool sized = floating ? bits == 32 || bits == 64 : bits == 8 || bits == 16 || bits == 24 || bits == 32;
         const uint64_t frameBytes = uint64_t(channels) * (bits / 8);
         if (!sized || packetBytes != frameBytes) return fail("unsupported PCM layout in this CAF file");
-        track.codec = fourcc("lpcm");
+        track.codec = law ? format : fourcc("lpcm");
         track.bits = int(bits);
         track.floating = floating;
-        track.bigEndian = !(flags & 2) && bits > 8;
+        track.bigEndian = (!(flags & 2) || bits == 8) && !law;
         const uint64_t frames = dataSize / frameBytes;
         for (uint64_t done = 0; done < frames; done += kPacketFrames) {
             Sample s;
@@ -102,7 +104,6 @@ std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error) {
             s.sync = true;
             track.samples.push_back(s);
         }
-        if (bits == 8) return fail("8-bit PCM in CAF files is not supported");
     } else {
         if (format == fourcc("aac ") || format == fourcc("aach") || format == fourcc("aacp")) {
             track.codec = fourcc("mp4a");
@@ -123,11 +124,14 @@ std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error) {
             static const uint8_t mark[4] = {'d', 'f', 'L', 'a'};
             auto found = std::search(cookie.begin(), cookie.end(), mark, mark + 4);
             FlacInfo info;
-            if (cookie.end() - found < 46 || !flacInfo(&found[12], 34, info)) return fail("FLAC in this CAF file has no stream description");
             track.codec = fourcc("fLaC");
             track.configType = fourcc("fLaC");
-            track.config.assign(found + 12, found + 46);
-            track.bits = info.bits;
+            if (cookie.end() - found >= 46 && flacInfo(&found[12], 34, info)) {
+                track.config.assign(found + 12, found + 46);
+                track.bits = info.bits;
+            } else if (!cookie.empty()) {
+                return fail("FLAC in this CAF file has no stream description");
+            }
         } else if (format == fourcc("opus") && channels <= 2 && track.sampleRate == 48000) {
             static const uint8_t head[19] = {'O', 'p', 'u', 's', 'H', 'e', 'a', 'd', 1, 0, 0, 0, 0x80, 0xBB, 0, 0, 0, 0, 0};
             track.codec = fourcc("Opus");
@@ -135,8 +139,16 @@ std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error) {
             track.config.assign(head, head + 19);
             track.config[9] = uint8_t(channels);
         } else if (format == fourcc(".mp3") || format == fourcc(".mp2") || format == fourcc(".mp1") || format == fourcc("ac-3") || format == fourcc("ec-3") ||
-                   format == fourcc("samr") || format == fourcc("sawb")) {
+                   format == fourcc("samr") || format == fourcc("sawb") || format == fourcc("ima4")) {
             track.codec = format;
+        } else if ((format >> 16) == 0x6D73 && waveDecoded(format) && packetBytes) {
+            track.codec = format;
+            const uint32_t tag = format & 0xFFFF;
+            const uint32_t rate32 = uint32_t(track.sampleRate);
+            const uint8_t form[18] = {uint8_t(tag), uint8_t(tag >> 8), uint8_t(channels), 0, uint8_t(rate32), uint8_t(rate32 >> 8), uint8_t(rate32 >> 16),
+                uint8_t(rate32 >> 24), 0, 0, 0, 0, uint8_t(packetBytes), uint8_t(packetBytes >> 8), uint8_t(bits), 0, 0, 0};
+            track.configType = fourcc("wfex");
+            track.config.assign(form, form + 18);
         } else {
             if (error) *error = "sound codec " + fourccText(format) + " in this CAF file is not supported";
             return nullptr;
@@ -192,6 +204,19 @@ std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error) {
             track.config[11] = uint8_t(track.mediaStart >> 8);
         }
         if (valid >= 0 && track.mediaStart + valid < time) track.mediaEnd = track.mediaStart + valid;
+        if (track.codec == fourcc("fLaC") && track.config.empty()) {
+            std::vector<uint8_t> first;
+            FlacFrame f;
+            if (track.samples.empty() || !source.load(track.samples[0].offset, track.samples[0].size, first, 1 << 24) || !flacFrame(first.data(), first.size(), f) ||
+                f.sampleRate < 1 || f.channels < 1 || f.bits < 4)
+                return fail("FLAC in this CAF file has no stream description");
+            const uint32_t smallest = f.variable ? 16 : f.blockSize, largest = f.variable ? 65535 : f.blockSize;
+            const uint32_t rate32 = uint32_t(f.sampleRate);
+            const uint8_t info[34] = {uint8_t(smallest >> 8), uint8_t(smallest), uint8_t(largest >> 8), uint8_t(largest), 0, 0, 0, 0, 0, 0, uint8_t(rate32 >> 12),
+                uint8_t(rate32 >> 4), uint8_t(((rate32 & 15) << 4) | ((uint32_t(f.channels) - 1) << 1) | ((uint32_t(f.bits) - 1) >> 4)), uint8_t(((uint32_t(f.bits) - 1) & 15) << 4)};
+            track.config.assign(info, info + 34);
+            track.bits = f.bits;
+        }
     }
     if (track.samples.empty()) return fail("no sound packets in this CAF file");
     indexTrack(track);

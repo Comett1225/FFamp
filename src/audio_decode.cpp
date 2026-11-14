@@ -35,11 +35,13 @@ struct PcmPackets : PacketDecoder {
                 memcpy(&wide, &raw, 8);
                 value = float(wide);
             } else if (bits == 8) {
-                value = float(int(raw) - 128) / 128.0f;
+                value = float(bigEndian ? int(int8_t(raw)) : int(raw) - 128) / 128.0f;
             } else if (bits == 16) {
                 value = float(int16_t(raw)) / 32768.0f;
             } else if (bits == 24) {
                 value = float(int32_t(uint32_t(raw) << 8) >> 8) / 8388608.0f;
+            } else if (bits == 64) {
+                value = float(int64_t(raw)) * (1.0f / 9223372036854775808.0f);
             } else {
                 value = float(int32_t(raw)) * (1.0f / 2147483648.0f);
             }
@@ -49,7 +51,7 @@ struct PcmPackets : PacketDecoder {
 };
 
 std::unique_ptr<PacketDecoder> openPcm(const Track& track, std::string* error) {
-    bool known = track.floating ? (track.bits == 32 || track.bits == 64) : (track.bits == 8 || track.bits == 16 || track.bits == 24 || track.bits == 32);
+    bool known = track.floating ? (track.bits == 32 || track.bits == 64) : (track.bits == 8 || track.bits == 16 || track.bits == 24 || track.bits == 32 || track.bits == 64);
     if (!known) {
         if (error) *error = "PCM sample format not supported";
         return nullptr;
@@ -315,6 +317,10 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
         a.codec = openWmaLosslessAudio(track, error);
     } else if (track.codec == fourcc("wmas")) {
         a.codec = openWmaVoiceAudio(track, error);
+    } else if (waveDecoded(track.codec)) {
+        a.codec = openWaveAudio(track, error);
+    } else if (track.codec == fourcc("TTA1")) {
+        a.codec = openTtaAudio(track, error);
     } else if (track.codec == fourcc("lpcm")) {
         if (track.channels < 1 || track.channels > 64 || track.sampleRate < 1) return fail("PCM layout not supported");
         a.codec = openPcm(track, error);

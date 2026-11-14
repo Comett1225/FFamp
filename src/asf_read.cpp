@@ -913,7 +913,7 @@ public:
         if (s.audio) {
             t.configType = fourcc("wfex");
             t.config = s.format;
-            t.codec = windowsMediaAudio(s.tag);
+            t.codec = waveAudio(s.tag);
             const bool cut = s.tag == 1 || s.tag == 3 || s.tag == 0x55 || s.tag == 0x50 || s.tag == 0x2000;
             if (cut) {
                 t.configType = 0;
@@ -973,14 +973,27 @@ public:
 
 }
 
-uint32_t windowsMediaAudio(uint32_t tag) {
+uint32_t extensibleTag(const uint8_t* f, size_t size) {
+    static const uint8_t base[14] = {0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71};
+    static const uint8_t ac3[16] = {0x2C, 0x80, 0x6D, 0xE0, 0x46, 0xDB, 0xCF, 0x11, 0xB4, 0xD1, 0x00, 0x80, 0x5F, 0x6C, 0xBB, 0xEA};
+    static const uint8_t eac3[16] = {0xAF, 0x87, 0xFB, 0xA7, 0x02, 0x2D, 0xFB, 0x42, 0xA4, 0xD4, 0x05, 0xCD, 0x93, 0x84, 0x3B, 0xDD};
+    if (size < 2) return 0;
+    const uint32_t tag = le16(f);
+    if (tag != 0xFFFE || size < 40) return tag;
+    if (memcmp(f + 24, ac3, 16) == 0 || memcmp(f + 24, eac3, 16) == 0) return 0x2000;
+    return memcmp(f + 26, base, 14) == 0 ? le16(f + 24) : 0;
+}
+
+uint32_t waveAudio(uint32_t tag) {
     switch (tag) {
         case 0x0160: return fourcc("wma1");
         case 0x0161: return fourcc("wma2");
         case 0x0162: return fourcc("wmap");
         case 0x0163: return fourcc("wmal");
         case 0x000A: return fourcc("wmas");
-        default: return 0;
+        case 0x0006: return fourcc("alaw");
+        case 0x0007: return fourcc("ulaw");
+        default: return tag <= 0xFFFF && waveDecoded(0x6D730000 | tag) ? 0x6D730000 | tag : 0;
     }
 }
 

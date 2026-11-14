@@ -765,3 +765,33 @@ Test counts after the merge with main (WMV7/8): `48_wma.sh` 164 checks with FFmp
 What is left: music frames (Windows Media Audio 9 Professional inside Voice; FFmpeg has no decoder for them and only one public
 sample uses them); last-bit agreement with the installed FFmpeg 9.0.2, whose sources are newer than the reference copy, and with its
 NEON FFT.
+
+## Gaps round, milestone 1: sound kinds and containers (`tests/suites/52_sound.sh`)
+
+The audit (`am-private/plans/ffamp52/gap_matrix_2026-11-14.sh`, widened) now decodes every sound kind below in every container
+FFmpeg writes it to, each sample bit-exact with FFmpeg 9.0.2 (integer decoders, compared as FFmpeg's `f32le` output):
+
+| Kind | Containers checked |
+|---|---|
+| A-law, mu-law | WAV, AVI, Matroska, QuickTime, CAF, AIFF-C |
+| PCM u8, s8, s16/s24/s32 both byte orders, f32/f64 both byte orders, s64 | every container FFmpeg writes each to (WAV, AVI, Matroska, QuickTime, CAF, AIFF) |
+| IMA ADPCM (WAV, 2 to 5 bits, any block size), QuickTime IMA | WAV, AVI, Matroska, QuickTime; QuickTime IMA in QuickTime, CAF, AIFF-C |
+| Microsoft ADPCM (1, 2, 6 channels, any block size) | WAV, AVI, Matroska, QuickTime, CAF |
+| Yamaha ADPCM | WAV, AVI, Matroska |
+| G.722, G.726 (16, 24, 32, 40 kbit/s) | WAV, AVI, Matroska |
+| IMA DK3, IMA DK4 (no FFmpeg encoder) | public AVI samples (first 3 MB of each, not committed) |
+| FLAC | CAF (no `kuki`), AVI, WAV |
+| TTA (u8, s16, 24-bit) | Matroska |
+
+The 2, 3 and 5-bit IMA and 6-channel Microsoft ADPCM fixtures are random payloads in valid blocks (`tests/fixtures/sound/make.py`),
+since FFmpeg's encoders write neither. Lossy codecs in the containers newly read go through the system decoders as before; against
+FFmpeg: E-AC-3 in AVI 76.9 dB, AC-3 in WAV 76.6 dB, MP2 in WAV 84.2 dB, MP3 in WAV 81.8 dB, AAC in AVI 75.2 dB, Windows Media
+Audio 2 in WAV 137.9 dB. Lengths equal FFmpeg's to the sample in every case, including the QuickTime edit list ending inside a
+packet and Matroska DiscardPadding on ADPCM.
+
+Speed, 120 s (40 s with QUICK) decoded by `ffamp adecode` against `ffmpeg -threads 1 ... -f f32le`, best of three, ratio of our time to
+FFmpeg's: A-law 0.31, IMA ADPCM (WAV) 0.33, QuickTime IMA 0.10, Microsoft ADPCM 0.46, Yamaha 0.67, G.722 0.35, G.726 0.38, TTA 0.71.
+
+Tests after milestone 1 and TTA: `QUICK=1 tests/run.sh` 3,136 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh`
+1,854 pass, 94 skipped. `52_sound.sh` alone: 298 checks with FFmpeg, 130 without (with `GAPS_SAMPLES` or `WINMEDIA_SAMPLES` set for
+the DK3 and DK4 samples).

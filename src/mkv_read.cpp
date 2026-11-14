@@ -273,10 +273,10 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
     } else if (id == "A_EAC3") set("ec-3", 0, false);
     else if (starts(id, "A_AC3")) set("ac-3", 0, false);
     else if (id == "A_ALAC") set("alac", fourcc("alac"), true);
+    else if (id == "A_TTA1") set("TTA1", fourcc("TTA1"), false);
     else if (id == "A_MS/ACM" && secret.size() >= 18) {
-        uint32_t tag = le16(secret.data());
-        if (tag == 0xFFFE && secret.size() >= 40) tag = le16(secret.data() + 24);
-        t.codec = windowsMediaAudio(tag);
+        uint32_t tag = extensibleTag(secret.data(), secret.size());
+        t.codec = waveAudio(tag);
         t.configType = fourcc("wfex");
         t.config = secret;
         if (!t.codec) lane.usable = false;
@@ -302,6 +302,7 @@ uint32_t samplesIn(Lane& lane, const uint8_t* p, size_t have, uint32_t size) {
         return have >= 5 ? (p[4] >> 6) == 3 ? 1536 : blocks[(p[4] >> 4) & 3] : 0;
     }
     if (t.codec == fourcc("vorb")) return have && !(p[0] & 1) ? lane.modes.next(p, have) + 1 : 0;
+    if (waveDecoded(t.codec)) return uint32_t(std::min<int64_t>(waveFrames(t, size), 0x7FFFFFFF));
     return 0;
 }
 
@@ -424,7 +425,7 @@ public:
             }
             if (t.kind == Kind::Other) lane.usable = false;
             else describe(lane, secret, outputRate);
-            if (t.codec != fourcc("lpcm") && t.codec != fourcc("fLaC") && t.codec != fourcc("alac")) t.bits = 0;
+            if (t.codec != fourcc("lpcm") && t.codec != fourcc("fLaC") && t.codec != fourcc("alac") && t.codec != fourcc("TTA1")) t.bits = 0;
             if (!lane.usable) {
                 t.codec = 0;
                 t.configType = 0;
@@ -649,6 +650,16 @@ public:
 };
 
 void MatroskaReader::finish(Lane& lane) {
+    if (lane.track.codec == fourcc("TTA1")) {
+        Track& t = lane.track;
+        const double nanoseconds = length > 0 ? length * double(scale) : 0;
+        const int64_t whole = nanoseconds < 9.2e18 ? int64_t(nanoseconds) : 0;
+        const uint32_t frames = uint32_t((__int128(whole) * t.sampleRate + 500000000) / 1000000000);
+        const uint8_t head[22] = {'T', 'T', 'A', '1', 1, 0, uint8_t(t.channels), uint8_t(t.channels >> 8), uint8_t(t.bits), uint8_t(t.bits >> 8), uint8_t(t.sampleRate),
+            uint8_t(t.sampleRate >> 8), uint8_t(t.sampleRate >> 16), uint8_t(t.sampleRate >> 24), uint8_t(frames), uint8_t(frames >> 8), uint8_t(frames >> 16),
+            uint8_t(frames >> 24), 0, 0, 0, 0};
+        t.config.assign(head, head + 22);
+    }
     Track& t = lane.track;
     std::vector<int64_t>& times = lane.times;
     const size_t count = t.samples.size();

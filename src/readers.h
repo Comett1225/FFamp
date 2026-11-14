@@ -19,7 +19,10 @@ inline bool msmpeg4Codec(uint32_t codec) {
     return codec == fourcc("MPG4") || codec == fourcc("MP42") || codec == fourcc("MP43") || codec == fourcc("WMV1") || codec == fourcc("WMV2");
 }
 inline bool vc1Codec(uint32_t codec) { return codec == fourcc("WMV3") || codec == fourcc("WVC1") || codec == fourcc("WMVA"); }
-uint32_t windowsMediaAudio(uint32_t tag);
+uint32_t waveAudio(uint32_t tag);
+uint32_t extensibleTag(const uint8_t* format, size_t size);
+bool waveDecoded(uint32_t codec);
+int64_t waveFrames(const Track& track, uint64_t bytes);
 
 struct DolbyFrame {
     uint32_t codec = 0;

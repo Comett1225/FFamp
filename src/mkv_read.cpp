@@ -709,7 +709,7 @@ void MatroskaReader::finish(Lane& lane) {
         }
         int64_t end = 0;
         for (const Sample& s : t.samples) end = std::max(end, s.pts + int64_t(s.duration));
-        t.mediaStart = std::min(end, ticks(int64_t(std::min<uint64_t>(lane.codecDelay, 1ull << 40))));
+        t.mediaStart = std::min<int64_t>(end, ticks(int64_t(std::min<uint64_t>(lane.codecDelay, 1ull << 40))));
         if (lane.discard > 0) {
             int64_t cut = end - ticks(lane.discard);
             if (cut > t.mediaStart && cut < end) t.mediaEnd = cut;

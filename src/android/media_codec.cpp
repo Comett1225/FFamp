@@ -2,7 +2,9 @@
 #include "aac_config.h"
 #include "readers.h"
 #include "soft_video.h"
+#include <algorithm>
 #include <cstring>
+#include <set>
 
 namespace absent::android {
 
@@ -65,19 +67,40 @@ std::vector<uint8_t> nanos(int64_t value) {
 class Soft : public SoftVideo {
 public:
     std::unique_ptr<SoftDecoder> codec;
+    std::multiset<int64_t> pending;
+    std::vector<SoftPicture> held;
     const char* name() const override { return codec->name(); }
     bool decode(const uint8_t* data, size_t size, int64_t stamp, std::vector<SoftPicture>& out) override {
-        return codec->decode(data, size, stamp, [&](const Picture& p) { keep(p, out); });
+        pending.insert(stamp);
+        const bool ok = codec->decode(data, size, stamp, [&](const Picture& p) { keep(p); });
+        while (pending.size() > 16) pending.erase(pending.begin());
+        release(out, false);
+        return ok;
     }
-    void drain(std::vector<SoftPicture>& out) override { codec->drain([&](const Picture& p) { keep(p, out); }); }
-    void reset() override { codec->reset(); }
-    static void keep(const Picture& p, std::vector<SoftPicture>& out) {
+    void drain(std::vector<SoftPicture>& out) override {
+        codec->drain([&](const Picture& p) { keep(p); });
+        release(out, true);
+    }
+    void reset() override {
+        codec->reset();
+        pending.clear();
+        held.clear();
+    }
+    void keep(const Picture& p) {
+        if (auto found = pending.find(p.stamp); found != pending.end()) pending.erase(found);
         SoftPicture picture;
         picture.width = p.width;
         picture.height = p.height;
         picture.stamp = p.stamp;
         pictureToI420(p, picture.i420);
-        out.push_back(std::move(picture));
+        held.push_back(std::move(picture));
+    }
+    void release(std::vector<SoftPicture>& out, bool all) {
+        std::stable_sort(held.begin(), held.end(), [](const SoftPicture& a, const SoftPicture& b) { return a.stamp < b.stamp; });
+        size_t n = 0;
+        while (n < held.size() && (all || pending.empty() || held[n].stamp <= *pending.begin())) out.push_back(std::move(held[n++]));
+        held.erase(held.begin(), held.begin() + long(n));
+        if (all) pending.clear();
     }
 };
 

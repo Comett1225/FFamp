@@ -22,7 +22,7 @@ public:
     static std::unique_ptr<SoftVideo> open(const Track& track, std::string* error = nullptr);
     virtual ~SoftVideo() = default;
     virtual const char* name() const = 0;
-    virtual bool decode(const uint8_t* data, size_t size, int64_t stamp, std::vector<SoftPicture>& out) = 0;
+    virtual bool decode(const uint8_t* data, size_t size, int64_t stamp, std::vector<SoftPicture>& out, int64_t later = INT64_MAX) = 0;
     virtual void drain(std::vector<SoftPicture>& out) = 0;
     virtual void reset() = 0;
 };

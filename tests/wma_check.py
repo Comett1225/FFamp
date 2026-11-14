@@ -31,7 +31,7 @@ def pro_frame(path, rate):
 
 def hidden(path, rate):
     form, codec, start = track(path)
-    if form == "mkv" and start > 0:
+    if (form == "mkv" and start > 0) or codec == "wmal":
         return 0
     return pro_frame(path, rate) if codec == "wmap" else 2 * frame_length(codec, rate)
 
@@ -45,6 +45,17 @@ def against(path, least):
     quiet = not numpy.any(got[:skip])
     _, ratio, _ = describe(f"{os.path.basename(path)} ({rate} Hz, {channels} ch) after {skip} silent frames", got[skip:], want)
     return len(got) - skip == len(want) and quiet and ratio >= least
+
+
+def exact(path, spare=0):
+    got, rate, channels = ours(["adecode", path])
+    if got is None:
+        return False
+    want = judge(path, ["-i", path, "-map", "0:a:0"], channels)
+    n = min(len(got), len(want))
+    different = int(numpy.count_nonzero(numpy.any(got[:n - spare] != want[:n - spare], axis=1)))
+    print(f"{os.path.basename(path)} ({rate} Hz, {channels} ch): {len(got)} frames against {len(want)}, {different} different{f' before the last {spare}' if spare else ''}")
+    return len(got) == len(want) and different == 0
 
 
 def same(first, second):
@@ -91,6 +102,8 @@ if __name__ == "__main__":
     kind, a = sys.argv[1], sys.argv[2:]
     if kind == "against":
         ok = against(a[0], float(a[1]))
+    elif kind == "exact":
+        ok = exact(a[0], int(a[1]) if len(a) > 1 else 0)
     elif kind == "same":
         ok = same(a[0], a[1])
     elif kind == "seed":

@@ -31,5 +31,6 @@ std::unique_ptr<PacketDecoder> openOpusAudio(const Track& track, std::string* er
 std::unique_ptr<PacketDecoder> openVorbisAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openWmaAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openWmaProAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openWmaLosslessAudio(const Track& track, std::string* error);
 
 }

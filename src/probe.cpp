@@ -486,7 +486,7 @@ const char* maskName(uint32_t mask) {
 }
 
 uint32_t codecMask(const Track& t) {
-    if (t.codec != fourcc("wmap") || t.configType != fourcc("wfex") || t.config.size() < 18) return 0;
+    if ((t.codec != fourcc("wmap") && t.codec != fourcc("wmal")) || t.configType != fourcc("wfex") || t.config.size() < 18) return 0;
     size_t at = 18;
     if (le16(t.config.data()) == 0xFFFE) at += 22;
     return t.config.size() >= at + 6 ? le32(t.config.data() + at + 2) : 0;

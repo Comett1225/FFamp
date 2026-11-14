@@ -582,3 +582,41 @@ Not done: X8 intra pictures (Complex profile, plan step D), the mixed field/fram
 (no sample to check ST 421 against), old interlaced mode, multiresolution scaling, sprites, readers for raw `.vc1` and `.rcv` files,
 threads for streams without B-pictures (each P-picture needs the one before; slices are rare), hand-written NEON for the transforms
 and the loop filter.
+
+
+# Windows Media round 4: Windows Media Audio 9 Lossless
+
+`src/wmalossless_decode.cpp` decodes Windows Media Audio 9 Lossless (`0x0163`) from ASF, AVI and Matroska behind `AudioDecoder`,
+based on FFmpeg's decoder (`docs/NOTICE.md`). It shares the packet and bit-reservoir handling of the 9 Professional decoder (each
+codec keeps its own copy, as FFmpeg's do, because the two differ in small ways: buffer sizes, the drain at the end, when a split
+frame is decoded). Rules in `docs/CONVENTIONS.md`.
+
+FFmpeg cannot encode this codec either. Fixtures: 5 files in `tests/fixtures/wmalossless` (270 KB) written by `make.py`, FFamp's own
+bitstream writer: 16 and 24 bits, mono, stereo and 5.1, raw PCM tiles with padding bits, one to three cascaded LMS filters with sent
+coefficients, the multichannel LMS, the stereo decorrelation, the AC filter, a quantiser step, a silent channel, sub-frames, frames
+with and without length fields split across packets, start and end trims, seekable tiles every 3 or 4 frames, in ASF (remuxed by
+FFmpeg), AVI and Matroska. Judge: FFmpeg 9.0.2's `wmalossless` decoder.
+
+| Check | Result |
+|---|---|
+| 5 fixtures | bit-exact, lengths equal; checksums for the runs without FFmpeg |
+| `luckynight.wma` (stereo 16-bit, 60 s; FFmpeg's output equals the FLAC of the same recording) | bit-exact |
+| `wma_0x163.wma` (stereo 16-bit, 98 s) | bit-exact |
+| FATE `Mega_Weird_Audio_Test_24bit.wma`, `g2_24bit.wma` (24-bit, cut off) | bit-exact but the last frame, which reads past the cut (`docs/CONVENTIONS.md`); lengths equal |
+| Random reads (single frames, odd chunk sizes, reads before the start and past the end) | identical to the straight decode on every file |
+| Probe | `wmalossless`, `s16p` or `s32p`, layout from the mask |
+
+Seeking: the prediction filters run on from one seekable tile to the next, so the decoder keeps marks of its whole state (42 KB for
+`luckynight.wma`) and `AudioDecoder` decodes forward from the nearest one; reading straight through crosses each 20-second run with a
+mark taken on the way, so it costs nothing extra.
+
+Speed, best of three, whole files through the command line (`ffamp adecode` against `ffmpeg -threads 1 ... -f f32le`; FFmpeg's arm64
+build has no NEON for this codec):
+
+| File | FFamp | FFmpeg, one thread | FFamp / FFmpeg |
+|---|---|---|---|
+| `luckynight.wma`, 60 s | 0.284 s | 0.345 s | 0.82 |
+| `wma_0x163.wma`, 98 s | 0.456 s | 0.542 s | 0.84 |
+
+What is left: arithmetic-coded tiles and the inverse LPC filter (FFmpeg has neither; no public sample uses them, and no specification
+is public); bitstream splicing (read and ignored, as in FFmpeg).

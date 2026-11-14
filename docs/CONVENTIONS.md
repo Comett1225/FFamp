@@ -143,9 +143,9 @@ list; `Sample.offset` is then free for the reader's use.
   Language List entry as stored (RFC 1766, `en-us`); ffprobe shows ISO 639-2 (`eng`).
 - `statedSeconds()` is the play duration minus the preroll, except for broadcast files and files whose data object runs past the end.
 - Probe names `wmav1`, `wmav2`, `wmapro`, `wmalossless`, `wmavoice`, `wmv1`, `wmv2`, `wmv3`, `vc1`, `msmpeg4v1`, `msmpeg4v2`,
-  `msmpeg4v3`, from ASF, AVI and (sound) Matroska. Windows Media Audio 1, 2 and 9 Professional and `WMV3`, `WVC1` and `WMVA` decode
-  (sections below); until their codec rounds land, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9 Lossless)
-  is not decoded yet` and `VideoDecoder::open` with `this video codec (Windows Media Video 8) is not decoded yet` (each with its own
+  `msmpeg4v3`, from ASF, AVI and (sound) Matroska. Windows Media Audio 1, 2, 9 Professional and 9 Lossless and `WMV3`, `WVC1` and `WMVA`
+  decode (sections below); until their codec rounds land, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9
+  Voice) is not decoded yet` and `VideoDecoder::open` with `this video codec (Windows Media Video 8) is not decoded yet` (each with its own
   name).
 - H.263 and Motion JPEG in ASF get their FFamp codes (`h263`, `jpeg`) and decode. Other sound tags keep a track named by the tag in
   hex (`0130`), other video fourccs a track named by the fourcc.
@@ -286,7 +286,7 @@ list; `Sample.offset` is then free for the reader's use.
   and its handling of lost pieces are kept.
 - Channel order is the mask's bit order, as FFmpeg gives it; 6 channels with mask 0x3F are FL FR FC LFE BL BR, 0x60F FL FR FC LFE SL
   SR, 8 channels with 0x63F FL FR FC LFE BL BR SL SR, so the mixer and the WAV writer take them as they are. Probe names the layout
-  from the mask (`quad`, `5.1(side)`, `7.1`).
+  from the mask (`quad`, `5.1(side)`, `7.1`), for 9 Lossless too.
 - Start: FFmpeg drops the first decoded frame; FFamp decodes it and hides it (`skip` = one frame). A start trim in that frame does
   nothing (FFmpeg applies it to the dropped frame); later trims cut the frame they are in. No frame is added at the end (FFmpeg's
   decoder has no end flush).
@@ -297,3 +297,22 @@ list; `Sample.offset` is then free for the reader's use.
   restart loses the frame that started before it, and the first decoded frame lacks its overlap); no state marks are needed.
 - On purpose unlike FFmpeg: a piece that would decode more than 16 million samples is cut off (a guard against crafted streams);
   an unknown scale-factor code is an error instead of a read before the table.
+
+## Windows Media Audio 9 Lossless (`wmal`, `src/wmalossless_decode.cpp`)
+
+- Based on FFmpeg's decoder (`docs/NOTICE.md`) and bit-exact with it: 16 and 24 bits (output as float, `x / 32768` and `(x << 8) /
+  2^31`, so the integers come back exactly), 1 to 8 channels, raw PCM tiles, the Rice-style residues with their running mean, the
+  cascaded LMS filters (16- and 32-bit, FFmpeg's C arithmetic), the multichannel LMS, the stereo decorrelation, the AC filter,
+  quantiser steps and padding bits, frames with and without length fields, sub-frames, end trims, the bit reservoir and the final
+  frames held in the reservoir at the end of the stream (FFmpeg's drain).
+- Not decoded, as in FFmpeg: arithmetic-coded tiles (the frame is lost and the stream picks up again at a seekable tile); the
+  inverse LPC filter of the `0x100` streams (its coefficients are read, the filter is not applied, so such tiles come out wrong in
+  both); frames before the first seekable tile give no sound. No public sample uses these modes.
+- The filters carry their state from one seekable tile to the next (about every 10 frames), so a restart a few packets back is not
+  enough: `save` keeps the decoder state (the reservoir, the parse state and the filters in use, 42 KB for `luckynight.wma`) and
+  `AudioDecoder` restores the nearest mark and decodes forward from it without output. A first jump far ahead therefore decodes
+  everything up to it once (about 200 times real time); later jumps into runs already passed cost at most 20 seconds of decoding.
+- Frame counts: one sequential parse at open (residues only, no filters).
+- On purpose unlike FFmpeg: at the end of a cut file, a last frame that reads past the data takes the bytes that follow in the
+  reservoir; FFmpeg's reader stops moving at the end and repeats bits, so that frame differs (FATE `Mega_Weird_Audio_Test_24bit`
+  and `g2_24bit`).

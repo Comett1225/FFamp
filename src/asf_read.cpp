@@ -989,8 +989,7 @@ const char* windowsMediaName(uint32_t codec) {
         {fourcc("wmap"), "Windows Media Audio 9 Professional"}, {fourcc("wmal"), "Windows Media Audio 9 Lossless"}, {fourcc("wmas"), "Windows Media Audio 9 Voice"},
         {fourcc("WMV1"), "Windows Media Video 7"}, {fourcc("WMV2"), "Windows Media Video 8"}, {fourcc("WMV3"), "Windows Media Video 9"},
         {fourcc("WVC1"), "VC-1 (Windows Media Video 9 Advanced Profile)"}, {fourcc("WMVA"), "Windows Media Video 9 Advanced Profile"},
-        {fourcc("MPG4"), "Microsoft MPEG-4 version 1"}, {fourcc("MP42"), "Microsoft MPEG-4 version 2"}, {fourcc("MP43"), "Microsoft MPEG-4 version 3"},
-        {fourcc("DIV3"), "Microsoft MPEG-4 version 3 (DivX 3)"}, {fourcc("DIV4"), "Microsoft MPEG-4 version 3 (DivX 3)"}};
+        {fourcc("MPG4"), "Microsoft MPEG-4 version 1"}, {fourcc("MP42"), "Microsoft MPEG-4 version 2"}, {fourcc("MP43"), "Microsoft MPEG-4 version 3"}};
     for (const auto& [code, name] : names) if (code == codec) return name;
     return nullptr;
 }

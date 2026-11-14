@@ -2,6 +2,7 @@
 #include "bits.h"
 #include "vlc.h"
 #include "vc1_tables.h"
+#include "intrax8.h"
 #include <cstddef>
 #include <cstdint>
 #include <algorithm>
@@ -302,6 +303,7 @@ struct Vc1 {
     alignas(32) int16_t blocks[6][64] = {};
     bool broken = false;
     FramePool pool;
+    IntraX8 x8;
     int lumaLines = 0, chromaLines = 0;
 
     int bitplaneDecoding(uint8_t* data, int *rawFlag);

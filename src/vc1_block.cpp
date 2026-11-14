@@ -2436,7 +2436,7 @@ void Vc1::decodeBlocks()
 {
     esc3LevelLength = 0;
     if (x8Type) {
-        broken = true;
+        x8.decode(gb, curPic.data, curPic.linesize, curPic.qscaleTable, 2 * pq + halfpq, pq * !pquantizer, loopFilter);
     } else {
         curBlkIdx     =  0;
         leftBlkIdx    = -1;

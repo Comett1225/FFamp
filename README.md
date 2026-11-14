@@ -13,7 +13,8 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 - H.264 and HEVC decoding through VideoToolbox, frames stay on the GPU (IOSurface, Metal-ready).
 - Frame-exact seeking to any frame.
 - H.264 and HEVC encoding through VideoToolbox, AAC through AudioToolbox, Opus through libopus when it is installed.
-- VC-1 (Windows Media Video 9: `WMV3`, `WVC1`, `WMVA`) through FFamp's own software decoder, based on FFmpeg's (`docs/NOTICE.md`).
+- VC-1 (Windows Media Video 9: `WMV3` with Complex profile and its X8 intra pictures, `WVC1`, `WMVA`) through FFamp's own software
+  decoder, based on FFmpeg's (`docs/NOTICE.md`).
 - Microsoft MPEG-4 v1 to v3 (`MPG4`, `MP42`, `MP43`, the DivX 3 AVIs), Windows Media Video 7 and 8 (`WMV1`, `WMV2`, with X8 intra
   pictures) through FFamp's own decoder, based on FFmpeg's.
 - `ffamp`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
@@ -38,7 +39,7 @@ is linked; parts based on FFmpeg are listed in `docs/NOTICE.md`.
     src/opus_encode.cpp      Opus through libopus (BSD), built only when the library is found
     src/vc1_*.cpp            VC-1 decoder (based on FFmpeg's, see docs/NOTICE.md)
     src/h263.*, msmpeg4*.cpp Microsoft MPEG-4 v1 to v3, WMV7 and WMV8 on the shared H.263-family core (based on FFmpeg's)
-    src/intrax8.*            X8 intra pictures of WMV8 (based on FFmpeg's)
+    src/intrax8.*            X8 intra pictures of WMV8 and VC-1 Complex profile (based on FFmpeg's)
     src/mac/                 VideoToolbox and AudioToolbox back end
     tools/ffamp.cpp         command-line tool
     tests/                   comparison against FFmpeg and against AVFoundation

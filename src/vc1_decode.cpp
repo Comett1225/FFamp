@@ -79,6 +79,7 @@ bool Vc1::allocate() {
     edgeEmuStride = 2 * lumaLines;
     edgeEmuBuffer.assign(size_t(edgeEmuStride) * 80, 0);
     pool.resize(mbWidth, mbHeight);
+    x8.setSize(mbWidth, mbHeight);
     lastPic.set(nullptr);
     nextPic.set(nullptr);
     curPic.set(nullptr);
@@ -187,7 +188,7 @@ bool Vc1::start(const uint8_t* config, size_t size, bool wmv3, int w, int h) {
         }
         if (!sequenceSeen || !entrySeen || profile != kProfileAdvanced) return false;
     }
-    if (resSprite || resX8) return false;
+    if (resSprite) return false;
     if (profile == kProfileAdvanced || resFasttx) {
         for (int i = 0; i < 64; i++) {
             auto transpose = [](int x) { return (x >> 3) | ((x & 7) << 3); };
@@ -573,7 +574,7 @@ std::unique_ptr<SoftDecoder> openVc1(uint32_t codec, const std::vector<uint8_t>&
     decoder->config.assign(config.begin() + 40, config.end());
     decoder->width = width;
     decoder->height = height;
-    if (!decoder->open()) return fail(decoder->v->resX8 ? "this VC-1 stream uses X8 intra pictures (Windows Media Video 9 Complex profile), which are not decoded yet" : "the VC-1 sequence header is not supported");
+    if (!decoder->open()) return fail("the VC-1 sequence header is not supported");
     return decoder;
 }
 

@@ -2,7 +2,6 @@ echo "== VC-1: WMV3 fixtures written by fixtures/vc1/make.py (Main with B, inten
 VC=fixtures/vc1
 vc_listed() { [ "$("${@:3}" 2> /dev/null | md5)" = "$(grep " $2\$" $VC/$1.md5 | cut -d' ' -f1)" ]; }
 vc_backend() { $A videoinfo "$1" | grep -q "backend vc1"; }
-vc_refuses() { ! $A decode "$1" > /dev/null 2> $O/vc_refused.txt && grep -q "$2" $O/vc_refused.txt; }
 vc_threads() { [ "$($A decode "$1" --threads 6 | md5)" = "$($A decode "$1" | md5)" ]; }
 vc_leaks() { leaks --atExit -- $A frames "$1" --list 29,3,17,0,12,28,1 2> /dev/null | LC_ALL=C grep -aq ": 0 leaks for 0 total leaked bytes"; }
 vc_remade() { rm -rf $O/vc_made && mkdir -p $O/vc_made/vc1 && python3 $VC/make.py $O/vc_made/vc1 && cmp -s $O/vc_made/vc1/main_bframes.avi $VC/main_bframes.avi && cmp -s $O/vc_made/vc1/simple.avi $VC/simple.avi && cmp -s $O/vc_made/fuzz/vc1/simple.bin fixtures/fuzz/vc1/simple.bin; }
@@ -29,14 +28,14 @@ if have_ffmpeg; then
 fi
 rm -rf $O/vc_made
 
-echo "== VC-1: WMV3 Simple, Main and Complex (no X8), WVC1 and WMVA Advanced from WINMEDIA_SAMPLES (not committed)"
+echo "== VC-1: WMV3 Simple, Main and Complex (with and without X8 intra pictures), WVC1 and WMVA Advanced from WINMEDIA_SAMPLES (not committed)"
 VS="${WINMEDIA_SAMPLES:-}"
 if [ -z "$VS" ] || [ ! -d "$VS" ]; then
     skip "VC-1 sample files (set WINMEDIA_SAMPLES to the sample folder)"
     return 0
 fi
-VC_FILES="sample-wmv9-simple-SP@ML.wmv sample-wmv9-main-MP@LL.wmv sb-spl-q94.avi sb-main-q94.avi sb-adv-q94.avi Robotica_720.wmv Robotica_1080.wmv 480i30__codec_WVC1__mode_2__framerate_29.970__type_2__preproc_17.wmv wmva-smpl-bdsm.wmv"
-VC_SMALL="sample-wmv9-main-MP@LL.wmv sb-adv-q94.avi 480i30__codec_WVC1__mode_2__framerate_29.970__type_2__preproc_17.wmv wmva-smpl-bdsm.wmv"
+VC_FILES="sample-wmv9-simple-SP@ML.wmv sample-wmv9-main-MP@LL.wmv sb-spl-q94.avi sb-main-q94.avi sb-adv-q94.avi sample-wmv9-complex-CP.wmv kelsy_300.wmv Robotica_720.wmv Robotica_1080.wmv 480i30__codec_WVC1__mode_2__framerate_29.970__type_2__preproc_17.wmv wmva-smpl-bdsm.wmv"
+VC_SMALL="sample-wmv9-main-MP@LL.wmv sb-adv-q94.avi sample-wmv9-complex-CP.wmv 480i30__codec_WVC1__mode_2__framerate_29.970__type_2__preproc_17.wmv wmva-smpl-bdsm.wmv"
 for f in $VC_FILES; do
     [ -f "$VS/$f" ] || continue
     check "$f decodes with FFamp's own VC-1 decoder" vc_backend "$VS/$f"
@@ -45,9 +44,6 @@ done
 for f in $VC_SMALL; do
     [ -f "$VS/$f" ] || continue
     check "random frames of $f equal the straight decode" python3 comparex.py selfseek "$VS/$f" 16 5
-done
-for f in sample-wmv9-complex-CP.wmv kelsy_300.wmv; do
-    [ -f "$VS/$f" ] && check "$f (X8 intra pictures) is refused with its own message" vc_refuses "$VS/$f" "X8 intra pictures"
 done
 [ -f "$VS/Robotica_1080.wmv" ] && check "1440x1080 WMV3 Main decode into memory: over 230 frames per second (the plan's floor)" python3 speedcheck.py rate 480 230 bench "$VS/Robotica_1080.wmv" --mode copy
 for f in sample-wmv9-main-MP@LL.wmv 480i30__codec_WVC1__mode_2__framerate_29.970__type_2__preproc_17.wmv; do
@@ -75,6 +71,8 @@ done
 for f in $VC_SMALL; do
     [ -f "$VS/$f" ] && check "random frames of $f against ffmpeg" python3 comparex.py seek "$VS/$f" 12 7
 done
+[ -f "$VS/kelsy_300.wmv" ] && check "random frames of kelsy_300.wmv (Complex profile with X8 intra pictures) against ffmpeg" python3 comparex.py seek "$VS/kelsy_300.wmv" 12 7
+[ -f "$VS/kelsy_300.wmv" ] && check "decode speed of kelsy_300.wmv: at most 1.5 times ffmpeg's time" python3 vc1_check.py speed "$VS/kelsy_300.wmv" 1.5
 f="$VS/480i30__codec_WVC1__mode_2__framerate_29.970__type_2__preproc_17.wmv"
 [ -f "$f" ] && check "Advanced profile range mapping (RANGE_MAPY, RANGE_MAPUV) is applied to the output as ST 421 says (ffmpeg ignores it)" python3 vc1_check.py rangemap "$f" $O/vc_range.mkv
 for f in sample-wmv9-main-MP@LL.wmv sb-main-q94.avi Robotica_720.wmv; do

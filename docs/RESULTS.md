@@ -419,7 +419,7 @@ Where FFmpeg is wrong or silent (plan section 3.6), ST 421 decides:
   plan puts X8 in step D).
 
 Test counts (milestones 1 to 4): `QUICK=1 tests/run.sh` 2,376 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh`
-1,544 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 74 checks (43 without FFmpeg), all pass.
+1,544 pass; with `WINMEDIA_SAMPLES` set, `49_vc1.sh` alone gives 74 checks (43 without FFmpeg), all pass.
 # Windows Media round 2: Windows Media Audio 1 and 2, and the audio framework for the family
 
 `src/wma_decode.cpp` decodes Windows Media Audio 1 (`0x0160`) and 2 (`0x0161`) from ASF, AVI and Matroska behind `AudioDecoder`. It is
@@ -516,7 +516,7 @@ and underruns trap) decoded or failed cleanly. AddressSanitizer hangs at start-u
 
 
 Test counts after milestone 5 and the merge with the WMA round: `QUICK=1 tests/run.sh` 2,458 pass, 1 skipped (a real camera);
-`QUICK=1 NOFFMPEG=1 tests/run.sh` 1,569 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 75 checks (44 without FFmpeg),
+`QUICK=1 NOFFMPEG=1 tests/run.sh` 1,569 pass; with `WINMEDIA_SAMPLES` set, `49_vc1.sh` alone gives 75 checks (44 without FFmpeg),
 all pass.
 
 Not done: X8 intra pictures (Complex profile, plan step D), the mixed field/frame direct mode and the chroma pull-back FIXME of FFmpeg

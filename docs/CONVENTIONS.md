@@ -218,9 +218,10 @@ list; `Sample.offset` is then free for the reader's use.
   the sequence header and entry point from the start-code framed codec data, and the coded size from the entry point. A sample may
   carry start codes (frame, field, slice, entry point, sequence header) or be one bare picture; a bare interlaced field pair is split at
   its field start code.
-- Complex profile streams with X8 intra pictures (`kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv`) are refused with `this VC-1 stream
-  uses X8 intra pictures (Windows Media Video 9 Complex profile), which are not decoded yet`; Complex profile without X8 (the
-  `sb-adv-q94.avi` sample) decodes, with the simple IDCT those streams ask for. Sprite streams (`WMVP`, `WVP2`) are refused.
+- Complex profile decodes with the simple IDCT those streams ask for (FFmpeg's C version, which its VC-1 decoder names, not the NEON
+  one); its X8 intra pictures (`kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv`) go through the X8 decoder of WMV8 (`src/intrax8.cpp`,
+  quantiser 2 x PQUANT + HALFQP, offset PQUANT for the uniform quantiser, the sequence header's loop filter flag). Sprite streams
+  (`WMVP`, `WVP2`) are refused.
 - Every sample's picture comes out with that sample's time: B-pictures need no reorder delay because the reader's presentation times
   put them in order. Output is 8-bit 4:2:0 at the coded size, cut to the track size when the track is smaller.
 - Frame threads: a B or BI picture (nothing refers to it) is decoded on one of two worker threads, from a copy of the decoder state
@@ -299,7 +300,7 @@ list; `Sample.offset` is then free for the reader's use.
   X8 pictures, slices) from behind the BITMAPINFOHEADER; the others need no codec data.
 - I and P pictures, every VLC set of each version, the three escape kinds, per-macroblock run-level tables, inter-intra DC prediction
   (WMV7 at low bit rates), flip-flop rounding, slices, WMV8 skip maps, quarter-pel mspel motion, 8x4 and 4x8 transforms, the loop filter
-  and WMV8 X8 intra pictures (`src/intrax8.cpp`, the J-frames).
+  and WMV8 X8 intra pictures (`src/intrax8.cpp`, the J-frames; VC-1 Complex profile uses the same code).
 - Every sample gives one picture with its own time. A WMV8 P-picture in which every macroblock is skipped carries no picture: the one
   before is shown again with this sample's time (FFmpeg drops it). A picture whose macroblocks stop decoding part way keeps what was
   decoded and fills the rest from the picture before (grey at the start); FFmpeg conceals with its error resilience, so such pictures

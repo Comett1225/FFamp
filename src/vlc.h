@@ -10,7 +10,7 @@ public:
     bool buildInOrder(int rootBits, size_t count, const uint8_t* lengths, const uint8_t* symbols, int offset);
     bool buildInOrder(int rootBits, size_t count, const uint8_t* lengths, const uint16_t* symbols, int offset);
 
-    int read(BitReader& in) const {
+    [[gnu::always_inline]] int read(BitReader& in) const {
         Entry e = table[in.peek(root)];
         if (e.length >= 0) {
             in.skip(e.length);
@@ -59,8 +59,6 @@ private:
         int32_t symbol;
     };
     size_t fill(const std::vector<Code>& codes, int bits);
-    template <typename Symbol>
-    bool inOrder(int rootBits, size_t count, const uint8_t* lengths, const Symbol* symbols, int offset);
 
     std::vector<Entry> table;
     int root = 0;

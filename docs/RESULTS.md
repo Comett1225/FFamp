@@ -486,6 +486,65 @@ Not done: WMA Pro, Lossless and Voice (steps C, F and G); the AVI stream header'
 length of the data and a sample-rate time base); reading only the superframe headers at open (it reads whole packets, which costs
 more on very large WMV files with a cold cache).
 
+
+# Windows Media round 3: Windows Media Audio 9 Professional
+
+`src/wmapro_decode.cpp` decodes Windows Media Audio 9 Professional (`0x0162`) from ASF, AVI and Matroska behind `AudioDecoder`, on the
+framework of round 2 (bit reader, VLC tables, inverse MDCT, sine windows, the run-level coder). It is based on FFmpeg's decoder
+(`docs/NOTICE.md`), rewritten in FFamp's style. Rules in `docs/CONVENTIONS.md`.
+
+FFmpeg cannot encode this codec, so the tests use two kinds of input: the Microsoft-made and FATE sample files (not committed, run when
+`WINMEDIA_SAMPLES` names their folder), and 10 small fixtures in `tests/fixtures/wmapro` (200 KB) written by `make.py`, a bitstream
+writer of FFamp's own that reads the code tables from the decoder's source and covers what no public sample has: 1, 2, 3, 4, 5, 6, 7
+and 8 channels (masks mono, stereo, 3.0, quad, 5.0, 5.1(side), 6.1, 7.1 and none), 16, 20 and 24 bits, 32 to 96 kHz, frames of 2,048
+and 4,096 samples, up to 16 sub-frames with a different layout per channel, M/S pairs, default and coded rotation matrices, per-band
+transform switches, a silent LFE group, scale factors resampled and run-level coded, vector, escaped and run-level coefficients, large
+values up to 24 bits, fill bits, escaped quantiser steps, dynamic range bytes, start and end trims, frames split across packets, in
+ASF (remuxed by FFmpeg), AVI and Matroska. Judge: FFmpeg 9.0.2's `wmapro` decoder, float output.
+
+| Check | Result |
+|---|---|
+| 10 fixtures, 1 to 8 channels | 134.9 to 138.4 dB; lengths equal to the sample; checksums for the runs without FFmpeg |
+| `Classical_44_16_6_256000_0_20.wma` (5.1, 44.1 kHz, 256 kbit/s, frames without length fields, 190 s) | 137.4 dB, lengths equal |
+| `Classical_96_24_2_Q75_2_3.wma` (stereo, 96 kHz, 24 bits, quality-based, 1,024-sample frames, 190 s) | 138.3 dB |
+| `Robotica_720.wmv`, `Robotica_1080.wmv` (5.1, 48 kHz, inside WMV9 video files) | 137.4 dB |
+| FATE `Beethovens_9th-1_small.wma`, `latin_192_mulitchannel_cut.wma` (stereo; 5.1 cut off) | 137.1 and 138.7 dB |
+| `classical_22_16_2_16000_v3c_0_exclusive_0_29.wma` (22.05 kHz, 16 kbit/s) | FFmpeg and FFamp both give silence (bit-exact, no error); probably a low-bit-rate mode FFmpeg does not know (not confirmed) |
+| Random reads (single frames, odd chunk sizes, reads before the start and past the end) on every file | identical to the straight decode |
+| 5.1 and 7.1 mixed to stereo and mono by `ChannelMix` | 144 dB against the expected levels |
+| Probe | `wmapro`, layout named from the mask (`quad`, `5.1(side)`, `7.1`), other fields as for the other ASF streams |
+
+Why not bit-exact: as in round 2, the FFT under the inverse MDCT differs from FFmpeg's; the largest difference is 4.5e-8 to 3.6e-7 of
+full scale. Accelerate's FFT was tried: it gives the same speed here, 2 dB less and different results from run to run (its code path
+depends on where the buffers lie), so the portable FFT stays.
+
+Timing: FFmpeg drops the first decoded frame; FFamp decodes it and plays it as silence, so every later sample is at the same place.
+A start trim in that first frame is spent on the dropped frame in FFmpeg and FFamp alike; later trims cut their frame in both.
+
+Frame counts and seeking: `AudioDecoder` needs the exact number of samples each packet gives. Frames without length fields can only be
+found by parsing their coefficients, so `counts` parses the whole stream once without the transforms. A frame's parse does not depend
+on earlier frames, so the packets are split into runs parsed on all cores, each run started one packet early; this takes 0.013 s for
+the 190-second 5.1 file (0.07 s on one core). Jumps restart a few packets early (enough to cover two frames plus the largest packet)
+and need no state marks; all random reads equal the straight decode.
+
+What the tests found:
+
+- FFmpeg's LFE cut-off (`subwoofer_cutoffs`) has no effect: the coefficients above it are cleared and then overwritten by the
+  inverse quantisation. FFamp leaves it out, with the same output.
+- The FATE `latin_192` file has a silent channel, which fooled the test's lag search (it reported a shift of -4,000); the check now
+  relies on the SNR at zero shift.
+
+Speed, best of three, whole files through the command line (`ffamp adecode` against `ffmpeg -threads 1 ... -f f32le`):
+
+| File | FFamp | FFmpeg, one thread | FFamp / FFmpeg |
+|---|---|---|---|
+| `Classical_44_16_6_256000_0_20.wma`, 5.1, 190 s | 0.238 s | 0.210 s | 1.14 |
+| `Classical_96_24_2_Q75_2_3.wma`, 96 kHz 24 bits, 190 s | 0.161 s | 0.185 s | 0.87 |
+| `Robotica_1080.wmv`, 5.1, 21 s | 0.042 s | 0.053 s | 0.79 |
+
+FFamp's whole-file time includes the counting parse (on all cores) and the parse inside the decode; FFmpeg parses once. The suite
+checks these three files against the 1.5 limit when the samples are there.
+
 Speed, whole program, best of three, decoding into memory (`ffamp bench --mode copy`; FFmpeg 9.0.2 `-f null`, which has no thread
 support for VC-1 and gives the same time with `-threads 1`), measured while another build ran on the same Mac:
 
@@ -523,3 +582,130 @@ Not done: X8 intra pictures (Complex profile, plan step D), the mixed field/fram
 (no sample to check ST 421 against), old interlaced mode, multiresolution scaling, sprites, readers for raw `.vc1` and `.rcv` files,
 threads for streams without B-pictures (each P-picture needs the one before; slices are rare), hand-written NEON for the transforms
 and the loop filter.
+
+
+# Windows Media round 4: Windows Media Audio 9 Lossless
+
+`src/wmalossless_decode.cpp` decodes Windows Media Audio 9 Lossless (`0x0163`) from ASF, AVI and Matroska behind `AudioDecoder`,
+based on FFmpeg's decoder (`docs/NOTICE.md`). It shares the packet and bit-reservoir handling of the 9 Professional decoder (each
+codec keeps its own copy, as FFmpeg's do, because the two differ in small ways: buffer sizes, the drain at the end, when a split
+frame is decoded). Rules in `docs/CONVENTIONS.md`.
+
+FFmpeg cannot encode this codec either. Fixtures: 5 files in `tests/fixtures/wmalossless` (270 KB) written by `make.py`, FFamp's own
+bitstream writer: 16 and 24 bits, mono, stereo and 5.1, raw PCM tiles with padding bits, one to three cascaded LMS filters with sent
+coefficients, the multichannel LMS, the stereo decorrelation, the AC filter, a quantiser step, a silent channel, sub-frames, frames
+with and without length fields split across packets, start and end trims, seekable tiles every 3 or 4 frames, in ASF (remuxed by
+FFmpeg), AVI and Matroska. Judge: FFmpeg 9.0.2's `wmalossless` decoder.
+
+| Check | Result |
+|---|---|
+| 5 fixtures | bit-exact, lengths equal; checksums for the runs without FFmpeg |
+| `luckynight.wma` (stereo 16-bit, 60 s; FFmpeg's output equals the FLAC of the same recording) | bit-exact |
+| `wma_0x163.wma` (stereo 16-bit, 98 s) | bit-exact |
+| FATE `Mega_Weird_Audio_Test_24bit.wma`, `g2_24bit.wma` (24-bit, cut off) | bit-exact but the last frame, which reads past the cut (`docs/CONVENTIONS.md`); lengths equal |
+| Random reads (single frames, odd chunk sizes, reads before the start and past the end) | identical to the straight decode on every file |
+| Probe | `wmalossless`, `s16p` or `s32p`, layout from the mask |
+
+Seeking: the prediction filters run on from one seekable tile to the next, so the decoder keeps marks of its whole state (42 KB for
+`luckynight.wma`) and `AudioDecoder` decodes forward from the nearest one; reading straight through crosses each 20-second run with a
+mark taken on the way, so it costs nothing extra.
+
+Speed, best of three, whole files through the command line (`ffamp adecode` against `ffmpeg -threads 1 ... -f f32le`; FFmpeg's arm64
+build has no NEON for this codec):
+
+| File | FFamp | FFmpeg, one thread | FFamp / FFmpeg |
+|---|---|---|---|
+| `luckynight.wma`, 60 s | 0.284 s | 0.345 s | 0.82 |
+| `wma_0x163.wma`, 98 s | 0.456 s | 0.542 s | 0.84 |
+
+What is left: arithmetic-coded tiles and the inverse LPC filter (FFmpeg has neither; no public sample uses them, and no specification
+is public); bitstream splicing (read and ignored, as in FFmpeg).
+
+Test counts after rounds 3 and 4 (with main's VC-1 merged): `48_wma.sh` 144 checks with FFmpeg (188 with the sample files of
+`WINMEDIA_SAMPLES`), 65 without; `QUICK=1 tests/run.sh` 2,514 pass, 2 skipped; `QUICK=1 NOFFMPEG=1 tests/run.sh` 1,603 pass, 92
+skipped.
+
+Not done: Windows Media Audio 9 Voice (step G).
+
+# Windows Media step D: Microsoft MPEG-4 v1 to v3, WMV7, WMV8 and X8 intra pictures
+
+FFamp's own decoder for the H.263 family of Microsoft codecs (`src/msmpeg4.cpp` on the shared core `src/h263.h`, `src/h263.cpp`;
+backends `msmpeg4v1`, `msmpeg4v2`, `msmpeg4v3`, `wmv1`, `wmv2`) and for the X8 intra pictures of WMV8 and VC-1 Complex profile
+(`src/intrax8.cpp`), based on FFmpeg's decoders as the owner's rule of 2026-11-13 allows (files and holders in `docs/NOTICE.md`; the
+tables were copied by script from FFmpeg's data files). How they are driven is in `docs/CONVENTIONS.md`.
+
+The core reuses what the VC-1 and WMA rounds built instead of copying it: bit reader, VLC tables, the frame pool (now
+`vc1::FramePool`, used by both decoders), half-pel copy and average, edge emulation, the simple IDCT family and the Microsoft MPEG-4
+tables VC-1 already had. Two things were needed for bit-exact pictures:
+
+- FFmpeg on arm64 decodes these codecs with its NEON simple IDCT, and that one computes rows that hold only a DC value in full where
+  the C version takes a shortcut (8 x DC); above a DC of 1,024 the two differ by one before the column pass. `neonSimpleIdctPut` and
+  `neonSimpleIdctAdd` give the NEON results (NEON intrinsics on arm64, plain C++ elsewhere); VC-1 Complex profile keeps the C version,
+  which FFmpeg's VC-1 decoder asks for by name.
+- FFmpeg's v3 decoder uses the old DC scale tables, because its bug workarounds start in auto-detect mode; FFamp does the same.
+
+Readers: AVI, ASF and Matroska now name every fourcc FFmpeg maps to these codecs (`DIV3`, `DIV4`, `DIV5`, `DIV6`, `MPG3`, `DVX3`,
+`AP41`, `COL0`, `COL1` as `MP43`; `DIV2` as `MP42`; `MP41` as `MPG4`; `GXVE` as `WMV2`; Matroska `V_MPEG4/MS/V3`) and give them
+their BITMAPINFOHEADER. `DIV5` and `DIV6` used to go to Xvid as MPEG-4 part 2. AVI takes their key frames from the picture headers:
+the cut-off DivX 3 sample has no index and every chunk was a key frame before (now 6 of 1,443).
+
+Suite `tests/suites/51_wmv78.sh`, fixtures in `tests/fixtures/wmv78` (6 files, 196 KB, made by `make.sh` with FFmpeg: odd size,
+quantiser 2 and 31, noise for intra macroblocks in P-pictures and inter-intra prediction, WMV8 with the loop filter, in AVI, ASF and
+Matroska) plus the six Microsoft MPEG-4 and WMV fixtures of `tests/fixtures/asf`. Judge: FFmpeg 9.0.2.
+
+| Source | What it is | Result against FFmpeg's decode |
+|---|---|---|
+| 12 committed fixtures | v2, v3, WMV7, WMV8 in AVI, ASF and Matroska | every frame bit-exact, in order |
+| encodes made at test time (4 with `QUICK=1`, 15 in all) | v2, v3, WMV7, WMV8 at 176x144 to 720x576, 64 kbit/s to 6 Mbit/s and quantisers 2 and 31, WMV8 with the loop filter, AVI, ASF, Matroska | every frame bit-exact |
+| `mpg4.avi` (FATE) | v1, 352x240, 50 frames | bit-exact |
+| `div3.avi`, `Park_auto_no_driver.wmv` | v3, 352x240 and 720x576, 50 and 1,142 frames | bit-exact |
+| `mp43.wmv` | v3 with slices, 400x250 | 48 frames bit-exact; FFmpeg also decodes the two cut-off media objects at the end (one with an error) |
+| Goofy DivX 3 AVI (cut off, no index) | v3, 352x288, 1,443 frames | bit-exact; FFmpeg's demuxer gives one picture unless told to ignore the index (`-fflags +ignidx`), then one cut-off chunk more |
+| `asf_msmpeg4v2_mp3_asf2divX_fault.asf` | v2 in a damaged ASF, 1,035 frames | FFmpeg's demuxer stops after 7 pictures, those 7 are identical; the rest look right (checked by eye) |
+| `sample-wmv7.wmv`, `wmv1.wmv` | WMV7, 595 and 75 frames | bit-exact |
+| `sample-wmv8.1.wmv` | WMV8 with mspel motion, 8x4 and 4x8 transforms, the loop filter, per-macroblock tables, 595 frames | bit-exact |
+| FATE `wmv8_x8intra.wmv` | WMV8 with three X8 intra pictures, 474 frames | bit-exact |
+| `kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv` | VC-1 Complex profile with X8 intra pictures, 3,314 and 595 frames (refused until now) | bit-exact |
+
+Random frames equal the straight decode and FFmpeg's frame on every file tested (8 to 16 per file), runs of frames after jumps equal
+the straight decode, decoded frame times equal ffprobe's, six threads decoding one file each get the straight decode, jumping
+around leaks nothing.
+
+Speed, whole program into a pipe, best of three, against `ffmpeg -threads 1` writing raw pictures (FFmpeg has no threads for these
+codecs):
+
+| File | Frames | FFamp | FFmpeg | FFamp / FFmpeg |
+|---|---|---|---|---|
+| v2, 720x576, 3 Mbit/s, noise (made at test time) | 300 | 0.089 s (3,353 fps) | 0.090 s | 1.00 |
+| v3, the same | 300 | 0.090 s | 0.091 s | 0.99 |
+| WMV7, the same | 300 | 0.090 s | 0.091 s | 1.00 |
+| WMV8, the same | 300 | 0.108 s | 0.124 s | 0.87 |
+| `Park_auto_no_driver.wmv`, v3 720x576 | 1,142 | 0.179 s (6,380 fps) | 0.165 s | 1.09 |
+| `mpg4.avi`, v1 352x240 | 50 | 0.015 s | 0.029 s | 0.53 |
+| `sample-wmv7.wmv`, WMV7 CIF | 595 | 0.053 s | 0.062 s | 0.86 |
+| `sample-wmv8.1.wmv`, WMV8 CIF | 595 | 0.110 s | 0.124 s | 0.89 |
+| `wmv8_x8intra.wmv`, WMV8 with X8 | 474 | 0.051 s | 0.065 s | 0.78 |
+| `kelsy_300.wmv`, VC-1 Complex with X8, 320x176 | 3,314 | 0.464 s | 0.433 s | 1.07 |
+| `sample-wmv9-complex-CP.wmv`, VC-1 Complex with X8, CIF | 595 | 0.152 s | 0.150 s | 1.01 |
+
+The suite checks the two 720x576 encodes, three samples and `kelsy_300.wmv` against a limit of 1.5. (Without `-fps_mode passthrough`
+FFmpeg's raw output repeats pictures to fill the time gaps of some ASF files and takes 0.5 s; the comparison keeps one picture per
+packet on both sides.)
+
+The first port took 2.5 times FFmpeg's time on the 720x576 sample; the NEON IDCT, reading code and sign of each coefficient from one
+64-bit window (`Vlc::lookup`), run and level packed into the VLC symbol, exact shortcuts for all-zero and DC-only IDCT rows and
+`memcpy` for whole-pel copies brought it to FFmpeg's speed.
+
+Fuzzing: the new `msmpeg4` target (codec, size, WMV8 settings and length-prefixed pictures; seeds in
+`tests/fixtures/fuzz/msmpeg4`, made from the fixtures by `vc1_check.py seed`) ran 102,795 inputs and the `vc1` target, which now
+reaches X8 pictures through the Complex profile flag, 235,868 inputs with undefined-behaviour checks, then 36,678 and 75,419 under
+Guard Malloc (heap overruns trap): nothing found. Damaged copies of the fixtures and two samples decode or fail cleanly.
+
+Test counts (after the merge with the WMA 9 Professional and 9 Lossless rounds): `51_wmv78.sh` 64 checks with FFmpeg, 42 without;
+with `WINMEDIA_SAMPLES` set it gives 114 (72 without FFmpeg) and `49_vc1.sh` 83 (47 without FFmpeg), all pass; `QUICK=1 tests/run.sh`
+2,586 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh` 1,653 pass.
+
+Not done: FFmpeg's error concealment (a picture that stops decoding part way keeps what decoded and takes the rest from the picture
+before, FFmpeg guesses motion), so damaged pictures differ from FFmpeg's; WMV8 tools that FFmpeg's encoder cannot make (mspel motion,
+8x4 and 4x8 transforms, X8) are covered only by the two sample files, Microsoft MPEG-4 v1 only by the FATE sample, slices (FFmpeg's encoder writes
+one per picture) only by `mp43.wmv`; no frame threads (every picture needs the one before; the decoder already matches FFmpeg's one-thread speed).

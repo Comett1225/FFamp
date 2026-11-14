@@ -47,7 +47,8 @@ def best(command):
     fastest = None
     for _ in range(3):
         start = time.perf_counter()
-        subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            return None
         spent = time.perf_counter() - start
         fastest = spent if fastest is None else min(fastest, spent)
     return fastest
@@ -55,7 +56,10 @@ def best(command):
 
 def speed(path, limit):
     mine = best([AMEDIA, "decode", path])
-    theirs = best([FFMPEG, "-nostdin", "-v", "error", "-threads", "1", "-i", path, "-map", "0:v:0", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
+    theirs = best([FFMPEG, "-nostdin", "-v", "error", "-threads", "1", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
+    if mine is None or theirs is None:
+        print(f"{os.path.basename(path)}: a decode failed")
+        return False
     print(f"{os.path.basename(path)}: ours {mine:.3f} s, ffmpeg on one thread {theirs:.3f} s, ratio {mine / theirs:.2f} (limit {limit})")
     return mine <= theirs * limit
 

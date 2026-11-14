@@ -31,7 +31,7 @@ def pro_frame(path, rate):
 
 def hidden(path, rate):
     form, codec, start = track(path)
-    if (form == "mkv" and start > 0) or codec == "wmal":
+    if (form == "mkv" and start > 0) or codec in ("wmal", "wmas"):
         return 0
     return pro_frame(path, rate) if codec == "wmap" else 2 * frame_length(codec, rate)
 

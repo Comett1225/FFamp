@@ -13,6 +13,7 @@ struct PacketDecoder {
     int64_t lead = 0;
     int64_t skip = 0;
     bool stateless = false;
+    const char* refusal = nullptr;
     virtual ~PacketDecoder() = default;
     virtual void reset() = 0;
     virtual void feed(const std::vector<uint8_t>& packet, std::vector<float>& out) = 0;
@@ -32,5 +33,6 @@ std::unique_ptr<PacketDecoder> openVorbisAudio(const Track& track, std::string* 
 std::unique_ptr<PacketDecoder> openWmaAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openWmaProAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openWmaLosslessAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openWmaVoiceAudio(const Track& track, std::string* error);
 
 }

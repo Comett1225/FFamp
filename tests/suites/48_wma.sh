@@ -41,9 +41,20 @@ for f in $LX/lossless_*; do
 done
 check "probe names lossless_51.wma wmalossless, s16p, 5.1" grep -q '"codec_name":"wmalossless".*"sample_fmt":"s16p".*"channel_layout":"5.1"' <($A probe --json $LX/lossless_51.wma)
 check "probe names lossless_stereo24.wma s32p" grep -q '"sample_fmt":"s32p"' <($A probe --json $LX/lossless_stereo24.wma)
+echo "== wma: Windows Media Audio 9 Voice against checked tables (no FFmpeg)"
+VX=fixtures/wmavoice
+for f in $VX/voice_[0-9]*; do
+    check "$(basename $f) decodes to the checked checksum" python3 audio.py checksum $f $VX/sound.md5
+    check "random reads and chunk sizes of $(basename $f) equal the straight decode" python3 audio.py chunks adecode $f $WX_READS 3
+done
+vx_refuses() { ! $A adecode "$1" > /dev/null 2> $O/vx_refused.txt && grep -q "has music frames" $O/vx_refused.txt; }
+check "voice_music.avi (one superframe of music inside Voice) is refused with its own message" vx_refuses $VX/voice_music.avi
+check "probe names voice_16k.mkv wmavoice, flt, mono" grep -q '"codec_name":"wmavoice".*"sample_fmt":"flt".*"channel_layout":"mono"' <($A probe --json $VX/voice_16k.mkv)
+python3 $VX/make.py long 70 $O/wx_voice_long.avi
+check "jumps into each 20-second run of a 70 s Voice stream equal the straight decode (state marks)" python3 audio.py chunks adecode $O/wx_voice_long.avi $WX_READS 11
 rm -rf $O/wx_fz
 mkdir -p $O/wx_fz/seeds $O/wx_fz/corpus
-for f in $WX/*.wma fixtures/asf/wma*.wma $PX/*.wma $LX/*.wma; do $WC seed $f $O/wx_fz/seeds/$(basename $f).seed; done
+for f in $WX/*.wma fixtures/asf/wma*.wma $PX/*.wma $LX/*.wma $VX/*.wma; do $WC seed $f $O/wx_fz/seeds/$(basename $f).seed; done
 check "fuzz_wma: the format headers and packets of the fixtures go through" env TMPDIR=$O/wx_fz ../build/fuzz_wma $O/wx_fz/seeds/*
 check "fuzz_wma: ${FUZZ_BURST:-3} s of mutated headers and packets, no crash, hang or memory blow-up" env TMPDIR=$O/wx_fz ../build/fuzz_wma -seed=13 -max_total_time=${FUZZ_BURST:-3} -corpus_limit_mb=0 -rss_limit_mb=2048 -artifact_prefix=$O/wx_fz/ $O/wx_fz/corpus $O/wx_fz/seeds 2> $O/wx_fz/log.txt
 
@@ -98,6 +109,11 @@ echo "== wma: Windows Media Audio 9 Lossless bit-exact against ffmpeg's decoder"
 for f in $LX/lossless_*; do check "$(basename $f) bit-exact against ffmpeg" $WC exact $f; done
 for f in lossless_51.wma lossless_stereo24.wma lossless_mono.mkv; do check "probe fields of $f" python3 probe_check.py compare $LX/$f stream0.duration; done
 
+echo "== wma: Windows Media Audio 9 Voice against ffmpeg's decoder (SNR floor 90 dB, lengths to the sample)"
+for f in $VX/voice_[0-9]*; do check "$(basename $f) against ffmpeg" $WC against $f 90; done
+for f in voice_8k.wma voice_22k.wma voice_16k.mkv; do check "probe fields of $f" python3 probe_check.py compare $VX/$f stream0.duration; done
+check "probe fields of voice_11k.avi" python3 probe_check.py compare $VX/voice_11k.avi stream0.time_base stream0.duration format.duration format.bit_rate
+
 echo "== wma: speed against ffmpeg on one thread (ours at most 1.5 times its time)"
 WX_LONG=600
 [ -n "${QUICK:-}" ] && WX_LONG=180
@@ -107,13 +123,20 @@ $F -filter_complex "$WX_PAIR" -c:a wmav2 -b:a 32k $O/wx_long_32k.wma
 check "wmav2 128 kbit/s stereo, $WX_LONG s" $WC speed $O/wx_long_128k.wma 1.5
 check "wmav2 32 kbit/s stereo with noise coding, $WX_LONG s" $WC speed $O/wx_long_32k.wma 1.5
 check "a jump to the end of the noise-coded file is exact (the decoder state is rebuilt by parsing only)" python3 audio.py chunks adecode $O/wx_long_32k.wma 4 7
+python3 $VX/make.py long $WX_LONG $O/wx_voice_long.wma
+check "Voice 16 kHz with the postfilter, $WX_LONG s" $WC speed $O/wx_voice_long.wma 1.5
 
 if [ -n "${WINMEDIA_SAMPLES:-}" ] && [ -d "$WINMEDIA_SAMPLES" ]; then
     echo "== wma: Microsoft-made sample files from WINMEDIA_SAMPLES (not committed)"
     for f in $(cd "$WINMEDIA_SAMPLES" && ls *.wmv *.wma *.asf fate/*/*.wma 2> /dev/null); do
-        kind=$($A probe --json "$WINMEDIA_SAMPLES/$f" 2> /dev/null | grep -o -E '"codec_name":"(wmav[12]|wmapro|wmalossless)"')
+        kind=$($A probe --json "$WINMEDIA_SAMPLES/$f" 2> /dev/null | grep -o -E '"codec_name":"(wmav[12]|wmapro|wmalossless|wmavoice)"')
         [ -n "$kind" ] || continue
+        if [ "$f" = wmav_8.wma ]; then
+            check "$f (music frames inside Voice) is refused with its own message" vx_refuses "$WINMEDIA_SAMPLES/$f"
+            continue
+        fi
         case "$kind:$f" in
+            *wmavoice*) check "$f against ffmpeg (SNR floor 70 dB: FFmpeg's own C and NEON builds differ by 82 dB on the 19K file)" $WC against "$WINMEDIA_SAMPLES/$f" 70 ;;
             *wmalossless*:fate/*) check "$f bit-exact against ffmpeg (but the last frame, which reads past the cut)" $WC exact "$WINMEDIA_SAMPLES/$f" 2048 ;;
             *wmalossless*) check "$f bit-exact against ffmpeg" $WC exact "$WINMEDIA_SAMPLES/$f" ;;
             *) check "$f against ffmpeg" $WC against "$WINMEDIA_SAMPLES/$f" $WX_FLOOR ;;

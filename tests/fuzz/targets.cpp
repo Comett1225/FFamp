@@ -202,10 +202,10 @@ void wma(const uint8_t* data, size_t size) {
     Track t;
     t.kind = Kind::Audio;
     const int tag = data[0] | data[1] << 8;
-    t.codec = tag == 0x160 ? fourcc("wma1") : tag == 0x162 ? fourcc("wmap") : tag == 0x163 ? fourcc("wmal") : fourcc("wma2");
+    t.codec = tag == 0x160 ? fourcc("wma1") : tag == 0x162 ? fourcc("wmap") : tag == 0x163 ? fourcc("wmal") : tag == 0x0A ? fourcc("wmas") : fourcc("wma2");
     t.configType = fourcc("wfex");
     t.config.assign(data, data + head);
-    auto decoder = t.codec == fourcc("wmap") ? openWmaProAudio(t, nullptr) : t.codec == fourcc("wmal") ? openWmaLosslessAudio(t, nullptr) : openWmaAudio(t, nullptr);
+    auto decoder = t.codec == fourcc("wmap") ? openWmaProAudio(t, nullptr) : t.codec == fourcc("wmal") ? openWmaLosslessAudio(t, nullptr) : t.codec == fourcc("wmas") ? openWmaVoiceAudio(t, nullptr) : openWmaAudio(t, nullptr);
     if (!decoder) return;
     const size_t align = size_t(data[12] | data[13] << 8);
     std::vector<uint8_t> packet, state;

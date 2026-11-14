@@ -313,9 +313,8 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
         a.codec = openWmaProAudio(track, error);
     } else if (track.codec == fourcc("wmal")) {
         a.codec = openWmaLosslessAudio(track, error);
-    } else if (const char* name = windowsMediaName(track.codec)) {
-        if (error) *error = std::string("this sound codec (") + name + ") is not decoded yet";
-        return nullptr;
+    } else if (track.codec == fourcc("wmas")) {
+        a.codec = openWmaVoiceAudio(track, error);
     } else if (track.codec == fourcc("lpcm")) {
         if (track.channels < 1 || track.channels > 64 || track.sampleRate < 1) return fail("PCM layout not supported");
         a.codec = openPcm(track, error);
@@ -343,6 +342,10 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
     if (!a.codec) return fail("audio codec not supported");
     if (a.codec->rate < 1 || a.codec->rate > 768000 || a.codec->channels < 1 || a.codec->channels > 64) return fail("audio layout not supported");
     a.place();
+    if (a.codec->refusal) {
+        if (error) *error = a.codec->refusal;
+        return nullptr;
+    }
     return decoder;
 }
 

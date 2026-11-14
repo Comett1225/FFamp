@@ -27,7 +27,7 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | DV | `dvc ` (NTSC), `dvcp` (PAL), `dv5n`, `dv5p`, or the QuickTime fourcc as found | 0 | empty |
 | H.263 | `h263` | 0 | empty |
 | PCM | `lpcm` | 0 | empty; `bits` (8, 16, 24, 32, 64), `floating`, `bigEndian` describe it; 8-bit is unsigned, others signed |
-| Windows Media Video 7, 8, 9, VC-1, Microsoft MPEG-4 v1 to v3 | `WMV1`, `WMV2`, `WMV3`, `WVC1`, `WMVA`, `MPG4`, `MP42`, `MP43` (AVI may give `DIV3`, `DIV4`) | `bmih` | the stream's BITMAPINFOHEADER (40 bytes, little-endian) followed by its codec data (WMV3: the 4-byte sequence header; WVC1: sequence header and entry point) |
+| Windows Media Video 7, 8, 9, VC-1, Microsoft MPEG-4 v1 to v3 | `WMV1`, `WMV2`, `WMV3`, `WVC1`, `WMVA`, `MPG4`, `MP42`, `MP43` (every reader gives these names for the fourccs that mean the same codec: `DIV3`, `DIV4`, `DIV5`, `DIV6`, `MPG3`, `DVX3`, `AP41`, `COL0`, `COL1` are `MP43`; `DIV2` is `MP42`; `MP41` is `MPG4`; `GXVE` is `WMV2`) | `bmih` | the stream's BITMAPINFOHEADER (40 bytes, little-endian) followed by its codec data (WMV2: 4 bytes of stream settings; WMV3: the 4-byte sequence header; WVC1: sequence header and entry point); Matroska `V_MPEG4/MS/V3` gives `MP43` with no config |
 | Windows Media Audio 1, 2, 9 Pro, 9 Lossless, 9 Voice | `wma1`, `wma2`, `wmap`, `wmal`, `wmas` | `wfex` | the stream's WAVEFORMATEX (18 bytes, little-endian; WAVEFORMATEXTENSIBLE when the tag is 0xFFFE) followed by its codec data; one sample is one ASF media object |
 
 ## Timing
@@ -143,10 +143,9 @@ list; `Sample.offset` is then free for the reader's use.
   Language List entry as stored (RFC 1766, `en-us`); ffprobe shows ISO 639-2 (`eng`).
 - `statedSeconds()` is the play duration minus the preroll, except for broadcast files and files whose data object runs past the end.
 - Probe names `wmav1`, `wmav2`, `wmapro`, `wmalossless`, `wmavoice`, `wmv1`, `wmv2`, `wmv3`, `vc1`, `msmpeg4v1`, `msmpeg4v2`,
-  `msmpeg4v3`, from ASF, AVI and (sound) Matroska. Windows Media Audio 1, 2, 9 Professional and 9 Lossless and `WMV3`, `WVC1` and `WMVA`
-  decode (sections below); until their codec rounds land, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9
-  Voice) is not decoded yet` and `VideoDecoder::open` with `this video codec (Windows Media Video 8) is not decoded yet` (each with its own
-  name).
+  `msmpeg4v3`, from ASF, AVI and Matroska. Windows Media Audio 1, 2, 9 Professional and 9 Lossless and every Windows Media video codec
+  decode (sections below); until its codec round lands, `AudioDecoder::open` fails with `this sound codec (Windows Media Audio 9
+  Voice) is not decoded yet`.
 - H.263 and Motion JPEG in ASF get their FFamp codes (`h263`, `jpeg`) and decode. Other sound tags keep a track named by the tag in
   hex (`0130`), other video fourccs a track named by the fourcc.
 
@@ -176,6 +175,10 @@ list; `Sample.offset` is then free for the reader's use.
   (not premultiplied), scaled with the picture. I420 and RGB24 output have no alpha.
 - A sample the decoder rejects does not end the stream: `VideoDecoder::frame` returns the nearest earlier frame that decoded, with the
   asked frame's time, as FFmpeg's concealment shows a repeat.
+- Microsoft MPEG-4 v1 to v3, WMV7 and WMV8 in AVI and in Matroska (`V_MS/VFW/FOURCC`) get the names above with configType `bmih`, as
+  in ASF. In AVI their key frames are the I-pictures, read from each chunk's picture header (the index's key flags are not used: old
+  DivX 3 files often have no index or mark every chunk). These codecs have no B-pictures, so shown order is stored order. `DIV5` and
+  `DIV6` are Microsoft MPEG-4 v3, as FFmpeg maps them, not MPEG-4 part 2.
 - VC-1 in AVI and in Matroska (`V_MS/VFW/FOURCC`) keeps its fourcc (`WMV3`, `WVC1`, `WMVA`) with configType `bmih`, as in ASF. In
   AVI its key frames (I pictures and field pairs that start with an I field) and its shown order (a B or BI picture is shown before
   the anchor stored ahead of it) come from the picture types, as for MPEG-4; the index's key flags are not used.
@@ -215,9 +218,10 @@ list; `Sample.offset` is then free for the reader's use.
   the sequence header and entry point from the start-code framed codec data, and the coded size from the entry point. A sample may
   carry start codes (frame, field, slice, entry point, sequence header) or be one bare picture; a bare interlaced field pair is split at
   its field start code.
-- Complex profile streams with X8 intra pictures (`kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv`) are refused with `this VC-1 stream
-  uses X8 intra pictures (Windows Media Video 9 Complex profile), which are not decoded yet`; Complex profile without X8 (the
-  `sb-adv-q94.avi` sample) decodes, with the simple IDCT those streams ask for. Sprite streams (`WMVP`, `WVP2`) are refused.
+- Complex profile decodes with the simple IDCT those streams ask for (FFmpeg's C version, which its VC-1 decoder names, not the NEON
+  one); its X8 intra pictures (`kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv`) go through the X8 decoder of WMV8 (`src/intrax8.cpp`,
+  quantiser 2 x PQUANT + HALFQP, offset PQUANT for the uniform quantiser, the sequence header's loop filter flag). Sprite streams
+  (`WMVP`, `WVP2`) are refused.
 - Every sample's picture comes out with that sample's time: B-pictures need no reorder delay because the reader's presentation times
   put them in order. Output is 8-bit 4:2:0 at the coded size, cut to the track size when the track is smaller.
 - Frame threads: a B or BI picture (nothing refers to it) is decoded on one of two worker threads, from a copy of the decoder state
@@ -316,3 +320,31 @@ list; `Sample.offset` is then free for the reader's use.
 - On purpose unlike FFmpeg: at the end of a cut file, a last frame that reads past the data takes the bytes that follow in the
   reservoir; FFmpeg's reader stops moving at the end and repeats bits, so that frame differs (FATE `Mega_Weird_Audio_Test_24bit`
   and `g2_24bit`).
+
+## The H.263-family core (`src/h263.h`, `src/h263.cpp`)
+
+- What the macroblock decoders of this family share, based on FFmpeg's `MpegEncContext` code (files in `docs/NOTICE.md`): `Mpv` holds
+  the macroblock geometry, the DC, AC and coded-block prediction arrays (kept across pictures, as FFmpeg keeps them), block indexes,
+  H.263 motion vector prediction, the MPEG-4 AC prediction, the H.263 intra dequantiser, 16x16 half-pel motion compensation with edge
+  emulation, the H.263 loop filter, and the H.263 and Microsoft MPEG-4 VLC and run-level tables (`src/msmpeg4_tables.cpp`).
+- It reuses what VC-1 already has instead of copies: the bit reader and VLC tables (`src/bits.h`, `src/vlc.h`; `Vlc::lookup` decodes
+  from a cached 64-bit window so the run-level loop reads code and sign with one load), `vc1::Bits`, the frame pool and picture
+  buffers (`vc1::FramePool`, now shared, 64-pixel margins), the half-pel copy and average functions, edge emulation, the simple IDCT
+  family and the Microsoft MPEG-4 DC, intra pattern and scan tables of `src/vc1_tables.cpp`.
+- IDCT: FFmpeg on arm64 runs its NEON simple IDCT for these codecs, which computes rows without the C version's shortcut for rows
+  that hold only a DC value; `vc1::neonSimpleIdctPut` and `neonSimpleIdctAdd` give exactly its results (NEON intrinsics on arm64, the
+  same arithmetic in plain C++ elsewhere). WMV8 uses its own IDCT (`wmv2IdctPut`, `wmv2IdctAdd` in `src/intrax8.cpp`).
+
+## Microsoft MPEG-4 v1 to v3, WMV7 and WMV8 (`src/msmpeg4.cpp`, backends `msmpeg4v1`, `msmpeg4v2`, `msmpeg4v3`, `wmv1`, `wmv2`)
+
+- One decoder for the five versions, based on FFmpeg's (`docs/NOTICE.md`), behind `SoftDecoder` (`openMsmpeg4`). The track's width
+  and height set the macroblock grid; WMV8 reads its 4 bytes of codec data (bit rate, loop filter, mspel, adaptive transform types,
+  X8 pictures, slices) from behind the BITMAPINFOHEADER; the others need no codec data.
+- I and P pictures, every VLC set of each version, the three escape kinds, per-macroblock run-level tables, inter-intra DC prediction
+  (WMV7 at low bit rates), flip-flop rounding, slices, WMV8 skip maps, quarter-pel mspel motion, 8x4 and 4x8 transforms, the loop filter
+  and WMV8 X8 intra pictures (`src/intrax8.cpp`, the J-frames; VC-1 Complex profile uses the same code).
+- Every sample gives one picture with its own time. A WMV8 P-picture in which every macroblock is skipped carries no picture: the one
+  before is shown again with this sample's time (FFmpeg drops it). A picture whose macroblocks stop decoding part way keeps what was
+  decoded and fills the rest from the picture before (grey at the start); FFmpeg conceals with its error resilience, so such pictures
+  differ. A jump starts a fresh decoder at the key frame before; the prediction state FFmpeg keeps across pictures is rebuilt by every
+  I-picture, so jumps give the straight decode.

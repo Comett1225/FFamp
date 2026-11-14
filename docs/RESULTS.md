@@ -419,7 +419,7 @@ Where FFmpeg is wrong or silent (plan section 3.6), ST 421 decides:
   plan puts X8 in step D).
 
 Test counts (milestones 1 to 4): `QUICK=1 tests/run.sh` 2,376 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh`
-1,544 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 74 checks (43 without FFmpeg), all pass.
+1,544 pass; with `WINMEDIA_SAMPLES` set, `49_vc1.sh` alone gives 74 checks (43 without FFmpeg), all pass.
 # Windows Media round 2: Windows Media Audio 1 and 2, and the audio framework for the family
 
 `src/wma_decode.cpp` decodes Windows Media Audio 1 (`0x0160`) and 2 (`0x0161`) from ASF, AVI and Matroska behind `AudioDecoder`. It is
@@ -575,7 +575,7 @@ and underruns trap) decoded or failed cleanly. AddressSanitizer hangs at start-u
 
 
 Test counts after milestone 5 and the merge with the WMA round: `QUICK=1 tests/run.sh` 2,458 pass, 1 skipped (a real camera);
-`QUICK=1 NOFFMPEG=1 tests/run.sh` 1,569 pass; with `WINMEDIA_SAMPLES` set, `48_vc1.sh` alone gives 75 checks (44 without FFmpeg),
+`QUICK=1 NOFFMPEG=1 tests/run.sh` 1,569 pass; with `WINMEDIA_SAMPLES` set, `49_vc1.sh` alone gives 75 checks (44 without FFmpeg),
 all pass.
 
 Not done: X8 intra pictures (Complex profile, plan step D), the mixed field/frame direct mode and the chroma pull-back FIXME of FFmpeg
@@ -626,3 +626,86 @@ Test counts after rounds 3 and 4 (with main's VC-1 merged): `48_wma.sh` 144 chec
 skipped.
 
 Not done: Windows Media Audio 9 Voice (step G).
+
+# Windows Media step D: Microsoft MPEG-4 v1 to v3, WMV7, WMV8 and X8 intra pictures
+
+FFamp's own decoder for the H.263 family of Microsoft codecs (`src/msmpeg4.cpp` on the shared core `src/h263.h`, `src/h263.cpp`;
+backends `msmpeg4v1`, `msmpeg4v2`, `msmpeg4v3`, `wmv1`, `wmv2`) and for the X8 intra pictures of WMV8 and VC-1 Complex profile
+(`src/intrax8.cpp`), based on FFmpeg's decoders as the owner's rule of 2026-11-13 allows (files and holders in `docs/NOTICE.md`; the
+tables were copied by script from FFmpeg's data files). How they are driven is in `docs/CONVENTIONS.md`.
+
+The core reuses what the VC-1 and WMA rounds built instead of copying it: bit reader, VLC tables, the frame pool (now
+`vc1::FramePool`, used by both decoders), half-pel copy and average, edge emulation, the simple IDCT family and the Microsoft MPEG-4
+tables VC-1 already had. Two things were needed for bit-exact pictures:
+
+- FFmpeg on arm64 decodes these codecs with its NEON simple IDCT, and that one computes rows that hold only a DC value in full where
+  the C version takes a shortcut (8 x DC); above a DC of 1,024 the two differ by one before the column pass. `neonSimpleIdctPut` and
+  `neonSimpleIdctAdd` give the NEON results (NEON intrinsics on arm64, plain C++ elsewhere); VC-1 Complex profile keeps the C version,
+  which FFmpeg's VC-1 decoder asks for by name.
+- FFmpeg's v3 decoder uses the old DC scale tables, because its bug workarounds start in auto-detect mode; FFamp does the same.
+
+Readers: AVI, ASF and Matroska now name every fourcc FFmpeg maps to these codecs (`DIV3`, `DIV4`, `DIV5`, `DIV6`, `MPG3`, `DVX3`,
+`AP41`, `COL0`, `COL1` as `MP43`; `DIV2` as `MP42`; `MP41` as `MPG4`; `GXVE` as `WMV2`; Matroska `V_MPEG4/MS/V3`) and give them
+their BITMAPINFOHEADER. `DIV5` and `DIV6` used to go to Xvid as MPEG-4 part 2. AVI takes their key frames from the picture headers:
+the cut-off DivX 3 sample has no index and every chunk was a key frame before (now 6 of 1,443).
+
+Suite `tests/suites/51_wmv78.sh`, fixtures in `tests/fixtures/wmv78` (6 files, 196 KB, made by `make.sh` with FFmpeg: odd size,
+quantiser 2 and 31, noise for intra macroblocks in P-pictures and inter-intra prediction, WMV8 with the loop filter, in AVI, ASF and
+Matroska) plus the six Microsoft MPEG-4 and WMV fixtures of `tests/fixtures/asf`. Judge: FFmpeg 9.0.2.
+
+| Source | What it is | Result against FFmpeg's decode |
+|---|---|---|
+| 12 committed fixtures | v2, v3, WMV7, WMV8 in AVI, ASF and Matroska | every frame bit-exact, in order |
+| encodes made at test time (4 with `QUICK=1`, 15 in all) | v2, v3, WMV7, WMV8 at 176x144 to 720x576, 64 kbit/s to 6 Mbit/s and quantisers 2 and 31, WMV8 with the loop filter, AVI, ASF, Matroska | every frame bit-exact |
+| `mpg4.avi` (FATE) | v1, 352x240, 50 frames | bit-exact |
+| `div3.avi`, `Park_auto_no_driver.wmv` | v3, 352x240 and 720x576, 50 and 1,142 frames | bit-exact |
+| `mp43.wmv` | v3 with slices, 400x250 | 48 frames bit-exact; FFmpeg also decodes the two cut-off media objects at the end (one with an error) |
+| Goofy DivX 3 AVI (cut off, no index) | v3, 352x288, 1,443 frames | bit-exact; FFmpeg's demuxer gives one picture unless told to ignore the index (`-fflags +ignidx`), then one cut-off chunk more |
+| `asf_msmpeg4v2_mp3_asf2divX_fault.asf` | v2 in a damaged ASF, 1,035 frames | FFmpeg's demuxer stops after 7 pictures, those 7 are identical; the rest look right (checked by eye) |
+| `sample-wmv7.wmv`, `wmv1.wmv` | WMV7, 595 and 75 frames | bit-exact |
+| `sample-wmv8.1.wmv` | WMV8 with mspel motion, 8x4 and 4x8 transforms, the loop filter, per-macroblock tables, 595 frames | bit-exact |
+| FATE `wmv8_x8intra.wmv` | WMV8 with three X8 intra pictures, 474 frames | bit-exact |
+| `kelsy_300.wmv`, `sample-wmv9-complex-CP.wmv` | VC-1 Complex profile with X8 intra pictures, 3,314 and 595 frames (refused until now) | bit-exact |
+
+Random frames equal the straight decode and FFmpeg's frame on every file tested (8 to 16 per file), runs of frames after jumps equal
+the straight decode, decoded frame times equal ffprobe's, six threads decoding one file each get the straight decode, jumping
+around leaks nothing.
+
+Speed, whole program into a pipe, best of three, against `ffmpeg -threads 1` writing raw pictures (FFmpeg has no threads for these
+codecs):
+
+| File | Frames | FFamp | FFmpeg | FFamp / FFmpeg |
+|---|---|---|---|---|
+| v2, 720x576, 3 Mbit/s, noise (made at test time) | 300 | 0.089 s (3,353 fps) | 0.090 s | 1.00 |
+| v3, the same | 300 | 0.090 s | 0.091 s | 0.99 |
+| WMV7, the same | 300 | 0.090 s | 0.091 s | 1.00 |
+| WMV8, the same | 300 | 0.108 s | 0.124 s | 0.87 |
+| `Park_auto_no_driver.wmv`, v3 720x576 | 1,142 | 0.179 s (6,380 fps) | 0.165 s | 1.09 |
+| `mpg4.avi`, v1 352x240 | 50 | 0.015 s | 0.029 s | 0.53 |
+| `sample-wmv7.wmv`, WMV7 CIF | 595 | 0.053 s | 0.062 s | 0.86 |
+| `sample-wmv8.1.wmv`, WMV8 CIF | 595 | 0.110 s | 0.124 s | 0.89 |
+| `wmv8_x8intra.wmv`, WMV8 with X8 | 474 | 0.051 s | 0.065 s | 0.78 |
+| `kelsy_300.wmv`, VC-1 Complex with X8, 320x176 | 3,314 | 0.464 s | 0.433 s | 1.07 |
+| `sample-wmv9-complex-CP.wmv`, VC-1 Complex with X8, CIF | 595 | 0.152 s | 0.150 s | 1.01 |
+
+The suite checks the two 720x576 encodes, three samples and `kelsy_300.wmv` against a limit of 1.5. (Without `-fps_mode passthrough`
+FFmpeg's raw output repeats pictures to fill the time gaps of some ASF files and takes 0.5 s; the comparison keeps one picture per
+packet on both sides.)
+
+The first port took 2.5 times FFmpeg's time on the 720x576 sample; the NEON IDCT, reading code and sign of each coefficient from one
+64-bit window (`Vlc::lookup`), run and level packed into the VLC symbol, exact shortcuts for all-zero and DC-only IDCT rows and
+`memcpy` for whole-pel copies brought it to FFmpeg's speed.
+
+Fuzzing: the new `msmpeg4` target (codec, size, WMV8 settings and length-prefixed pictures; seeds in
+`tests/fixtures/fuzz/msmpeg4`, made from the fixtures by `vc1_check.py seed`) ran 102,795 inputs and the `vc1` target, which now
+reaches X8 pictures through the Complex profile flag, 235,868 inputs with undefined-behaviour checks, then 36,678 and 75,419 under
+Guard Malloc (heap overruns trap): nothing found. Damaged copies of the fixtures and two samples decode or fail cleanly.
+
+Test counts (after the merge with the WMA 9 Professional and 9 Lossless rounds): `51_wmv78.sh` 64 checks with FFmpeg, 42 without;
+with `WINMEDIA_SAMPLES` set it gives 114 (72 without FFmpeg) and `49_vc1.sh` 83 (47 without FFmpeg), all pass; `QUICK=1 tests/run.sh`
+2,586 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh` 1,653 pass.
+
+Not done: FFmpeg's error concealment (a picture that stops decoding part way keeps what decoded and takes the rest from the picture
+before, FFmpeg guesses motion), so damaged pictures differ from FFmpeg's; WMV8 tools that FFmpeg's encoder cannot make (mspel motion,
+8x4 and 4x8 transforms, X8) are covered only by the two sample files, Microsoft MPEG-4 v1 only by the FATE sample, slices (FFmpeg's encoder writes
+one per picture) only by `mp43.wmv`; no frame threads (every picture needs the one before; the decoder already matches FFmpeg's one-thread speed).

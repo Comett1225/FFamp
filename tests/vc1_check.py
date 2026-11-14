@@ -3,6 +3,7 @@ import numpy
 import os
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp"))
@@ -21,18 +22,67 @@ def frames(command, size):
     return [hashlib.md5(data[i:i + size]).hexdigest() for i in range(0, len(data) - size + 1, size)]
 
 
-def both(path):
+def both(path, flags=()):
     size = frame_size(path)
     ours = frames([AMEDIA, "decode", path], size)
-    theirs = frames([FFMPEG, "-nostdin", "-v", "quiet", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], size)
+    theirs = frames([FFMPEG, "-nostdin", "-v", "quiet", *flags, "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], size)
     return ours, theirs
 
 
-def ordered(path, extra):
-    ours, theirs = both(path)
+def ordered(path, extra, flags=()):
+    ours, theirs = both(path, flags)
     same = sum(a == b for a, b in zip(ours, theirs))
     print(f"{os.path.basename(path)}: frames {len(ours)}, ffmpeg {len(theirs)}, identical in order {same}")
     return len(ours) > 0 and same == len(ours) and 0 <= len(theirs) - len(ours) <= extra
+
+
+def prefix(path, count):
+    ours, theirs = both(path)
+    same = sum(a == b for a, b in zip(ours, theirs))
+    print(f"{os.path.basename(path)}: frames {len(ours)}, ffmpeg {len(theirs)} (its demuxer stops early), the first {same} identical")
+    return len(theirs) == count and same == count and len(ours) > count
+
+
+def best(command):
+    fastest = None
+    for _ in range(3):
+        start = time.perf_counter()
+        if subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            return None
+        spent = time.perf_counter() - start
+        fastest = spent if fastest is None else min(fastest, spent)
+    return fastest
+
+
+def speed(path, limit):
+    mine = best([AMEDIA, "decode", path])
+    theirs = best([FFMPEG, "-nostdin", "-v", "error", "-threads", "1", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
+    if mine is None or theirs is None:
+        print(f"{os.path.basename(path)}: a decode failed")
+        return False
+    print(f"{os.path.basename(path)}: ours {mine:.3f} s, ffmpeg on one thread {theirs:.3f} s, ratio {mine / theirs:.2f} (limit {limit})")
+    return mine <= theirs * limit
+
+
+def seed(path, out, count):
+    words = subprocess.run([AMEDIA, "videoinfo", path], capture_output=True, text=True, check=True).stdout.split()
+    found = dict(zip(words[0::2], words[1::2]))
+    width, height = (int(v) for v in found["size"].split("x"))
+    lines = subprocess.run([AMEDIA, "packets", path], capture_output=True, text=True).stdout.splitlines()
+    number = next(l.split()[1] for l in lines if l.startswith("track") and " video " in l)
+    sizes = [int(l.split()[3]) for l in lines if l[:1].isdigit() or l[:1] == "-"][:count]
+    raw = subprocess.run([AMEDIA, "packets", path, "--raw", "--track", number], capture_output=True).stdout
+    versions = ["MPG4", "MP42", "MP43", "WMV1", "WMV2"]
+    head = open(path, "rb").read()
+    at = head.find(b"strf")
+    extra = head[at + 48:at + 52] if found["codec"] == "WMV2" and at >= 0 else bytes(4)
+    data = bytearray([versions.index(found["codec"])]) + width.to_bytes(2, "big") + height.to_bytes(2, "big") + extra
+    at = 0
+    for n in sizes:
+        data += n.to_bytes(2, "big") + raw[at:at + n]
+        at += n
+    open(out, "wb").write(data)
+    return len(sizes) > 0
 
 
 def unordered(path):
@@ -73,7 +123,13 @@ def rangemap(path, scratch):
 if __name__ == "__main__":
     mode = sys.argv[1]
     if mode == "ordered":
-        ok = ordered(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 0)
+        ok = ordered(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 0, sys.argv[4:])
+    elif mode == "prefix":
+        ok = prefix(sys.argv[2], int(sys.argv[3]))
+    elif mode == "speed":
+        ok = speed(sys.argv[2], float(sys.argv[3]))
+    elif mode == "seed":
+        ok = seed(sys.argv[2], sys.argv[3], int(sys.argv[4]))
     elif mode == "rangemap":
         ok = rangemap(sys.argv[2], sys.argv[3])
     elif mode == "unordered":

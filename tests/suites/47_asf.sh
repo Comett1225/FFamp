@@ -30,15 +30,15 @@ msmpeg4v2.asf msmpeg4v2
 avi_div3.avi msmpeg4v3
 avi_wmv2.avi wmv2
 TABLE
-while read command f text; do
-    check "$f: $command says the codec is not decoded yet" ax_refuses $command $AX/$f "$text) is not decoded yet"
+while read f backend; do
+    check "$f decodes with FFamp's own $backend decoder" grep -q "backend $backend " <($A videoinfo $AX/$f)
 done <<TABLE
-decode wmv1_wma2.wmv Windows Media Video 7
-decode wmv2.wmv Windows Media Video 8
-decode msmpeg4v3.asf Microsoft MPEG-4 version 3
-decode msmpeg4v2.asf Microsoft MPEG-4 version 2
-decode avi_div3.avi Microsoft MPEG-4 version 3 (DivX 3)
-decode avi_wmv2.avi Windows Media Video 8
+wmv1_wma2.wmv wmv1
+wmv2.wmv wmv2
+msmpeg4v3.asf msmpeg4v3
+msmpeg4v2.asf msmpeg4v2
+avi_div3.avi msmpeg4v3
+avi_wmv2.avi wmv2
 TABLE
 check "title, artist, album, date and track tags of wma2.wma" [ "$($A packets $AX/wma2.wma | grep -c -E '^tag (title=Title|artist=Artist|album=Album|date=2004|track=3)$')" = 5 ]
 

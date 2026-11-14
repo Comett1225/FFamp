@@ -23,6 +23,7 @@ public:
         ++at;
         return value;
     }
+    [[gnu::always_inline]] uint64_t cache() const { return window(); }
     void skip(int64_t n) { at += n; }
     void align() { at = (at + 7) & ~int64_t(7); }
     int64_t position() const { return at; }

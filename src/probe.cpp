@@ -435,7 +435,7 @@ Look lookOf(Reader& reader, const Track& t) {
         look.pixels = "yuv420p";
         if (c == fourcc("WMV3") && t.config.size() >= 41) look.profile = (t.config[40] >> 6) == 0 ? "Simple" : (t.config[40] >> 6) == 1 ? "Main" : "Complex";
         if (c != fourcc("WMV3") && c != fourcc("WMV1") && c != fourcc("WMV2")) look.profile = "Advanced";
-    } else if (c == fourcc("MPG4") || c == fourcc("MP42") || c == fourcc("MP43") || c == fourcc("DIV3") || c == fourcc("DIV4")) {
+    } else if (c == fourcc("MPG4") || c == fourcc("MP42") || c == fourcc("MP43")) {
         look.codec = c == fourcc("MPG4") ? "msmpeg4v1" : c == fourcc("MP42") ? "msmpeg4v2" : "msmpeg4v3";
         look.pixels = "yuv420p";
     } else if (c == fourcc("lpcm")) {

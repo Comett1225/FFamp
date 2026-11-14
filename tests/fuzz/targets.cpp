@@ -196,6 +196,29 @@ void vc1(const uint8_t* data, size_t size) {
     decoder->drain(look);
 }
 
+void msmpeg4(const uint8_t* data, size_t size) {
+    if (size < 9) return;
+    static const uint32_t codecs[5] = {fourcc("MPG4"), fourcc("MP42"), fourcc("MP43"), fourcc("WMV1"), fourcc("WMV2")};
+    const int width = std::clamp(data[1] << 8 | data[2], 1, 720), height = std::clamp(data[3] << 8 | data[4], 1, 576);
+    std::vector<uint8_t> config(40, 0);
+    config.insert(config.end(), data + 5, data + 9);
+    auto decoder = openMsmpeg4(codecs[data[0] % 5], config, width, height, nullptr);
+    if (!decoder) return;
+    PictureSink look = [&](const Picture& p) {
+        for (int i = 0; i < 3; ++i) {
+            const int rows = i ? p.chromaHeight : p.height, columns = i ? p.chromaWidth : p.width;
+            picturesSeen += p.plane[i][0] + p.plane[i][size_t(rows - 1) * p.stride[i] + size_t(columns - 1)];
+        }
+    };
+    int64_t stamp = 0;
+    for (size_t start = 9; start + 2 <= size;) {
+        const size_t length = std::min<size_t>(size - start - 2, size_t(data[start]) << 8 | data[start + 1]);
+        decoder->decode(data + start + 2, length, stamp++, look);
+        start += 2 + length;
+        if ((stamp & 15) == 9) decoder->reset();
+    }
+}
+
 void wma(const uint8_t* data, size_t size) {
     if (size < 18) return;
     const size_t head = std::min<size_t>(size, 18 + size_t(data[16] | data[17] << 8));

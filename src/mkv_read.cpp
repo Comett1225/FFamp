@@ -212,6 +212,7 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
         } else if (id == "V_MPEG1") set("mp1v", 0, false);
         else if (id == "V_MPEG2") set("mp2v", 0, false);
         else if (id == "V_MJPEG") set("jpeg", 0, false);
+        else if (id == "V_MPEG4/MS/V3") set("MP43", 0, false);
         else if (id == "V_MS/VFW/FOURCC" && secret.size() >= 40) {
             t.codec = videoFourcc(be32(secret.data() + 16), t.height);
             if (t.codec == fourcc("mp4v")) {
@@ -223,7 +224,7 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
                 t.configType = 0;
                 t.config.clear();
             }
-            if (vc1Codec(t.codec)) {
+            if (vc1Codec(t.codec) || msmpeg4Codec(t.codec)) {
                 t.configType = fourcc("bmih");
                 t.config = secret;
             }

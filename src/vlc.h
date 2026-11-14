@@ -28,6 +28,26 @@ public:
         }
     }
 
+    int lookup(uint64_t window, int& used) const {
+        Entry e = table[window >> (64 - root)];
+        if (e.length >= 0) {
+            used = e.length;
+            return e.value;
+        }
+        int total = root;
+        window <<= root;
+        for (;;) {
+            const int bits = -e.length;
+            e = table[size_t(e.value) + (window >> (64 - bits))];
+            if (e.length >= 0) {
+                used = total + e.length;
+                return e.value;
+            }
+            total += bits;
+            window <<= bits;
+        }
+    }
+
 private:
     struct Entry {
         int32_t value = -1;

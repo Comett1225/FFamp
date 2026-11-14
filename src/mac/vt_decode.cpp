@@ -706,7 +706,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     if (track.samples.empty() || !track.timescale || track.timescale > uint32_t(INT32_MAX) || track.width <= 0 || track.height <= 0) return fail("track is empty");
     const uint32_t codec = track.codec;
     const bool vc1 = vc1Codec(codec) && track.configType == fourcc("bmih");
-    if (const char* name = windowsMediaName(track.codec); name && !vc1) {
+    const bool msmpeg4 = msmpeg4Codec(codec);
+    if (const char* name = windowsMediaName(track.codec); name && !vc1 && !msmpeg4) {
         if (error) *error = std::string("this video codec (") + name + ") is not decoded yet";
         return nullptr;
     }
@@ -718,7 +719,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool jpeg = codec == fourcc("jpeg");
     const bool tape = (codec >> 16) == 0x6476;
     const bool older = jpeg || tape || codec == fourcc("mp1v") || codec == fourcc("mp2v") || codec == fourcc("h263");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv && !part2 && !older && !vc1) return fail("video codec not supported by this decoder");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv && !part2 && !older && !vc1 && !msmpeg4) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -803,8 +804,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         return std::move(decoder);
     };
     if (vp8 || apv || (vp9 && track.alpha) || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
-    if (vc1) {
-        d.soft = openVc1(codec, config, track.width, track.height, error);
+    if (vc1 || msmpeg4) {
+        d.soft = vc1 ? openVc1(codec, config, track.width, track.height, error) : openMsmpeg4(codec, config, track.width, track.height, error);
         if (!d.soft) return nullptr;
         d.backend = d.soft->name();
         return decoder;

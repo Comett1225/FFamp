@@ -134,9 +134,9 @@ struct Extended {
 uint32_t wmvCodec(uint32_t handler) {
     char name[5] = {char(handler >> 24), char(handler >> 16), char(handler >> 8), char(handler), 0};
     for (char& c : name) if (c >= 'a' && c <= 'z') c = char(c - 32);
-    for (const char* known : {"WMV1", "WMV2", "WMV3", "WVC1", "WMVA", "MPG4", "MP42", "MP43"}) if (memcmp(name, known, 4) == 0) return be32(reinterpret_cast<const uint8_t*>(name));
-    if (memcmp(name, "DIV3", 4) == 0 || memcmp(name, "DIV4", 4) == 0) return fourcc("MP43");
-    return 0;
+    for (const char* known : {"WMV3", "WVC1", "WMVA"}) if (memcmp(name, known, 4) == 0) return be32(reinterpret_cast<const uint8_t*>(name));
+    const uint32_t codec = videoFourcc(handler, 0);
+    return msmpeg4Codec(codec) ? codec : 0;
 }
 
 std::string hexTag(uint16_t tag) {

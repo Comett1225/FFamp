@@ -128,6 +128,10 @@ struct Dsp {
 };
 const Dsp& dsp();
 void simpleIdct(Dsp& d);
+void simpleIdct84Add(uint8_t* dest, ptrdiff_t stride, int16_t* block);
+void simpleIdct48Add(uint8_t* dest, ptrdiff_t stride, int16_t* block);
+void neonSimpleIdctPut(uint8_t* dest, ptrdiff_t stride, int16_t* block);
+void neonSimpleIdctAdd(uint8_t* dest, ptrdiff_t stride, int16_t* block);
 void putPixelsClamped(const int16_t* block, uint8_t* pixels, ptrdiff_t stride);
 void putSignedPixelsClamped(const int16_t* block, uint8_t* pixels, ptrdiff_t stride);
 void addPixelsClamped(const int16_t* block, uint8_t* pixels, ptrdiff_t stride);
@@ -135,6 +139,8 @@ void emulatedEdgeMc(uint8_t* buf, const uint8_t* src, ptrdiff_t bufStride, ptrdi
 int unescapeBuffer(const uint8_t* src, int size, uint8_t* dst);
 const uint8_t* findNextMarker(const uint8_t* src, const uint8_t* end);
 inline uint32_t readBe32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
+
+constexpr int kFrameMargin = 64;
 
 struct Frame {
     std::vector<uint8_t> memory;
@@ -167,6 +173,18 @@ struct Pic {
         mbType = frame ? frame->mbType : nullptr;
         qscaleTable = frame ? frame->qscaleTable : nullptr;
     }
+};
+
+struct FramePool {
+    std::vector<std::shared_ptr<Frame>> frames;
+    int mbWidth = 0, mbHeight = 0;
+    void resize(int width, int height) {
+        frames.clear();
+        mbWidth = width;
+        mbHeight = height;
+    }
+    std::shared_ptr<Frame> get();
+    void grey(Frame& f) const;
 };
 
 struct Vc1 {
@@ -283,7 +301,7 @@ struct Vc1 {
     int endMbX = 0, resyncMarker = 0;
     alignas(32) int16_t blocks[6][64] = {};
     bool broken = false;
-    std::vector<std::shared_ptr<Frame>> pool;
+    FramePool pool;
     int lumaLines = 0, chromaLines = 0;
 
     int bitplaneDecoding(uint8_t* data, int *rawFlag);
@@ -357,9 +375,6 @@ struct Vc1 {
     void bVIntfiLoopFilter(uint8_t *dest, const uint32_t *cbp, const int *ttblk, uint32_t flags, int blockNum);
     void bIntfiLoopFilter();
     bool allocate();
-    std::shared_ptr<Frame> newFrame();
-    void reset(Frame& f);
-    void grey(Frame& f);
     bool frameStart();
     bool start(const uint8_t* config, size_t size, bool wmv3, int w, int h);
     void copyFrom(const Vc1& o);

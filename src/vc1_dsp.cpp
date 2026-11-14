@@ -385,6 +385,10 @@ void chromaMc(uint8_t* dst, const uint8_t* src, ptrdiff_t stride, int h, int x, 
 
 template <int Size, bool Rounding, bool Average, int Dxy>
 void hpel(uint8_t* dst, const uint8_t* src, ptrdiff_t stride, int h) {
+    if constexpr (Dxy == 0 && !Average) {
+        for (int j = 0; j < h; j++, dst += stride, src += stride) memcpy(dst, src, Size);
+        return;
+    }
     for (int j = 0; j < h; j++) {
         for (int i = 0; i < Size; i++) {
             int value;
@@ -410,9 +414,10 @@ void fillHpel(PixelsOp table[4]) {
 
 constexpr int kW1 = 22725, kW2 = 21407, kW3 = 19266, kW4 = 16383, kW5 = 12873, kW6 = 8867, kW7 = 4520;
 
+template <bool DcOnly = true>
 void idctRow(int16_t* row) {
     if (!(row[1] | row[2] | row[3] | row[4] | row[5] | row[6] | row[7])) {
-        const int16_t value = int16_t(uint16_t((row[0] * 8) & 0xffff));
+        const int16_t value = DcOnly ? int16_t(uint16_t((row[0] * 8) & 0xffff)) : int16_t(int(unsigned(kW4) * unsigned(row[0]) + (1u << 10)) >> 11);
         for (int i = 0; i < 8; i++) row[i] = value;
         return;
     }
@@ -540,6 +545,8 @@ void idct4Row(int16_t* row) {
     row[3] = int16_t((c0 - c1) >> 11);
 }
 
+}
+
 void simpleIdct84Add(uint8_t* dest, ptrdiff_t stride, int16_t* block) {
     for (int i = 0; i < 4; i++) idctRow(block + i * 8);
     for (int i = 0; i < 8; i++) idct4ColumnAdd(dest + i, stride, block + i);
@@ -553,6 +560,127 @@ void simpleIdct48Add(uint8_t* dest, ptrdiff_t stride, int16_t* block) {
         for (int k = 0; k < 8; k++) dest[i + k * stride] = clipU8(dest[i + k * stride] + out[k]);
     }
 }
+
+#if defined(__ARM_NEON)
+
+namespace {
+
+inline void transpose8(int16x8_t v[8]) {
+    const int16x8x2_t t01 = vtrnq_s16(v[0], v[1]), t23 = vtrnq_s16(v[2], v[3]), t45 = vtrnq_s16(v[4], v[5]), t67 = vtrnq_s16(v[6], v[7]);
+    const int32x4x2_t u02 = vtrnq_s32(vreinterpretq_s32_s16(t01.val[0]), vreinterpretq_s32_s16(t23.val[0]));
+    const int32x4x2_t u13 = vtrnq_s32(vreinterpretq_s32_s16(t01.val[1]), vreinterpretq_s32_s16(t23.val[1]));
+    const int32x4x2_t u46 = vtrnq_s32(vreinterpretq_s32_s16(t45.val[0]), vreinterpretq_s32_s16(t67.val[0]));
+    const int32x4x2_t u57 = vtrnq_s32(vreinterpretq_s32_s16(t45.val[1]), vreinterpretq_s32_s16(t67.val[1]));
+    auto low = [](int32x4_t a, int32x4_t b) { return vreinterpretq_s16_s32(vcombine_s32(vget_low_s32(a), vget_low_s32(b))); };
+    auto high = [](int32x4_t a, int32x4_t b) { return vreinterpretq_s16_s32(vcombine_s32(vget_high_s32(a), vget_high_s32(b))); };
+    v[0] = low(u02.val[0], u46.val[0]);
+    v[1] = low(u13.val[0], u57.val[0]);
+    v[2] = low(u02.val[1], u46.val[1]);
+    v[3] = low(u13.val[1], u57.val[1]);
+    v[4] = high(u02.val[0], u46.val[0]);
+    v[5] = high(u13.val[0], u57.val[0]);
+    v[6] = high(u02.val[1], u46.val[1]);
+    v[7] = high(u13.val[1], u57.val[1]);
+}
+
+template <bool Column>
+inline void idctHalf(const int16x4_t x[8], int32x4_t sum[8]) {
+    const int32x4_t base = Column ? vmull_n_s16(vadd_s16(x[0], vdup_n_s16((1 << 19) / kW4)), kW4) : vmlal_n_s16(vdupq_n_s32(1 << 10), x[0], kW4);
+    int32x4_t a0 = vmlal_n_s16(base, x[2], kW2), a1 = vmlal_n_s16(base, x[2], kW6), a2 = vmlsl_n_s16(base, x[2], kW6), a3 = vmlsl_n_s16(base, x[2], kW2);
+    a0 = vmlal_n_s16(a0, x[4], kW4);
+    a1 = vmlsl_n_s16(a1, x[4], kW4);
+    a2 = vmlsl_n_s16(a2, x[4], kW4);
+    a3 = vmlal_n_s16(a3, x[4], kW4);
+    a0 = vmlal_n_s16(a0, x[6], kW6);
+    a1 = vmlsl_n_s16(a1, x[6], kW2);
+    a2 = vmlal_n_s16(a2, x[6], kW2);
+    a3 = vmlsl_n_s16(a3, x[6], kW6);
+    int32x4_t b0 = vmull_n_s16(x[1], kW1), b1 = vmull_n_s16(x[1], kW3), b2 = vmull_n_s16(x[1], kW5), b3 = vmull_n_s16(x[1], kW7);
+    b0 = vmlal_n_s16(b0, x[3], kW3);
+    b1 = vmlsl_n_s16(b1, x[3], kW7);
+    b2 = vmlsl_n_s16(b2, x[3], kW1);
+    b3 = vmlsl_n_s16(b3, x[3], kW5);
+    b0 = vmlal_n_s16(b0, x[5], kW5);
+    b1 = vmlsl_n_s16(b1, x[5], kW1);
+    b2 = vmlal_n_s16(b2, x[5], kW7);
+    b3 = vmlal_n_s16(b3, x[5], kW3);
+    b0 = vmlal_n_s16(b0, x[7], kW7);
+    b1 = vmlsl_n_s16(b1, x[7], kW5);
+    b2 = vmlal_n_s16(b2, x[7], kW3);
+    b3 = vmlsl_n_s16(b3, x[7], kW1);
+    sum[0] = vaddq_s32(a0, b0);
+    sum[1] = vaddq_s32(a1, b1);
+    sum[2] = vaddq_s32(a2, b2);
+    sum[3] = vaddq_s32(a3, b3);
+    sum[4] = vsubq_s32(a3, b3);
+    sum[5] = vsubq_s32(a2, b2);
+    sum[6] = vsubq_s32(a1, b1);
+    sum[7] = vsubq_s32(a0, b0);
+}
+
+inline void neonIdct(int16_t* block, int16x8_t out[8]) {
+    int16x8_t v[8];
+    for (int i = 0; i < 8; i++) v[i] = vld1q_s16(block + 8 * i);
+    transpose8(v);
+    int16x4_t lo[8], hi[8];
+    int32x4_t sumLo[8], sumHi[8];
+    for (int i = 0; i < 8; i++) {
+        lo[i] = vget_low_s16(v[i]);
+        hi[i] = vget_high_s16(v[i]);
+    }
+    idctHalf<false>(lo, sumLo);
+    idctHalf<false>(hi, sumHi);
+    for (int i = 0; i < 8; i++) v[i] = vcombine_s16(vshrn_n_s32(sumLo[i], 11), vshrn_n_s32(sumHi[i], 11));
+    transpose8(v);
+    for (int i = 0; i < 8; i++) {
+        lo[i] = vget_low_s16(v[i]);
+        hi[i] = vget_high_s16(v[i]);
+    }
+    idctHalf<true>(lo, sumLo);
+    idctHalf<true>(hi, sumHi);
+    for (int i = 0; i < 8; i++) out[i] = vcombine_s16(vshrn_n_s32(sumLo[i], 16), vshrn_n_s32(sumHi[i], 16));
+}
+
+}
+
+void neonSimpleIdctPut(uint8_t* dest, ptrdiff_t stride, int16_t* block) {
+    int16x8_t out[8];
+    neonIdct(block, out);
+    for (int i = 0; i < 8; i++) vst1_u8(dest + i * stride, vqshrun_n_s16(out[i], 4));
+}
+
+void neonSimpleIdctAdd(uint8_t* dest, ptrdiff_t stride, int16_t* block) {
+    int16x8_t out[8];
+    neonIdct(block, out);
+    for (int i = 0; i < 8; i++) {
+        const uint16x8_t sum = vaddw_u8(vreinterpretq_u16_s16(vshrq_n_s16(out[i], 4)), vld1_u8(dest + i * stride));
+        vst1_u8(dest + i * stride, vqmovun_s16(vreinterpretq_s16_u16(sum)));
+    }
+}
+
+#else
+
+void neonSimpleIdctPut(uint8_t* dest, ptrdiff_t stride, int16_t* block) {
+    for (int i = 0; i < 8; i++) idctRow<false>(block + i * 8);
+    for (int i = 0; i < 8; i++) {
+        int out[8];
+        idctColumn(block + i, out);
+        for (int k = 0; k < 8; k++) dest[i + k * stride] = clipU8(out[k]);
+    }
+}
+
+void neonSimpleIdctAdd(uint8_t* dest, ptrdiff_t stride, int16_t* block) {
+    for (int i = 0; i < 8; i++) idctRow<false>(block + i * 8);
+    for (int i = 0; i < 8; i++) {
+        int out[8];
+        idctColumn(block + i, out);
+        for (int k = 0; k < 8; k++) dest[i + k * stride] = clipU8(dest[i + k * stride] + out[k]);
+    }
+}
+
+#endif
+
+namespace {
 
 void simpleIdct44Add(uint8_t* dest, ptrdiff_t stride, int16_t* block) {
     for (int i = 0; i < 4; i++) idct4Row(block + i * 8);

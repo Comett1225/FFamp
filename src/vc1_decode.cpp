@@ -9,8 +9,6 @@ namespace vc1 {
 
 namespace {
 
-constexpr int kFrameMargin = 64;
-
 std::vector<uint8_t> padded(const uint8_t* data, size_t size) {
     std::vector<uint8_t> out(size + Bits::kPadding, 0);
     if (size) memcpy(out.data(), data, size);
@@ -80,7 +78,7 @@ bool Vc1::allocate() {
     chromaLines = ((mbWidth * 8 + kFrameMargin) + 63) & ~63;
     edgeEmuStride = 2 * lumaLines;
     edgeEmuBuffer.assign(size_t(edgeEmuStride) * 80, 0);
-    pool.clear();
+    pool.resize(mbWidth, mbHeight);
     lastPic.set(nullptr);
     nextPic.set(nullptr);
     curPic.set(nullptr);
@@ -88,15 +86,20 @@ bool Vc1::allocate() {
     return true;
 }
 
-std::shared_ptr<Frame> Vc1::newFrame() {
-    for (auto& f : pool) {
+std::shared_ptr<Frame> FramePool::get() {
+    for (auto& f : frames) {
         if (f.use_count() == 1) {
-            reset(*f);
+            for (auto& m : f->motionMemory) std::fill(m.begin(), m.end(), int16_t(0));
+            f->interlaced = false;
+            f->fieldPicture = false;
             return f;
         }
     }
     auto f = std::make_shared<Frame>();
     const int aligned = (mbHeight + 1) & ~1;
+    const int lumaLines = ((mbWidth * 16 + 2 * kFrameMargin) + 63) & ~63;
+    const int chromaLines = ((mbWidth * 8 + kFrameMargin) + 63) & ~63;
+    const int b8Stride = mbWidth * 2 + 1, mbStride = mbWidth + 1;
     const int rows = aligned * 16 + 2 * kFrameMargin;
     const int chromaRows = aligned * 8 + kFrameMargin;
     f->memory.assign(size_t(lumaLines) * rows + 2 * size_t(chromaLines) * chromaRows + 64, 0);
@@ -116,17 +119,11 @@ std::shared_ptr<Frame> Vc1::newFrame() {
     f->mbType = f->mbTypeMemory.data() + 2 * mbStride + 1;
     f->qscaleMemory.assign(tableSize + 2 * size_t(mbStride), 0);
     f->qscaleTable = f->qscaleMemory.data() + 2 * mbStride + 1;
-    pool.push_back(f);
+    frames.push_back(f);
     return f;
 }
 
-void Vc1::reset(Frame& f) {
-    for (auto& m : f.motionMemory) std::fill(m.begin(), m.end(), int16_t(0));
-    f.interlaced = false;
-    f.fieldPicture = false;
-}
-
-void Vc1::grey(Frame& f) {
+void FramePool::grey(Frame& f) const {
     const int aligned = (mbHeight + 1) & ~1;
     for (int y = 0; y < aligned * 16; y++) memset(f.data[0] + ptrdiff_t(y) * f.linesize[0], 0x80, size_t(mbWidth) * 16);
     for (int p = 1; p < 3; p++) {
@@ -135,7 +132,7 @@ void Vc1::grey(Frame& f) {
 }
 
 bool Vc1::frameStart() {
-    curPic.set(newFrame());
+    curPic.set(pool.get());
     linesize = curPic.linesize[0];
     uvlinesize = curPic.linesize[1];
     if (pictType != kPictureB) {
@@ -143,11 +140,11 @@ bool Vc1::frameStart() {
         nextPic.set(curPic.ptr);
     }
     if (!lastPic.ptr && pictType != kPictureI) {
-        auto dummy = newFrame();
-        grey(*dummy);
+        auto dummy = pool.get();
+        pool.grey(*dummy);
         lastPic.set(dummy);
     }
-    if (!nextPic.ptr && pictType == kPictureB) nextPic.set(newFrame());
+    if (!nextPic.ptr && pictType == kPictureB) nextPic.set(pool.get());
     return true;
 }
 
@@ -231,7 +228,7 @@ bool inside(const P* pointer, const V& vector) {
 
 void Vc1::copyFrom(const Vc1& o) {
     *this = o;
-    pool.clear();
+    pool.frames.clear();
     rebase(dcVal, o.dcValMemory, dcValMemory);
     rebase(acVal, o.acValMemory, acValMemory);
     rebase(codedBlock, o.codedBlockMemory, codedBlockMemory);

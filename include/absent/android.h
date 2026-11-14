@@ -6,6 +6,8 @@ namespace absent::android {
 std::string mime(const Track& track);
 std::vector<std::vector<uint8_t>> codecConfig(const Track& track);
 int nalLengthSize(const Track& track);
+int codecProfile(const Track& track);
+int codecLevel(const Track& track);
 size_t annexB(const uint8_t* in, size_t size, int lengthSize, uint8_t* out, size_t capacity);
 
 struct SoftPicture {

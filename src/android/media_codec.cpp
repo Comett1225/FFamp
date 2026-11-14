@@ -147,6 +147,44 @@ int nalLengthSize(const Track& t) {
     return 0;
 }
 
+int codecProfile(const Track& t) {
+    const std::vector<uint8_t>& c = t.config;
+    if (t.configType == fourcc("avcC") && c.size() > 3) {
+        switch (c[1]) {
+        case 66: return 0x01;
+        case 77: return 0x02;
+        case 88: return 0x04;
+        case 100: return 0x08;
+        case 110: return 0x10;
+        case 122: return 0x20;
+        case 244: return 0x40;
+        default: return 0;
+        }
+    }
+    if (t.configType == fourcc("hvcC") && c.size() > 12) {
+        const int profile = c[1] & 31;
+        if (profile == 1) return 0x01;
+        if (profile == 2) return t.color.known && t.color.transfer == 16 ? 0x1000 : 0x02;
+        if (profile == 3) return 0x04;
+    }
+    return 0;
+}
+
+int codecLevel(const Track& t) {
+    const std::vector<uint8_t>& c = t.config;
+    if (t.configType == fourcc("avcC") && c.size() > 3) {
+        static const int idc[] = {10, 9, 11, 12, 13, 20, 21, 22, 30, 31, 32, 40, 41, 42, 50, 51, 52, 60, 61, 62};
+        if (c[3] == 11 && (c[2] & 0x10) && c[1] != 100) return 0x02;
+        for (int i = 0; i < int(sizeof(idc) / sizeof(idc[0])); ++i) if (idc[i] == c[3]) return 1 << i;
+    }
+    if (t.configType == fourcc("hvcC") && c.size() > 12) {
+        static const int idc[] = {30, 60, 63, 90, 93, 120, 123, 150, 153, 156, 180, 183, 186};
+        const bool high = (c[1] >> 5) & 1;
+        for (int i = 0; i < int(sizeof(idc) / sizeof(idc[0])); ++i) if (idc[i] == c[12]) return 1 << (2 * i + (high ? 1 : 0));
+    }
+    return 0;
+}
+
 size_t annexB(const uint8_t* in, size_t size, int lengthSize, uint8_t* out, size_t capacity) {
     size_t at = 0, written = 0;
     while (at + size_t(lengthSize) <= size) {

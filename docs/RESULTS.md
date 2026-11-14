@@ -620,3 +620,9 @@ build has no NEON for this codec):
 
 What is left: arithmetic-coded tiles and the inverse LPC filter (FFmpeg has neither; no public sample uses them, and no specification
 is public); bitstream splicing (read and ignored, as in FFmpeg).
+
+Test counts after rounds 3 and 4 (with main's VC-1 merged): `48_wma.sh` 144 checks with FFmpeg (188 with the sample files of
+`WINMEDIA_SAMPLES`), 65 without; `QUICK=1 tests/run.sh` 2,514 pass, 2 skipped; `QUICK=1 NOFFMPEG=1 tests/run.sh` 1,603 pass, 92
+skipped.
+
+Not done: Windows Media Audio 9 Voice (step G).

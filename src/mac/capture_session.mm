@@ -126,10 +126,10 @@ struct CaptureSession::Impl {
         test.reset();
         if (session) {
             [session stopRunning];
-            dispatch_sync(queue, ^{});
-            tap.recorder = nullptr;
             if (watcher) [[NSNotificationCenter defaultCenter] removeObserver:watcher];
             watcher = nil;
+            AbsentCaptureTap* held = tap;
+            dispatch_sync(queue, ^{ held.recorder = nullptr; });
             session = nil;
         }
     }
@@ -198,10 +198,14 @@ std::unique_ptr<CaptureSession> CaptureSession::open(const CaptureSpec& spec, st
             [session addOutput:sounds];
         }
         [session commitConfiguration];
-        CaptureRecorder* recorder = s.recorder.get();
+        AbsentCaptureTap* tap = s.tap;
+        dispatch_queue_t queue = s.queue;
         s.watcher = [[NSNotificationCenter defaultCenter] addObserverForName:AVCaptureSessionRuntimeErrorNotification object:session queue:nil usingBlock:^(NSNotification* note) {
             NSError* reason = note.userInfo[AVCaptureSessionErrorKey];
-            recorder->fail(std::string("the capture stopped: ") + (reason.localizedDescription.UTF8String ?: "unknown reason"));
+            const std::string text = std::string("the capture stopped: ") + (reason.localizedDescription.UTF8String ?: "unknown reason");
+            dispatch_async(queue, ^{
+                if (CaptureRecorder* recorder = tap.recorder) recorder->fail(text);
+            });
         }];
         s.session = session;
         [session startRunning];

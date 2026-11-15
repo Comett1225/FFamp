@@ -13,6 +13,7 @@ void quiet(void*, const char*, va_list) {}
 struct Dav1dDecoder : SoftDecoder {
     Dav1dContext* context = nullptr;
     std::vector<uint8_t> grey;
+    int greyBits = 0;
 
     ~Dav1dDecoder() override {
         if (context) dav1d_close(&context);
@@ -35,7 +36,8 @@ struct Dav1dDecoder : SoftDecoder {
         if (mono) {
             const size_t bytes = p.bits > 8 ? 2 : 1;
             p.stride[1] = p.stride[2] = size_t(p.chromaWidth) * bytes;
-            if (grey.size() != p.stride[1] * size_t(p.chromaHeight)) {
+            if (grey.size() != p.stride[1] * size_t(p.chromaHeight) || greyBits != p.bits) {
+                greyBits = p.bits;
                 grey.resize(p.stride[1] * size_t(p.chromaHeight));
                 const uint16_t middle = uint16_t(1 << (p.bits - 1));
                 for (size_t i = 0; i < grey.size(); i += bytes) {

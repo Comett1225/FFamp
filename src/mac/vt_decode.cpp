@@ -679,7 +679,7 @@ struct VideoDecoder::Impl {
             --it;
             if (track->samples[*it].pts <= track->samples[target].pts) return *it;
         }
-        return syncs.empty() ? 0 : syncs.front();
+        return syncs.empty() || syncs.front() > target ? 0 : syncs.front();
     }
 
     CVPixelBufferRef take(int64_t pts) {

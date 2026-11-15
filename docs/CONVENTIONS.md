@@ -419,9 +419,13 @@ list; `Sample.offset` is then free for the reader's use.
   sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore, libopus,
   libvorbis, LAME. `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
-- `SoftDecoder::drainKeepsState` is false for decoders whose drain ends the stream (OpenH264, Media Foundation): after such a drain the
-  next jump starts again at a key frame. `SoftDecoder::weavesFields` is true for Media Foundation, which returns one frame for an H.264
-  field pair.
+- Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media
+  Foundation after a flush, OpenH264) need no drain inside a stream. `SoftDecoder::drainKeepsState` is false for decoders whose drain
+  ends the stream (OpenH264, Media Foundation): after such a drain the next jump starts again at a key frame.
+  `SoftDecoder::weavesFields` is true for Media Foundation, which returns one frame for an H.264 field pair.
+- A frame the stream leaves without colour labels is labelled as VideoToolbox labels it: BT.601 with SMPTE C primaries below 720
+  lines, BT.709 from 720 lines. Media Foundation is not used for pictures under 64 pixels wide or high (its decoder returns nothing)
+  nor for encoding frames under 320 x 240 (the GPU encoders undershoot the bitrate and smear such frames); x264 and OpenH264 take them.
 - FLAC (written from RFC 9639) and ALAC (based on FFmpeg's) are FFamp's own decoders on Windows and Linux, bit-exact with ffmpeg.
 - Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
   vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built

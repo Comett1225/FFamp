@@ -795,3 +795,58 @@ FFmpeg's: A-law 0.31, IMA ADPCM (WAV) 0.33, QuickTime IMA 0.10, Microsoft ADPCM 
 Tests after milestone 1 and TTA: `QUICK=1 tests/run.sh` 3,136 pass, 1 skipped (a real camera); `QUICK=1 NOFFMPEG=1 tests/run.sh`
 1,854 pass, 94 skipped. `52_sound.sh` alone: 298 checks with FFmpeg, 130 without (with `GAPS_SAMPLES` or `WINMEDIA_SAMPLES` set for
 the DK3 and DK4 samples).
+
+# Windows and Linux, round 1 (`docs/PLAN_WINLINUX.md`)
+
+Measured on a Windows 11 PC whose GPU decodes and encodes H.264 and HEVC (HEVC Video Extensions installed), and on Ubuntu 24.04 under
+WSL on the same PC. The judge is the FFmpeg 9.0.2 build the app bundles on each system (BtbN GPL builds), so every comparison is with
+the FFmpeg the app uses there today.
+
+## Windows
+
+`tests/run.sh` in Git Bash, FFamp built with clang-cl, the libraries with MSVC (no assembly yet):
+
+WINDOWS_SUITE
+
+Against ffmpeg, frame by frame and sample by sample:
+
+| Path | Result |
+|---|---|
+| H.264 decode, Media Foundation on the GPU (`mediafoundation-gpu`): six clips, 720p and 1080p, MP4, MOV, fragmented MP4 | every frame bit-exact (4,800 of 4,800), also the H.264 fixtures with B-frames, MBAFF and PAFF |
+| HEVC decode, Media Foundation on the GPU: 8 and 10-bit, HDR10 and HLG fixtures | every frame bit-exact |
+| 50 random jumps per clip, H.264 and HEVC 720p and 1080p | every frame bit-exact (one wrong HEVC frame after a long backward jump was found and fixed: the decoder now feeds a few more samples instead of draining) |
+| MPEG-1 and MPEG-2 decode (Media Foundation) | WINDOWS_MPEG |
+| JPEG pictures (WIC, its own YCbCr planes) | WINDOWS_JPEG |
+| AAC decode (Media Foundation, LC and HE) | WINDOWS_AAC |
+| H.264 and HEVC encode (the GPU driver's encoder MFT) | 1080p at 305 and 333 fps, files clean in ffprobe and FFmpeg's decoder |
+| AAC encode (Media Foundation, 128 kbit/s) | length to the sample after priming 0 was measured (the encoder starts on the first input frame) |
+| Software paths with Media Foundation turned off (`FFAMP_NO_MEDIA_FOUNDATION=1`, what Windows N without the Media Feature Pack gets) | OpenH264, libde265, FAAD2, x264 work; HEVC bit-exact, H.264 as on Linux (below) |
+
+## Linux
+
+`tests/run.sh` in WSL, gcc 13, libraries with assembly: LINUX_SUITE
+
+What is left failing and why:
+
+| Area | Why |
+|---|---|
+| H.264 with B-frames: decode, jumps, readers, transport streams, frame reader (about 60 checks) | OpenH264 rounds a few samples per B-frame differently next to 8x8 edges (1 to 19 samples off by 1 or 2 per frame, 59 to 101 dB; never a wrong picture; its B-slice deblocking). Plan decision 3. |
+| Interlaced H.264 (MBAFF, PAFF fixtures and the 720p MBAFF clip) | OpenH264 refuses it with a message |
+| AC-3, E-AC-3, AMR, ProRes, DV, H.263, MPEG-1/2, Motion JPEG (about 90 checks in the formats suite) | system decoders on the Mac; own decoders or libraries are planned for later rounds (PLAN) |
+| HE-AAC v2 against ffmpeg | FAAD2's parametric stereo differs (17.6 / 9.5 dB). Plan decision 5. |
+| Speed of the WMV7/8 decoder against FFmpeg on one thread | FFmpeg's x86 build uses SIMD for these codecs; FFamp's x86 path is plain C++ |
+
+Fixed along the way: the esds parser was called with the version bytes skipped twice (AAC from FFamp's own writer did not decode),
+vo-aacenc's priming is 1600 frames, mpg123 needs `MPG123_NO_READAHEAD` to hand out the first frame at once, OpenH264's drain ends its
+stream (the next jump now restarts at a key frame), GIF videos are written without B-frames (FFmpeg's null muxer rejected tied
+decode times), and the scaler took the colour matrix of an unlabelled picture from the size after scaling (a 270p clip upscaled to
+720p switched from BT.601 to BT.709).
+
+## Speed against FFmpeg
+
+Whole-program wall time, best of several runs, nothing else running on the PC. FFamp's tool against FFmpeg's programs doing the same
+job the way the app runs them (one program start per thumbnail on both sides; the app itself calls FFamp in its own process, so its
+gain is larger than these numbers show). The clips are the suite's 60-second 1080p H.264 (8 Mbit/s) and HEVC (5 Mbit/s) with AAC
+sound, and 300 raw 1080p frames for the export.
+
+SPEED_TABLES

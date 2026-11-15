@@ -558,6 +558,13 @@ Frame VideoDecoder::frame(uint32_t index) {
         frame.color = d.shape.color;
     }
     if (!frame.color.known && p.color.known) frame.color = p.color;
+    if (!frame.color.known) {
+        const bool high = frame.height >= 720;
+        frame.color.known = true;
+        frame.color.primaries = high ? 1 : 6;
+        frame.color.transfer = 1;
+        frame.color.matrix = high ? 1 : 6;
+    }
     frame.color.full = p.color.full;
     return frame;
 }

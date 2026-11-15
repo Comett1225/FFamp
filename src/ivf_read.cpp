@@ -55,7 +55,7 @@ std::unique_ptr<Reader> openIvf(const std::string& path, std::string* error) {
         return nullptr;
     };
     std::unique_ptr<IvfReader> reader(new IvfReader);
-    reader->file = openFile(path, "rb");
+    reader->file = openRead(path);
     if (!reader->file) return fail("cannot open file");
     fseeko(reader->file, 0, SEEK_END);
     const uint64_t length = uint64_t(ftello(reader->file));

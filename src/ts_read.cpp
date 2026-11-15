@@ -703,7 +703,7 @@ public:
             if (error) *error = text;
             return false;
         };
-        file = openFile(path, "rb");
+        file = openRead(path);
         if (!file) return fail("cannot open file");
         uint8_t head[1024];
         size_t got = fread(head, 1, sizeof head, file);

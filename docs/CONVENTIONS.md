@@ -163,7 +163,8 @@ list; `Sample.offset` is then free for the reader's use.
 - AVI sound: MP3, MP2, AC-3 and PCM are read as one byte stream across the chunks and cut into their own frames, so chunk borders
   and AVI block timing do not matter. `Sample.offset` is the place in that stream.
 - AC-3 and E-AC-3 decode to the channel order above. Layouts that have no place in it (2.1, 2/1, 2/2 and any other layout with a
-  low-frequency channel short of 5.1) are decoded as 5.1 with silent channels where the stream has none.
+  low-frequency channel short of 5.1) are decoded as 5.1 with silent channels where the stream has none; a lone surround channel
+  (2/1, 3/1 with LFE) plays from both back channels at -3 dB, as AudioToolbox and FFmpeg's resampler place it.
 - AMR and AC-3 output is moved to where FFmpeg's decoders put it (Apple's decoders give it 40, 95 and 256 frames later).
 - MPEG-4 part 2 without `ABSENT_XVID` is decoded by the system, which only knows Simple Profile. A stream that uses B-frames,
   quarter-pixel motion or custom matrices is read and probed but `VideoDecoder::open` fails with a message that says so. With
@@ -427,6 +428,18 @@ list; `Sample.offset` is then free for the reader's use.
   lines, BT.709 from 720 lines. Media Foundation is not used for pictures under 64 pixels wide or high (its decoder returns nothing)
   nor for encoding frames under 320 x 240 (the GPU encoders undershoot the bitrate and smear such frames); x264 and OpenH264 take them.
 - FLAC (written from RFC 9639) and ALAC (based on FFmpeg's) are FFamp's own decoders on Windows and Linux, bit-exact with ffmpeg.
+- AC-3 and E-AC-3 are FFamp's own decoder on Windows and Linux (`src/ac3_decode.cpp`, based on FFmpeg's `ac3`/`eac3` float decoders,
+  NOTICE), 135 dB or better against ffmpeg with its length and timing to the sample (no lead). It follows FFmpeg 9.0, which
+  dequantizes to whole numbers (each mantissa shifted right by its exponent) and uncouples in fixed point, not the float coefficients
+  of the 8.0 sources. Every acmode with and without LFE, 32, 44.1 and 48 kHz and AC-3's halved rates, coupling, rematrixing, block
+  switching, dither from FFmpeg's generator (seed 0, continuing across packets), dynamic range at FFmpeg's default scale, and for
+  E-AC-3 AHT, SPX and dependent substreams with FFmpeg's channel map. A block with enhanced coupling (FFmpeg refuses it) repeats the
+  last good block as FFmpeg's concealment does; E-AC-3 at a reduced sample rate (FFmpeg decodes none of it) is refused at open.
+  The dither generator, the delay upmix FFmpeg does once per stream (on the first block whose channels switch block size differently)
+  and the E-AC-3 band structures are kept in the 20-second marks, so random reads equal the straight decode. Long transforms of up
+  to four channels run together in one SIMD pass with `InverseMdct`'s arithmetic, bit for bit. `tests/ac3_make.py` writes streams
+  with the syntax ffmpeg's encoders never use (dual mono, 2/2 with LFE, block switching, AHT, SPX, one to three blocks per frame,
+  dependent substreams, enhanced coupling) for the checks against ffmpeg.
 - Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
   vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built
   from source for x264 and libvpx; no assembly yet). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so

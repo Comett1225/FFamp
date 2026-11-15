@@ -49,5 +49,6 @@ std::unique_ptr<PacketDecoder> openWmaLosslessAudio(const Track& track, std::str
 std::unique_ptr<PacketDecoder> openWmaVoiceAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openWaveAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openTtaAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openAc3Audio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 
 }

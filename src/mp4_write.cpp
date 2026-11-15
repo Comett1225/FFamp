@@ -287,6 +287,23 @@ void matrix(Bytes& b, int rotation) {
 }
 
 void prepare(Out& t) {
+    for (;;) {
+        int64_t widest = 0;
+        for (size_t i = 0; i < t.samples.size(); ++i) {
+            widest = std::max(widest, std::abs(t.samples[i].pts - t.samples[i].dts) * 2);
+            if (i + 1 < t.samples.size()) widest = std::max(widest, t.samples[i + 1].dts - t.samples[i].dts);
+        }
+        if (widest <= 0xFFFFFFFFll || t.spec.timescale % 10 || isPcm(t.spec)) break;
+        t.spec.timescale /= 10;
+        for (Sample& s : t.samples) {
+            s.pts = s.pts >= 0 ? s.pts / 10 : -((9 - s.pts) / 10);
+            s.dts = s.dts >= 0 ? s.dts / 10 : -((9 - s.dts) / 10);
+            s.duration = (s.duration + 9) / 10;
+        }
+        t.spec.skip /= 10;
+        t.spec.length /= 10;
+        t.spec.delay /= 10;
+    }
     int64_t low = 0;
     for (const Sample& s : t.samples) low = std::min(low, s.pts - s.dts);
     int64_t base = t.samples.front().dts + low;

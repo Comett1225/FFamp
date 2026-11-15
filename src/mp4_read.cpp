@@ -777,7 +777,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
         return nullptr;
     };
     std::unique_ptr<Mp4Reader> reader(new Mp4Reader);
-    FILE* file = fopen(path.c_str(), "rb");
+    FILE* file = openRead(path);
     if (!file) return fail("cannot open file");
     reader->impl->file = file;
     fseeko(file, 0, SEEK_END);

@@ -702,7 +702,7 @@ public:
             if (error) *error = text;
             return false;
         };
-        file = fopen(path.c_str(), "rb");
+        file = openRead(path);
         if (!file) return fail("cannot open file");
         uint8_t head[1024];
         size_t got = fread(head, 1, sizeof head, file);

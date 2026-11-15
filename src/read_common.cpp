@@ -1,11 +1,49 @@
 #include "read_common.h"
+#include "readers.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
+#if defined(__ANDROID__)
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace absent {
 
 namespace {
+
+#if defined(__ANDROID__)
+struct Window {
+    int fd;
+    off64_t at;
+};
+
+int windowRead(void* cookie, char* out, int count) {
+    auto* w = static_cast<Window*>(cookie);
+    const ssize_t got = pread64(w->fd, out, size_t(count), w->at);
+    if (got > 0) w->at += got;
+    return int(got);
+}
+
+fpos_t windowSeek(void* cookie, fpos_t offset, int whence) {
+    auto* w = static_cast<Window*>(cookie);
+    off64_t base = whence == SEEK_CUR ? w->at : 0;
+    if (whence == SEEK_END) {
+        struct stat status;
+        if (fstat(w->fd, &status) != 0) return -1;
+        base = status.st_size;
+    }
+    if (base + offset < 0) return -1;
+    return w->at = base + offset;
+}
+
+int windowClose(void* cookie) {
+    auto* w = static_cast<Window*>(cookie);
+    close(w->fd);
+    delete w;
+    return 0;
+}
+#endif
 
 const size_t kWindow = 16384;
 
@@ -112,10 +150,27 @@ uint8_t crc8(const uint8_t* p, size_t n) {
 
 }
 
+FILE* openRead(const std::string& path) {
+#if defined(__ANDROID__)
+    int fd = -1;
+    char rest = 0;
+    if (sscanf(path.c_str(), "/proc/self/fd/%d%c", &fd, &rest) == 1) {
+        const int own = dup(fd);
+        if (own < 0) return nullptr;
+        auto* window = new Window{own, 0};
+        if (FILE* file = funopen(window, windowRead, nullptr, windowSeek, windowClose)) return file;
+        close(own);
+        delete window;
+        return nullptr;
+    }
+#endif
+    return fopen(path.c_str(), "rb");
+}
+
 Source::~Source() { if (file) fclose(file); }
 
 bool Source::open(const std::string& path) {
-    file = fopen(path.c_str(), "rb");
+    file = openRead(path);
     if (!file) return false;
     setvbuf(file, nullptr, _IONBF, 0);
     if (fseeko(file, 0, SEEK_END) != 0) return false;

@@ -49,7 +49,7 @@ for layout in "six 44100 6" "one 22050 1"; do
 done
 check "16-bit samples arrive unchanged from a 16-bit pipe" [ "$(python3 $W payload $WF/pcm_s16.pkts | $A aencode $WO/pipe.wav --pcm - --rate 48000 --channels 2 --format wav16 --sample s16 && tail -c 36000 $WO/pipe.wav | md5)" = "$(python3 $W payload $WF/pcm_s16.pkts | md5)" ]
 
-check "a stereo pipe is mixed down to mono" [ "$($A aencode $WO/down.wav --pcm $WO/music.f32 --rate 48000 --channels 1 --source-channels 2 --format wavf && ../build/audiocheck $WO/down.wav s16)" = "rate 48000 channels 1 frames $FRAMES" ]
+if on_mac; then check "a stereo pipe is mixed down to mono" [ "$($A aencode $WO/down.wav --pcm $WO/music.f32 --rate 48000 --channels 1 --source-channels 2 --format wavf && ../build/audiocheck $WO/down.wav s16)" = "rate 48000 channels 1 frames $FRAMES" ]; else skip "a stereo pipe is mixed down to mono (Apple's frameworks are the judge)"; fi
 
 echo "== writers: FLAC from our own encoder"
 flac_case() {

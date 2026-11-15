@@ -403,3 +403,28 @@ list; `Sample.offset` is then free for the reader's use.
 - TTA (`src/tta_decode.cpp`, Matroska `A_TTA1`): based on FFmpeg's decoder and bit-exact with it, 8, 16 and 24 bits, 1 to 16 channels,
   one frame per block; the last frame is cut to the header's length when its bits end there, as in FFmpeg. Encrypted streams (a
   password) are refused, as FFmpeg refuses them without one.
+
+## Windows and Linux (`src/desktop`, `src/windows`, `src/linux`, `docs/PLAN_WINLINUX.md`)
+
+- One desktop layer for both systems: `VideoDecoder`, `VideoEncoder`, `AacEncoder`, `Scaler`, the GIF reader and the capture session
+  (test devices only so far). Frames live in memory: `Frame.native` is an `Image` (planar, or two-plane with `interleaved`, 8 or 16-bit
+  samples with the decoder's `shift`), recycled through a small pool; `withPixelBuffer` hands out its `Picture`. Every decoder is a
+  `SoftDecoder` and every encoder a `SoftEncoder`, so the jump, read-ahead, concealment and field-pair logic is the Mac's soft path.
+- Platform hooks, picked at run time with the software libraries behind them: `openPlatformVideo` (Media Foundation H.264 and HEVC, through
+  the GPU when the MFT takes a D3D11 device manager: backend `mediafoundation-gpu`, else `mediafoundation`), `openPlatformEncoder` (the
+  GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
+  out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
+  `openStillDecoder` (WIC on Windows; Linux has no JPEG decoder yet). Linux returns nothing from the hooks yet.
+- Software paths: OpenH264, libde265, FAAD2, mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder places its
+  sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore, libopus,
+  libvorbis, LAME. `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
+  software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
+- `SoftDecoder::drainKeepsState` is false for decoders whose drain ends the stream (OpenH264, Media Foundation): after such a drain the
+  next jump starts again at a key frame. `SoftDecoder::weavesFields` is true for Media Foundation, which returns one frame for an H.264
+  field pair.
+- FLAC (written from RFC 9639) and ALAC (based on FFmpeg's) are FFamp's own decoders on Windows and Linux, bit-exact with ffmpeg.
+- Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
+  vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built
+  from source for x264 and libvpx; no assembly yet). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so
+  the CLI's import library cannot overwrite it; clang's builtins library is linked for 128-bit division). Paths given to FFamp are UTF-8
+  on every system (`openFile`, `removeFile`, `fileBytes` in `src/portable.h`).

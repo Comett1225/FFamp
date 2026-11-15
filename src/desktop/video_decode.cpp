@@ -323,6 +323,10 @@ struct VideoDecoder::Impl {
         arrived.wait(hold, [&] { return (ready.count(pts) && ready.count(later)) || (jobs.empty() && !busy); });
         if (ready.count(pts) && ready.count(later)) return;
         hold.unlock();
+        for (int extra = 0; extra < 16 && next != kNone && next < track->samples.size(); ++extra) {
+            feed(next++, false);
+            if (has(pts) && has(later)) return;
+        }
         soft->drain([&](const Picture& p) { store(p); });
         if (!soft->drainKeepsState()) {
             soft->reset();

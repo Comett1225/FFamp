@@ -2,6 +2,7 @@
 #include "readers.h"
 #include <cstdio>
 #include <cstring>
+#include "portable.h"
 
 namespace absent {
 
@@ -44,7 +45,7 @@ const Track* Reader::first(Kind kind) const {
 }
 
 std::unique_ptr<Reader> Reader::open(const std::string& path, std::string* error) {
-    FILE* file = fopen(path.c_str(), "rb");
+    FILE* file = openFile(path, "rb");
     if (!file) {
         if (error) *error = "cannot open file";
         return nullptr;

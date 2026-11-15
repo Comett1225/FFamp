@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include "portable.h"
 
 namespace absent {
 
@@ -57,7 +58,7 @@ struct WaveTarget : Target {
     ~WaveTarget() override {
         if (file) {
             fclose(file);
-            remove(path.c_str());
+            removeFile(path);
         }
     }
 
@@ -143,7 +144,7 @@ struct WaveTarget : Target {
         failed = fclose(file) != 0 || failed;
         file = nullptr;
         if (failed) {
-            remove(path.c_str());
+            removeFile(path);
             return problem(error, "writing the output file failed");
         }
         return true;
@@ -177,7 +178,7 @@ struct FlacTarget : Target {
     ~FlacTarget() override {
         if (file) {
             fclose(file);
-            remove(path.c_str());
+            removeFile(path);
         }
     }
 
@@ -221,7 +222,7 @@ struct FlacTarget : Target {
         failed = fclose(file) != 0 || failed;
         file = nullptr;
         if (failed) {
-            remove(path.c_str());
+            removeFile(path);
             return problem(error, "writing the output file failed");
         }
         return true;
@@ -320,7 +321,7 @@ std::unique_ptr<AudioFileWriter> AudioFileWriter::open(const std::string& path, 
         wave->channels = channels;
         wave->bits = format == AudioFormat::Wav16 ? 16 : format == AudioFormat::Wav24 ? 24 : 32;
         wave->floating = format == AudioFormat::WavFloat;
-        wave->file = fopen(path.c_str(), "wb");
+        wave->file = openFile(path, "wb");
         std::vector<uint8_t> head = wave->header();
         if (!wave->file || fwrite(head.data(), 1, head.size(), wave->file) != head.size()) return fail("cannot create output file");
         writer->impl->target = std::move(wave);
@@ -330,7 +331,7 @@ std::unique_ptr<AudioFileWriter> AudioFileWriter::open(const std::string& path, 
         flac->channels = channels;
         flac->bits = format == AudioFormat::Flac ? 16 : 24;
         flac->encoder = std::make_unique<FlacEncoder>(rate, channels, flac->bits);
-        flac->file = fopen(path.c_str(), "wb");
+        flac->file = openFile(path, "wb");
         std::vector<uint8_t> head = flac->head();
         if (!flac->file || fwrite(head.data(), 1, head.size(), flac->file) != head.size()) return fail("cannot create output file");
         writer->impl->target = std::move(flac);

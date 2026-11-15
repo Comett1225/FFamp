@@ -27,6 +27,19 @@ struct PacketDecoder {
     virtual void load(const std::vector<uint8_t>&) {}
 };
 
+struct AacCore {
+    int priming = 0;
+    virtual ~AacCore() = default;
+    virtual const char* name() const = 0;
+    virtual bool encode(const int16_t* pcm, size_t frames, const AudioSink& sink) = 0;
+    virtual bool finish(const AudioSink& sink) = 0;
+};
+
+std::unique_ptr<AacCore> openVoAac(int rate, int channels, int bitrate, std::string* error);
+std::unique_ptr<PacketDecoder> openFlacAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openAlacAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openFaadAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openMpg123Audio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openOpusAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openVorbisAudio(const Track& track, std::string* error);

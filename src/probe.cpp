@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <map>
 #include <numeric>
-#include <sys/stat.h>
+#include "portable.h"
 
 namespace absent {
 
@@ -610,8 +610,7 @@ const char* formatName(const std::string& name) {
 std::string probeJson(const std::string& path, bool packets, std::string* error) {
     auto reader = Reader::open(path, error);
     if (!reader) return "";
-    struct stat status;
-    int64_t fileSize = stat(path.c_str(), &status) == 0 ? int64_t(status.st_size) : 0;
+    int64_t fileSize = fileBytes(path);
     const std::vector<Track>& tracks = reader->tracks();
     const char* name = formatName(reader->format());
     const std::string family = name ? name : reader->format();

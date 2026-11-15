@@ -186,17 +186,17 @@ check "trim: same first key frame, our video packets are among FFmpeg's" judged 
 check "trim: our sound packets are among FFmpeg's" judged subset $T/trim_mid.mp4 $T/ff_trim.mp4 audio
 $F -i $FX/clip.mp4 -vn -map 0:a:0 -c:a copy -movflags +faststart $T/ff_copy.m4a
 check "extract by copy: the same packets as FFmpeg" judged same_packets $T/copy.m4a audio $T/ff_copy.m4a
-$F -i $FX/clip.mp4 -vn -map 0:a:0 -c:a aac_at -b:a 96k -movflags +faststart $T/ff_sound.m4a
+$F -i $FX/clip.mp4 -vn -map 0:a:0 -c:a $FF_AAC -b:a 96k -movflags +faststart $T/ff_sound.m4a
 check "extract to AAC: length, bitrate and sound like FFmpeg's" judged sound_like $T/sound.m4a $T/ff_sound.m4a 96000
 $F -i $FX/clip.mp4 -vn -map 0:a:0 -c:a libmp3lame -b:a 128k $T/ff_sound.mp3
 check "extract to MP3: length, bitrate and sound like FFmpeg's" judged sound_like $T/sound.mp3 $T/ff_sound.mp3 128000
-$F -ss 0.500000 -noautorotate -i $FX/clip.mp4 -t 2.000000 -map 0:v:0 -map "0:a:0?" -vf scale=160:90,fps=15 -c:v h264_videotoolbox -realtime 0 -profile:v high -b:v 200000 -g 15 -pix_fmt yuv420p \
-    -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv -c:a aac_at -b:a 64k -movflags +faststart $T/ff_small.mp4
+$F -ss 0.500000 -noautorotate -i $FX/clip.mp4 -t 2.000000 -map 0:v:0 -map "0:a:0?" -vf scale=160:90,fps=15 -c:v $FF_H264 -b:v 200000 -g 15 -pix_fmt yuv420p \
+    -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv -c:a $FF_AAC -b:a 64k -movflags +faststart $T/ff_small.mp4
 check "compress: size, frames, length and frame times like FFmpeg's" judged against $T/small.mp4 $T/ff_small.mp4 18
 check "compress: picture quality against the source not below FFmpeg's" judged quality $FX/clip.mp4 $T/small.mp4 $T/ff_small.mp4 0.5 15
 near_size() { local a=$(stat -f %z $1) b=$(stat -f %z $2); [ $((a * 100)) -ge $((b * 70)) ] && [ $((a * 100)) -le $((b * 130)) ]; }
 check "compress: file size within 30 % of FFmpeg's" near_size $T/small.mp4 $T/ff_small.mp4
-$F -noautorotate -i $FX/clip.mp4 -map 0:v:0 -map "0:a:0?" -vf scale=320:180,fps=60 -c:v h264_videotoolbox -realtime 0 -profile:v high -b:v 400000 -g 60 -pix_fmt yuv420p -c:a copy -movflags +faststart $T/ff_double.mp4
+$F -noautorotate -i $FX/clip.mp4 -map 0:v:0 -map "0:a:0?" -vf scale=320:180,fps=60 -c:v $FF_H264 -b:v 400000 -g 60 -pix_fmt yuv420p -c:a copy -movflags +faststart $T/ff_double.mp4
 check "compress to 60 fps: the same frames at the same times as FFmpeg's" judged against $T/double.mp4 $T/ff_double.mp4 36
 check "compress to 60 fps: picture quality against the source not below FFmpeg's" judged quality $FX/clip.mp4 $T/double.mp4 $T/ff_double.mp4 0 60
 mkdir -p $T/parts

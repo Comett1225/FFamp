@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <limits>
 #include <set>
+#include "portable.h"
 
 namespace absent {
 
@@ -334,8 +335,8 @@ namespace {
 struct Scratch {
     std::string path;
     ~Scratch() {
-        remove(path.c_str());
-        remove((path + ".part").c_str());
+        removeFile(path);
+        removeFile(path + ".part");
     }
 };
 
@@ -460,7 +461,7 @@ bool reverse(const ReverseJob& job, const Progress& progress, ReverseResult* res
             }
             replay.reset();
             stored.reset();
-            remove(scratch.path.c_str());
+            removeFile(scratch.path);
         }
         stop = from;
     }
@@ -478,6 +479,24 @@ bool reverse(const ReverseJob& job, const Progress& progress, ReverseResult* res
     }
     if (progress) progress(1.0);
     return true;
+}
+
+int gifDelayMs(double seconds) {
+    const long hundredths = std::isfinite(seconds) && seconds > 0 ? std::lround(std::min(seconds, 655.35) * 100) : 0;
+    return hundredths <= 1 ? 100 : int(hundredths) * 10;
+}
+
+bool gifVideoSize(int width, int height, int& videoWidth, int& videoHeight) {
+    if (width <= 0 || height <= 0) return false;
+    auto even = [](double value) { return std::max(2, int(std::floor(value / 2 + 0.5)) * 2); };
+    double scale = 1.0;
+    for (;;) {
+        videoWidth = even(width * scale);
+        videoHeight = even(height * scale);
+        if (videoWidth <= 8192 && videoHeight <= 8192) return true;
+        scale *= 0.75;
+        if (std::min(width, height) * scale < 16) return false;
+    }
 }
 
 bool gifToVideo(const std::string& input, const std::string& colour, const std::string& matte, GifInfo* out, const Progress& progress, std::string* error) {
@@ -505,6 +524,7 @@ bool gifToVideo(const std::string& input, const std::string& colour, const std::
         spec.keyInterval = std::max(1, info.fps);
         spec.codec = fourcc("avc1");
         spec.bgra = true;
+        spec.reorder = false;
         bool opened = false;
         for (double scale : scales) {
             spec.width = even(info.width * scale);
@@ -571,7 +591,7 @@ bool gifToVideo(const std::string& input, const std::string& colour, const std::
     if (!colourVideo.finish() || !colourFile->finish(error)) return fail(error, "writing the colour file failed");
     if (matteFile) matteFile->trim(matteVideo.track, 0, at);
     if (matteFile && info.transparent && (!matteVideo.finish() || !matteFile->finish(error))) {
-        remove(colour.c_str());
+        removeFile(colour);
         return fail(error, "writing the matte file failed");
     }
     if (out) *out = info;

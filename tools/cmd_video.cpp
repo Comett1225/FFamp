@@ -170,7 +170,7 @@ int encode(const Args& args) {
     long available = 0x7FFFFFFF;
     if (!piped) {
         fseeko(video, 0, SEEK_END);
-        available = long(ftello(video) / off_t(frameSize));
+        available = long(ftello(video) / int64_t(frameSize));
         fseeko(video, 0, SEEK_SET);
     }
     long total = std::min(available, args.number("frames", available));
@@ -229,7 +229,7 @@ int encode(const Args& args) {
             if (!aac) return fail(error);
         }
         fseeko(audio, 0, SEEK_END);
-        soundFrames = long(ftello(audio) / off_t(channels * 2));
+        soundFrames = long(ftello(audio) / int64_t(channels * 2));
         fseeko(audio, 0, SEEK_SET);
         if (!piped) soundFrames = std::min(soundFrames, long(double(total) * den / num * rate + 0.5));
         TrackSpec sound;

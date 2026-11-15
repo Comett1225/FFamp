@@ -2,7 +2,6 @@
 #include "absent/capture.h"
 #include <cmath>
 #include <thread>
-#include <unistd.h>
 
 namespace cli {
 

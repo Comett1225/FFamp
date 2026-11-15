@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include "portable.h"
 
 namespace absent {
 
@@ -150,7 +151,7 @@ struct Walker {
         base = offset;
         fill = at = 0;
         synced = true;
-        fseeko(file, off_t(offset), SEEK_SET);
+        fseeko(file, int64_t(offset), SEEK_SET);
     }
     bool ensure(size_t count) {
         if (fill - at >= count) return true;
@@ -702,7 +703,7 @@ public:
             if (error) *error = text;
             return false;
         };
-        file = fopen(path.c_str(), "rb");
+        file = openFile(path, "rb");
         if (!file) return fail("cannot open file");
         uint8_t head[1024];
         size_t got = fread(head, 1, sizeof head, file);

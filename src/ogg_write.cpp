@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include "portable.h"
 
 namespace absent {
 
@@ -42,7 +43,7 @@ public:
     ~OggWriter() override {
         if (file) {
             fclose(file);
-            remove(path.c_str());
+            removeFile(path);
         }
     }
 
@@ -146,7 +147,7 @@ public:
             if (error) *error = text;
             if (file) fclose(file);
             file = nullptr;
-            remove(path.c_str());
+            removeFile(path);
             return false;
         };
         if (!file || failed) return fail("writing the output file failed");
@@ -167,7 +168,7 @@ public:
 std::unique_ptr<Writer> openOggWriter(const std::string& path, std::string* error) {
     auto writer = std::make_unique<OggWriter>();
     writer->path = path;
-    writer->file = fopen(path.c_str(), "wb");
+    writer->file = openFile(path, "wb");
     if (!writer->file) {
         if (error) *error = "cannot create output file";
         return nullptr;

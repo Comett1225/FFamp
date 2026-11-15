@@ -5,7 +5,7 @@ WX_ALL="$WX/wma1_noise.wma $WX/wma2_noise.wma $WX/wma2_16k.wma $WX/wma1_32k.mkv 
 WX_READS=30
 [ -n "${QUICK:-}" ] && WX_READS=10
 for f in $WX_ALL; do
-    check "$(basename $f) decodes to the checked checksum" python3 audio.py checksum $f $WX/sound.md5
+    float_check "$(basename $f) decodes to the checked checksum" python3 audio.py checksum $f $WX/sound.md5
     check "random reads and chunk sizes of $(basename $f) equal the straight decode" python3 audio.py chunks adecode $f $WX_READS 3
 done
 check "one stream in ASF and AVI decodes to the same samples" $WC same $WX/wma2_48k.wma $WX/wma2_48k.avi
@@ -20,7 +20,7 @@ TABLE
 echo "== wma: Windows Media Audio 9 Professional against checked tables (no FFmpeg)"
 PX=fixtures/wmapro
 for f in $PX/pro_*; do
-    check "$(basename $f) decodes to the checked checksum" python3 audio.py checksum $f $PX/sound.md5
+    float_check "$(basename $f) decodes to the checked checksum" python3 audio.py checksum $f $PX/sound.md5
     check "random reads and chunk sizes of $(basename $f) equal the straight decode" python3 audio.py chunks adecode $f $WX_READS 3
 done
 while read f name layout; do
@@ -44,7 +44,7 @@ check "probe names lossless_stereo24.wma s32p" grep -q '"sample_fmt":"s32p"' <($
 echo "== wma: Windows Media Audio 9 Voice against checked tables (no FFmpeg)"
 VX=fixtures/wmavoice
 for f in $VX/voice_[0-9]*; do
-    check "$(basename $f) decodes to the checked checksum" python3 audio.py checksum $f $VX/sound.md5
+    float_check "$(basename $f) decodes to the checked checksum" python3 audio.py checksum $f $VX/sound.md5
     check "random reads and chunk sizes of $(basename $f) equal the straight decode" python3 audio.py chunks adecode $f $WX_READS 3
 done
 vx_refuses() { ! $A adecode "$1" > /dev/null 2> $O/vx_refused.txt && grep -q "has music frames" $O/vx_refused.txt; }

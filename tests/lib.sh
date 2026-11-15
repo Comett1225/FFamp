@@ -3,7 +3,14 @@ FFPROBE="${FFPROBE:-ffprobe}"
 export FFMPEG FFPROBE
 A=../build/ffamp
 O=out
+SYSTEM="$(uname -s)"
+case "$SYSTEM" in Darwin) ;; MINGW*|MSYS*|CYGWIN*) SYSTEM=Windows; A=../build/ffamp.exe ;; *) SYSTEM=Linux ;; esac
+on_mac() { [ "$SYSTEM" = Darwin ]; }
+command -v md5 > /dev/null || md5() { md5sum | cut -d' ' -f1; }
+on_mac || stat() { if [ "$1" = -f ] && [ "$2" = %z ]; then command stat -c %s "$3"; else command stat "$@"; fi; }
+APPLE_JUDGES=" ../build/avcheck ../build/audiocheck av_opens av_frames apple_frames apple_same apple_lossy apple_payload opens "
 F="$FFMPEG -nostdin -hide_banner -v error -y"
+case "$SYSTEM" in Darwin) FF_AAC=aac_at FF_H264="h264_videotoolbox -realtime 0 -profile:v high" ;; Windows) FF_AAC=aac_mf FF_H264=h264_mf ;; *) FF_AAC=aac FF_H264="libx264 -preset veryfast -profile:v high" ;; esac
 failed=0
 
 have_ffmpeg() { [ -z "${NOFFMPEG:-}" ] && command -v "$FFMPEG" > /dev/null; }
@@ -11,7 +18,12 @@ have_ffmpeg() { [ -z "${NOFFMPEG:-}" ] && command -v "$FFMPEG" > /dev/null; }
 skip() { echo "SKIP  $1"; }
 
 check() {
+    if ! on_mac && { [[ "$APPLE_JUDGES" == *" $2 "* ]] || [[ "$1" == *Apple* ]] || [[ "$1" == *AVFoundation* ]] || [[ "$*" == *build/avcheck* ]] || [[ "$*" == *build/audiocheck* ]]; }; then skip "$1 (Apple's frameworks are the judge)"; return; fi
     if "${@:2}"; then echo "PASS  $1"; else echo "FAIL  $1"; failed=1; fi
+}
+
+float_check() {
+    if on_mac && [ "$(uname -m)" = arm64 ]; then check "$@"; else skip "$1 (checksum made on an arm64 Mac, where float decoders round differently; judged against ffmpeg instead)"; fi
 }
 
 clean() {
@@ -22,8 +34,8 @@ same_packets() {
     [ "$("$FFMPEG" -nostdin -v error -i "$1" -map 0 -c copy -f framemd5 - | grep -v '^#' | md5)" = "$("$FFMPEG" -nostdin -v error -i "$2" -map 0 -c copy -f framemd5 - | grep -v '^#' | md5)" ]
 }
 
-cmake -S .. -B ../build -G Ninja -DCMAKE_BUILD_TYPE=Release > /dev/null && cmake --build ../build > /dev/null || exit 1
-clang -fobjc-arc -O1 -w avcheck.m -o ../build/avcheck -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Foundation -framework CoreGraphics || exit 1
+cmake -S .. -B ../build -G Ninja -DCMAKE_BUILD_TYPE=Release ${FFAMP_CMAKE:-} > /dev/null && cmake --build ../build > /dev/null || exit 1
+if on_mac; then clang -fobjc-arc -O1 -w avcheck.m -o ../build/avcheck -framework AVFoundation -framework CoreMedia -framework CoreVideo -framework Foundation -framework CoreGraphics || exit 1; fi
 mkdir -p $O
 
 if have_ffmpeg; then

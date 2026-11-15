@@ -1,6 +1,8 @@
 #include "cli.h"
+#ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
 #include <VideoToolbox/VideoToolbox.h>
+#endif
 #include <cstring>
 #include <random>
 
@@ -79,6 +81,7 @@ int videoinfo(const Args& args) {
     return 0;
 }
 
+#ifdef __APPLE__
 CVPixelBufferRef surfaceBuffer(int width, int height, OSType format) {
     const void* keys[] = {kCVPixelBufferIOSurfacePropertiesKey};
     CFDictionaryRef empty = CFDictionaryCreate(nullptr, nullptr, nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -90,6 +93,7 @@ CVPixelBufferRef surfaceBuffer(int width, int height, OSType format) {
     CFRelease(empty);
     return buffer;
 }
+#endif
 
 void testCard(std::vector<uint8_t>& pixels, int width, int height) {
     std::mt19937 random(7);
@@ -141,6 +145,9 @@ int pixels(const Args& args) {
     }
     if (in) fclose(in);
     if (out) fclose(out);
+#ifndef __APPLE__
+    return 0;
+#else
     if (args.has("no-system")) return 0;
 
     CVPixelBufferRef from = surfaceBuffer(width, height, kCVPixelFormatType_32BGRA);
@@ -177,8 +184,10 @@ int pixels(const Args& args) {
     printf("pixels %dx%d: largest difference Y %d U %d V %d, differing samples Y %llu U %llu V %llu, beyond one code value %llu\n", width, height, worst[0], worst[1], worst[2],
         (unsigned long long)off[0], (unsigned long long)off[1], (unsigned long long)off[2], (unsigned long long)beyond);
     return beyond ? 1 : 0;
+#endif
 }
 
+#ifdef __APPLE__
 int encodeSurface(const Args& args) {
     if (args.plain.empty() || !args.has("video") || !args.has("size")) return fail("encode-surface needs an output file, --video raw.bgra and --size WxH");
     int width = 0, height = 0;
@@ -246,10 +255,13 @@ int encodeSurface(const Args& args) {
     fprintf(stderr, "encoded %ld surfaces with %s in %.3f s (%.1f fps)\n", done, encoder->backend(), spent, done / spent);
     return done > 0 ? 0 : 1;
 }
+#endif
 
 Register videoinfoCommand("videoinfo", videoinfo);
 Register pixelsCommand("pixels", pixels);
+#ifdef __APPLE__
 Register encodeSurfaceCommand("encode-surface", encodeSurface);
+#endif
 
 }
 

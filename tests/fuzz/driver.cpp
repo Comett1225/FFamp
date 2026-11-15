@@ -8,7 +8,9 @@
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#ifdef __APPLE__
 #include <mach/mach.h>
+#endif
 #include <random>
 #include <string>
 #include <sys/stat.h>
@@ -65,10 +67,19 @@ void onSignal(int number) {
 }
 
 uint64_t resident() {
+#ifdef __APPLE__
     mach_task_basic_info_data_t info;
     mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
     if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, task_info_t(&info), &count) != KERN_SUCCESS) return 0;
     return info.resident_size;
+#else
+    FILE* file = fopen("/proc/self/statm", "r");
+    long pages = 0, kept = 0;
+    if (!file) return 0;
+    if (fscanf(file, "%ld %ld", &pages, &kept) != 2) kept = 0;
+    fclose(file);
+    return uint64_t(kept) * uint64_t(sysconf(_SC_PAGESIZE));
+#endif
 }
 
 bool readFile(const std::string& path, Input& out, size_t limit) {

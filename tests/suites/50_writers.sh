@@ -1,5 +1,5 @@
 echo "== writers: sound files"
-clang -fobjc-arc -O1 -w audiocheck.m -o ../build/audiocheck -framework AudioToolbox -framework Foundation || failed=1
+if on_mac; then clang -fobjc-arc -O1 -w audiocheck.m -o ../build/audiocheck -framework AudioToolbox -framework Foundation || failed=1; fi
 W=writers_check.py
 WF=fixtures/writers
 WO=$O/writers

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include "portable.h"
 
 namespace absent {
 
@@ -22,7 +23,7 @@ struct IvfReader : Reader {
     bool read(const Track& track, uint32_t index, uint8_t* out) override {
         if (index >= track.samples.size()) return false;
         const Sample& s = track.samples[index];
-        return fseeko(file, off_t(s.offset), SEEK_SET) == 0 && fread(out, 1, s.size, file) == s.size;
+        return fseeko(file, int64_t(s.offset), SEEK_SET) == 0 && fread(out, 1, s.size, file) == s.size;
     }
 };
 
@@ -54,7 +55,7 @@ std::unique_ptr<Reader> openIvf(const std::string& path, std::string* error) {
         return nullptr;
     };
     std::unique_ptr<IvfReader> reader(new IvfReader);
-    reader->file = fopen(path.c_str(), "rb");
+    reader->file = openFile(path, "rb");
     if (!reader->file) return fail("cannot open file");
     fseeko(reader->file, 0, SEEK_END);
     const uint64_t length = uint64_t(ftello(reader->file));
@@ -77,7 +78,7 @@ std::unique_ptr<Reader> openIvf(const std::string& path, std::string* error) {
     uint64_t at = headerSize;
     while (at + 12 <= length) {
         uint8_t frame[12 + 32];
-        if (fseeko(reader->file, off_t(at), SEEK_SET) != 0) break;
+        if (fseeko(reader->file, int64_t(at), SEEK_SET) != 0) break;
         const size_t got = fread(frame, 1, sizeof frame, reader->file);
         if (got < 12) break;
         uint32_t size = little32(frame);

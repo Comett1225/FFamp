@@ -15,7 +15,7 @@ done
 check "h264_mp3.asf pictures decode to the checked checksum" ax_listed pictures h264_mp3.asf $A decode $AX/h264_mp3.asf
 for f in h264_mp3.asf mpeg4_pcm.asf; do check "random frames of $f equal the straight decode" python3 comparex.py selfseek $AX/$f 10 5; done
 for f in h264_mp3.asf mpeg4_pcm.asf msmpeg4v3.asf; do
-    check "$f sound decodes to the checked checksum" ax_listed sound $f $A adecode $AX/$f
+    float_check "$f sound decodes to the checked checksum" ax_listed sound $f $A adecode $AX/$f
     check "random reads $f" python3 audio.py chunks adecode $AX/$f 30 3
 done
 while read f name; do

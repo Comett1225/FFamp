@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include "portable.h"
 
 namespace absent {
 
@@ -278,7 +279,7 @@ namespace {
 
 bool copyFrames(Piece& piece, const std::string& output, Ticker& ticker, std::string* error) {
     const std::string temp = output + ".part";
-    FILE* file = fopen(temp.c_str(), "wb");
+    FILE* file = openFile(temp, "wb");
     if (!file) return fail(error, "cannot create output file");
     bool ok = true;
     std::vector<uint8_t> packet;
@@ -291,7 +292,7 @@ bool copyFrames(Piece& piece, const std::string& output, Ticker& ticker, std::st
     ok = fclose(file) == 0 && ok && !ticker.cancelled;
     if (ok) ok = rename(temp.c_str(), output.c_str()) == 0;
     if (!ok) {
-        remove(temp.c_str());
+        removeFile(temp);
         if (!ticker.stopped(error) && error) *error = "writing the output file failed";
     }
     return ok;

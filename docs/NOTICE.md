@@ -37,3 +37,4 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `tests/fixtures/sound/make.py`: writes the block layouts `libavcodec/adpcm.c` reads; Copyright (c) 2001-2003 The FFmpeg project; LGPL-2.1-or-later.
 - `src/tta_decode.cpp`: `libavcodec/tta.c`, `libavcodec/ttadata.c`, `libavcodec/ttadsp.c`, `libavcodec/unary.h`; Copyright (c) 2006 Alex Beregszaszi, Copyright (c) 2004 Michael Niedermayer (`unary.h`; `ttadata.c` and `ttadsp.c` name no holder); LGPL-2.1-or-later.
 - `src/mkv_read.cpp`: `libavformat/matroskadec.c` (the TTA1 header built for a TTA track); Copyright (c) 2003-2008 The FFmpeg Project; LGPL-2.1-or-later.
+- `src/alac_decode.cpp`: `libavcodec/alac.c`, `libavcodec/alac_data.c`; Copyright (c) 2005 David Hammerton; LGPL-2.1-or-later.

@@ -100,24 +100,6 @@ double delayOf(CGImageSourceRef source, size_t index) {
 
 }
 
-int gifDelayMs(double seconds) {
-    const long hundredths = std::isfinite(seconds) && seconds > 0 ? std::lround(std::min(seconds, 655.35) * 100) : 0;
-    return hundredths <= 1 ? 100 : int(hundredths) * 10;
-}
-
-bool gifVideoSize(int width, int height, int& videoWidth, int& videoHeight) {
-    if (width <= 0 || height <= 0) return false;
-    auto even = [](double value) { return std::max(2, int(std::floor(value / 2 + 0.5)) * 2); };
-    double scale = 1.0;
-    for (;;) {
-        videoWidth = even(width * scale);
-        videoHeight = even(height * scale);
-        if (videoWidth <= 8192 && videoHeight <= 8192) return true;
-        scale *= 0.75;
-        if (std::min(width, height) * scale < 16) return false;
-    }
-}
-
 bool gifRead(const std::string& path, GifInfo& info, const std::function<bool(uint32_t, const uint8_t*)>& frame, std::string* error) {
     info = GifInfo();
     uint8_t head[10] = {};

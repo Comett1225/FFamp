@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 #include <numeric>
+#include "portable.h"
 
 namespace absent {
 
@@ -271,7 +272,7 @@ std::unique_ptr<FrameWriter> FrameWriter::open(const std::string& path, const Fr
     w.videoTrack = w.writer->add(picture);
     if (!spec.audioFrom.empty() && !w.soundOpen(error)) {
         w.writer.reset();
-        remove(path.c_str());
+        removeFile(path);
         return nullptr;
     }
     return out;

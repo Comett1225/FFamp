@@ -7,6 +7,7 @@
 #include <cstring>
 #include <ctime>
 #include <numeric>
+#include "portable.h"
 
 namespace absent {
 
@@ -151,7 +152,7 @@ std::string filetime(uint64_t value) {
     int64_t micro = (ticks - seconds * 10000000) / 10;
     time_t whole = time_t(seconds);
     struct tm parts;
-    if (!gmtime_r(&whole, &parts)) return {};
+    if (!utcParts(whole, parts)) return {};
     char text[64];
     snprintf(text, sizeof text, "%04d-%02d-%02dT%02d:%02d:%02d.%06lldZ", parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday, parts.tm_hour,
              parts.tm_min, parts.tm_sec, (long long)micro);

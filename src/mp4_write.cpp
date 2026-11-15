@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include "portable.h"
 
 namespace absent {
 
@@ -572,7 +573,7 @@ struct Mp4Writer::Impl {
     ~Impl() {
         if (data) {
             fclose(data);
-            remove(temp.c_str());
+            removeFile(temp);
         }
     }
 
@@ -626,7 +627,7 @@ std::unique_ptr<Mp4Writer> Mp4Writer::open(const std::string& path, Mp4Brand bra
     writer->impl->brand = brand;
     writer->impl->path = path;
     writer->impl->temp = path + ".part";
-    writer->impl->data = fopen(writer->impl->temp.c_str(), "wb+");
+    writer->impl->data = openFile(writer->impl->temp, "wb+");
     if (!writer->impl->data) {
         if (error) *error = "cannot create output file";
         return nullptr;
@@ -762,7 +763,7 @@ bool Mp4Writer::finish(std::string* error) {
     Bytes moov = impl->movie(base, wide);
     if (moov.d.size() != probe.d.size()) return fail("internal layout error");
 
-    FILE* out = fopen(impl->path.c_str(), "wb");
+    FILE* out = openFile(impl->path, "wb");
     if (!out) return fail("cannot create output file");
     Bytes mdat;
     if (large) {
@@ -789,9 +790,9 @@ bool Mp4Writer::finish(std::string* error) {
     ok = fclose(out) == 0 && ok;
     fclose(impl->data);
     impl->data = nullptr;
-    remove(impl->temp.c_str());
+    removeFile(impl->temp);
     if (!ok) {
-        remove(impl->path.c_str());
+        removeFile(impl->path);
         return fail("writing the output file failed");
     }
     return true;

@@ -2,6 +2,7 @@
 #include "../writers.h"
 #include <lame/lame.h>
 #include <cstdio>
+#include "portable.h"
 
 namespace absent {
 
@@ -22,7 +23,7 @@ public:
         if (lame) lame_close(lame);
         if (file) {
             fclose(file);
-            remove(path.c_str());
+            removeFile(path);
         }
     }
 
@@ -56,7 +57,7 @@ public:
         if (tag > 0 && tag <= coded.size()) failed = failed || fseeko(file, 0, SEEK_SET) != 0 || fwrite(coded.data(), 1, tag, file) != tag;
         failed = fclose(file) != 0 || failed;
         file = nullptr;
-        if (failed) remove(path.c_str());
+        if (failed) removeFile(path);
         return !failed;
     }
 };
@@ -84,7 +85,7 @@ std::unique_ptr<Mp3File> Mp3File::open(const std::string& path, int rate, int ch
     lame_set_bWriteVbrTag(out->lame, 1);
     lame_set_write_id3tag_automatic(out->lame, 0);
     if (lame_init_params(out->lame) < 0) return fail("the MP3 encoder does not take this rate or bitrate");
-    out->file = fopen(path.c_str(), "wb");
+    out->file = openFile(path, "wb");
     if (!out->file) return fail("cannot create output file");
     return out;
 }

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include "portable.h"
 
 namespace absent {
 
@@ -159,7 +160,7 @@ struct MkvWriter::Impl {
     ~Impl() {
         if (data) {
             fclose(data);
-            remove(temp.c_str());
+            removeFile(temp);
         }
     }
 
@@ -220,7 +221,7 @@ std::unique_ptr<MkvWriter> MkvWriter::open(const std::string& path, std::string*
     writer->impl->path = path;
     writer->impl->temp = path + ".part";
     writer->impl->webm = path.size() > 5 && path.compare(path.size() - 5, 5, ".webm") == 0;
-    writer->impl->data = fopen(writer->impl->temp.c_str(), "wb+");
+    writer->impl->data = openFile(writer->impl->temp, "wb+");
     if (!writer->impl->data) {
         if (error) *error = "cannot create output file";
         return nullptr;
@@ -385,7 +386,7 @@ bool MkvWriter::finish(std::string* error) {
         wide(head, kSeekPosition, position);
     }
 
-    FILE* out = fopen(m.path.c_str(), "wb");
+    FILE* out = openFile(m.path, "wb");
     if (!out) return fail("cannot create output file");
     bool ok = true;
     for (const Bytes* part : {&head, &info, &tracks, &cues}) ok = ok && fwrite(part->d.data(), 1, part->d.size(), out) == part->d.size();
@@ -402,9 +403,9 @@ bool MkvWriter::finish(std::string* error) {
     ok = fclose(out) == 0 && ok;
     fclose(m.data);
     m.data = nullptr;
-    remove(m.temp.c_str());
+    removeFile(m.temp);
     if (!ok) {
-        remove(m.path.c_str());
+        removeFile(m.path);
         return fail("writing the output file failed");
     }
     return true;

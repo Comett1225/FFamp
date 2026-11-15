@@ -337,7 +337,7 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
         return fail("Vorbis needs libvorbis, which was not found when building");
 #endif
     } else {
-#ifdef __APPLE__
+#ifndef __ANDROID__
         std::vector<uint8_t> packet(track.samples[0].size);
         if (!file.read(track, 0, packet.data())) return fail("cannot read the first audio packet");
         a.codec = openSystemAudio(track, packet, error);

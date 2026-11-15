@@ -46,6 +46,8 @@ public:
     virtual bool decode(const uint8_t* data, size_t size, int64_t stamp, const PictureSink& shown) = 0;
     virtual bool drain(const PictureSink&) { return true; }
     virtual void reset() = 0;
+    virtual bool drainKeepsState() const { return true; }
+    virtual bool weavesFields() const { return false; }
 };
 
 class SoftEncoder {
@@ -66,6 +68,10 @@ std::unique_ptr<SoftEncoder> openApvEncoder(const EncodeSpec& spec, std::string*
 std::unique_ptr<SoftDecoder> openApvDecoder(std::string* error);
 std::unique_ptr<SoftDecoder> openVc1(uint32_t codec, const std::vector<uint8_t>& config, int width, int height, std::string* error);
 std::unique_ptr<SoftDecoder> openMsmpeg4(uint32_t codec, const std::vector<uint8_t>& config, int width, int height, std::string* error);
+std::unique_ptr<SoftDecoder> openOpenH264(const std::vector<uint8_t>& config, std::string* error);
+std::unique_ptr<SoftDecoder> openDe265(const std::vector<uint8_t>& config, std::string* error);
+std::unique_ptr<SoftEncoder> openX264(const EncodeSpec& spec, std::string* error);
+std::unique_ptr<SoftEncoder> openX265(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftDecoder> openXvid(const std::vector<uint8_t>& esds, int width, int height);
 
 bool vp9Shape(const uint8_t* frame, size_t size, StreamShape& shape);

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <map>
 #include <numeric>
+#include "portable.h"
 
 namespace absent {
 
@@ -427,7 +428,7 @@ std::string clockText(uint64_t since1904) {
     const uint64_t toUnix = 2082844800ull;
     time_t seconds = time_t(since1904 >= toUnix ? since1904 - toUnix : since1904);
     struct tm parts;
-    if (!gmtime_r(&seconds, &parts)) return "";
+    if (!utcParts(seconds, parts)) return "";
     char text[64];
     snprintf(text, sizeof text, "%04d-%02d-%02dT%02d:%02d:%02d.000000Z", parts.tm_year + 1900, parts.tm_mon + 1, parts.tm_mday, parts.tm_hour, parts.tm_min, parts.tm_sec);
     return text;
@@ -767,7 +768,7 @@ const std::map<std::string, std::string>& Mp4Reader::tags() const { return impl-
 bool Mp4Reader::read(const Track& track, uint32_t index, uint8_t* out) {
     if (index >= track.samples.size()) return false;
     const Sample& s = track.samples[index];
-    if (fseeko(impl->file, off_t(s.offset), SEEK_SET) != 0) return false;
+    if (fseeko(impl->file, int64_t(s.offset), SEEK_SET) != 0) return false;
     return fread(out, 1, s.size, impl->file) == s.size;
 }
 
@@ -777,7 +778,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
         return nullptr;
     };
     std::unique_ptr<Mp4Reader> reader(new Mp4Reader);
-    FILE* file = fopen(path.c_str(), "rb");
+    FILE* file = openFile(path, "rb");
     if (!file) return fail("cannot open file");
     reader->impl->file = file;
     fseeko(file, 0, SEEK_END);
@@ -792,7 +793,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
     uint64_t samplesLeft = total;
     while (at + 8 <= total) {
         uint8_t head[16];
-        if (fseeko(file, off_t(at), SEEK_SET) != 0 || fread(head, 1, 8, file) != 8) break;
+        if (fseeko(file, int64_t(at), SEEK_SET) != 0 || fread(head, 1, 8, file) != 8) break;
         View h{head, 16};
         uint64_t size = h.u32();
         uint32_t type = h.u32();

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include "portable.h"
 
 namespace absent {
 
@@ -115,11 +116,11 @@ uint8_t crc8(const uint8_t* p, size_t n) {
 Source::~Source() { if (file) fclose(file); }
 
 bool Source::open(const std::string& path) {
-    file = fopen(path.c_str(), "rb");
+    file = openFile(path, "rb");
     if (!file) return false;
     setvbuf(file, nullptr, _IONBF, 0);
     if (fseeko(file, 0, SEEK_END) != 0) return false;
-    off_t end = ftello(file);
+    int64_t end = ftello(file);
     if (end < 0) return false;
     total = uint64_t(end);
     return true;
@@ -133,7 +134,7 @@ const uint8_t* Source::view(uint64_t at, size_t count) {
     size_t want = size_t(std::min<uint64_t>(total - at, std::max(count, kWindow)));
     held.resize(want);
     heldAt = at;
-    if (want && (fseeko(file, off_t(at), SEEK_SET) != 0 || fread(held.data(), 1, want, file) != want)) {
+    if (want && (fseeko(file, int64_t(at), SEEK_SET) != 0 || fread(held.data(), 1, want, file) != want)) {
         held.clear();
         return nullptr;
     }
@@ -143,7 +144,7 @@ const uint8_t* Source::view(uint64_t at, size_t count) {
 bool Source::read(uint64_t at, uint8_t* out, size_t count) {
     if (at > total || count > total - at) return false;
     if (!count) return true;
-    return fseeko(file, off_t(at), SEEK_SET) == 0 && fread(out, 1, count, file) == count;
+    return fseeko(file, int64_t(at), SEEK_SET) == 0 && fread(out, 1, count, file) == count;
 }
 
 bool Source::load(uint64_t at, uint64_t count, std::vector<uint8_t>& out, uint64_t limit) {

@@ -9,6 +9,11 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#define fseeko _fseeki64
+#define ftello _ftelli64
+#endif
+
 namespace cli {
 
 using namespace absent;

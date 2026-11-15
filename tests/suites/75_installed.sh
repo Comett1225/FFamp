@@ -5,7 +5,7 @@ II="python3 installed.py"
 IV=/Applications/VLC.app/Contents/MacOS/VLC
 check "vorbis_stereo_44k.ogg: rate, channels, length to the sample, no offset from its source signal" $IP truth $IA/vorbis_stereo_44k.ogg 44100 2 1.5 25 0
 check "vorbis_51_48k.ogg: every channel in its place against its source signal" $IP truth $IA/vorbis_51_48k.ogg 48000 6 1.5 15 0
-for f in $(cut -d' ' -f3 $IA/decoded_vorbis.md5); do check "$f decodes to the checked checksum" $IP checksum $IA/$f $IA/decoded_vorbis.md5; done
+for f in $(cut -d' ' -f3 $IA/decoded_vorbis.md5); do float_check "$f decodes to the checked checksum" $IP checksum $IA/$f $IA/decoded_vorbis.md5; done
 for f in vorbis_stereo_44k.ogg vorbis_51_48k.ogg vorbis_mono_44k.mka vorbis_stereo_44k.webm; do check "random reads $f" $IP chunks adecode $IA/$f 30 3; done
 check "Vorbis 5.1 as 44.1 kHz stereo: random reads" $IP chunks pcm $IA/vorbis_51_48k.ogg 30 4 --rate 44100 --channels 2
 check "Vorbis from WebM to AAC in M4A" $A extract-audio $IA/vorbis_stereo_44k.webm $O/in_vorbis.m4a --aac --bitrate 128000 > /dev/null

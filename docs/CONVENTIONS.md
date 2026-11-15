@@ -374,6 +374,20 @@ list; `Sample.offset` is then free for the reader's use.
   differ. A jump starts a fresh decoder at the key frame before; the prediction state FFmpeg keeps across pictures is rebuilt by every
   I-picture, so jumps give the straight decode.
 
+## H.263 and H.263+ (`h263`, `src/h263_decode.cpp`, backend `h263`, Windows and Linux)
+
+- FFamp's own decoder on the H.263 core, based on FFmpeg's (`docs/NOTICE.md`), behind `SoftDecoder` (`openH263`); `VideoDecoder`
+  picks it for `h263` on Windows and Linux. The Mac keeps VideoToolbox for H.263.
+- The picture size comes from each picture header (the five standard formats and H.263+ custom sizes, which may change between
+  pictures). Baseline, GOB headers, long vectors, PB-frames (the B part is read and dropped, as FFmpeg does), and the H.263+ options
+  FFmpeg decodes: unrestricted vectors, advanced prediction (4MV and OBMC), advanced intra coding, deblocking, slices, alternative
+  inter VLC, modified quantisation, rounding type. H.263+ B-pictures (Annex O) are not decoded (`decode` returns `false`).
+- Bit-exact with the FFmpeg of each system: on x86-64 the IDCT keeps the C simple IDCT's shortcut for DC-only rows (FFmpeg's SSE2
+  IDCT copies it) and the 8-wide no-rounding horizontal and vertical half-pel averages are the approximate ones FFmpeg's x86 build
+  uses (`ff_put_no_rnd_pixels8_x2_approx`, `_y2_approx`); arm64 builds take the NEON IDCT and exact averages, as FFmpeg there.
+- In AVI, H.263 key frames are the I-pictures read from each chunk's picture header (FFmpeg's AVI writer marks every chunk).
+- Macroblocks that do not decode are filled from the picture before (grey at the start); FFmpeg's error resilience differs there.
+
 ## G.711, ADPCM and sound in more containers (`src/wave_audio.cpp`, gaps round)
 
 - One decoder, based on FFmpeg's (`docs/NOTICE.md`), bit-exact with it (16-bit output as `x / 32768`): A-law and mu-law, IMA ADPCM

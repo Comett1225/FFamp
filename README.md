@@ -25,12 +25,23 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 - File tools (`docs/TOOLS.md`): `compress`, `trim`, `extract-audio`, `reverse`, `gif-video`, `merge`, `strip-audio`, `rewrap`, with progress
   lines and a clean stop; `docs/YTDLP.md` describes the downloader without FFmpeg.
 
+## Windows and Linux
+
+The same library and tool build on Windows (clang-cl) and Linux (gcc or clang) through one desktop layer (`src/desktop`): Media
+Foundation and WIC on Windows, libraries built static from pinned sources everywhere else; what each job uses on each system, and why,
+is in `docs/PLAN_WINLINUX.md`, the details in `docs/CONVENTIONS.md`, the measurements in `docs/RESULTS.md`.
+
+    third_party/build_linux.sh deps/linux                        Linux libraries (static, PIC)
+    third_party/build_windows.sh deps/windows                    Windows libraries (Git Bash inside a vcvars64 shell)
+    cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH=deps/linux   (on Windows add -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl)
+
 ## Build and test
 
     cmake -S . -B build -G Ninja && cmake --build build
     tests/run.sh
 
-The test script needs `ffmpeg`, `ffprobe`, Python 3 with NumPy and the Xcode command line tools. FFmpeg is only the judge: it makes the
+The test script needs `ffmpeg`, `ffprobe`, Python 3 with NumPy and, on the Mac, the Xcode command line tools (on Windows it runs in Git
+Bash; `FFAMP_CMAKE` passes extra CMake arguments). FFmpeg is only the judge: it makes the
 test clips and is the reference every frame is compared against. Set `FFMPEG` and `FFPROBE` to use other binaries. Nothing from FFmpeg
 is linked; parts based on FFmpeg are listed in `docs/NOTICE.md`.
 
@@ -45,6 +56,8 @@ is linked; parts based on FFmpeg are listed in `docs/NOTICE.md`.
     src/h263.*, msmpeg4*.cpp Microsoft MPEG-4 v1 to v3, WMV7 and WMV8 on the shared H.263-family core (based on FFmpeg's)
     src/intrax8.*            X8 intra pictures of WMV8 and VC-1 Complex profile (based on FFmpeg's)
     src/mac/                 VideoToolbox and AudioToolbox back end
+    src/desktop/             Windows and Linux: decoder, encoder, scaler, GIF reader on CPU frames
+    src/windows/             Media Foundation and WIC back end
     tools/ffamp.cpp         command-line tool
     tests/                   comparison against FFmpeg and against AVFoundation
     docs/                    results and the proposal for how AbsentMotion would call this

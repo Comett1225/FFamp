@@ -1,4 +1,5 @@
 echo "== fuzz: inputs that once broke the library replay cleanly, and short blind bursts find nothing (no FFmpeg)"
+if [ ! -x ../build/fuzz_open ]; then skip "the fuzz targets and their driver are not built on this system"; return 0; fi
 FZ=$O/fuzz
 rm -rf $FZ
 mkdir -p $FZ/seeds

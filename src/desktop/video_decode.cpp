@@ -401,7 +401,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool apv = codec == fourcc("apv1");
     const bool part2 = codec == fourcc("mp4v") && track.configType == fourcc("esds");
     const bool jpeg = codec == fourcc("jpeg");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4) return fail("video codec not supported by this decoder");
+    const bool mpeg = codec == fourcc("mp1v") || codec == fourcc("mp2v");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -420,7 +421,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.chromaX = chroma == 2 ? 1 : 0;
         d.shape.chromaY = 0;
         if (chroma != 2 && chroma != 3) return fail("this APV picture format is not supported");
-    } else if (part2 || jpeg) {
+    } else if (part2 || jpeg || mpeg) {
         d.shape.chromaY = 1;
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
         config.clear();
@@ -475,6 +476,9 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     } else if (vp8 || vp9) {
         if (track.alpha) d.softMask = openVpxDecoder(vp8, nullptr);
         d.soft = openVpxDecoder(vp8, error);
+    } else if (mpeg) {
+        if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
+        if (!d.soft && error) *error = problem.empty() ? "MPEG-1 and MPEG-2 video are not decoded on this system yet" : problem;
     } else {
         std::string fallback;
         if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);

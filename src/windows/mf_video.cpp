@@ -186,7 +186,9 @@ struct MfVideoDecoder : SoftDecoder {
         bytes.clear();
         const bool fresh = !primed;
         if (fresh) bytes = headers;
-        if (!annexB(data, size, lengthSize, bytes) || bytes.empty()) return false;
+        if (!lengthSize) bytes.insert(bytes.end(), data, data + size);
+        else if (!annexB(data, size, lengthSize, bytes)) return false;
+        if (bytes.empty()) return false;
         primed = true;
         for (int attempt = 0; attempt < 2; ++attempt) {
             HRESULT result = S_OK;
@@ -415,20 +417,21 @@ struct MfVideoEncoder : SoftEncoder {
 
 std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::vector<uint8_t>& config, const StreamShape&, std::string* error) {
     const bool hevc = track.configType == fourcc("hvcC");
-    if (!hevc && track.configType != fourcc("avcC")) return nullptr;
+    const bool mpeg = track.codec == fourcc("mp1v") || track.codec == fourcc("mp2v");
+    if (!hevc && !mpeg && track.configType != fourcc("avcC")) return nullptr;
     if (!mediaFoundation()) {
         if (error) *error = "Media Foundation is not available on this system";
         return nullptr;
     }
-    const VideoInfo info = videoInfo(track.configType, config);
+    const VideoInfo info = mpeg ? VideoInfo() : videoInfo(track.configType, config);
     std::string why;
     for (bool useGpu : {d3dEnabled(), false}) {
         auto decoder = std::make_unique<MfVideoDecoder>();
         decoder->hevc = hevc;
         decoder->width = track.width;
         decoder->height = track.height;
-        decoder->lengthSize = hevc ? (config.size() > 21 ? (config[21] & 3) + 1 : 4) : (config.size() > 4 ? (config[4] & 3) + 1 : 4);
-        decoder->headers = parameterSets(track.configType, config);
+        decoder->lengthSize = mpeg ? 0 : hevc ? (config.size() > 21 ? (config[21] & 3) + 1 : 4) : (config.size() > 4 ? (config[4] & 3) + 1 : 4);
+        if (!mpeg) decoder->headers = parameterSets(track.configType, config);
         if (info.colorKnown || info.rangeKnown) {
             decoder->color.known = info.colorKnown;
             decoder->color.primaries = info.primaries;
@@ -436,7 +439,7 @@ std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::ve
             decoder->color.matrix = info.matrix;
             decoder->color.full = info.full;
         }
-        if (decoder->open(hevc ? MFVideoFormat_HEVC : MFVideoFormat_H264, useGpu)) return decoder;
+        if (decoder->open(mpeg ? MFVideoFormat_MPEG2 : hevc ? MFVideoFormat_HEVC : MFVideoFormat_H264, useGpu)) return decoder;
         why = decoder->failure;
         if (!useGpu) break;
     }

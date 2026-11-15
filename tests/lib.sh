@@ -19,6 +19,7 @@ skip() { echo "SKIP  $1"; }
 
 check() {
     if ! on_mac && { [[ "$APPLE_JUDGES" == *" $2 "* ]] || [[ "$1" == *Apple* ]] || [[ "$1" == *AVFoundation* ]] || [[ "$*" == *build/avcheck* ]] || [[ "$*" == *build/audiocheck* ]]; }; then skip "$1 (Apple's frameworks are the judge)"; return; fi
+    if [[ "$*" == *build/fuzz_* ]] && [ ! -x ../build/fuzz_open ]; then skip "$1 (the fuzz targets are not built on this system)"; return; fi
     if "${@:2}"; then echo "PASS  $1"; else echo "FAIL  $1"; failed=1; fi
 }
 

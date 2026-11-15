@@ -464,10 +464,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         if (!d.soft) return fail("MPEG-4 part 2 video needs xvidcore, which was not found when building");
     } else if (jpeg) {
         d.soft = openStillDecoder(error);
-        if (d.soft) {
-            d.shape.color = Color();
-            d.shape.color.known = true;
-        }
+        d.shape.color = Color();
     } else if (apv) {
         d.soft = openApvDecoder(error);
     } else if (av1) {

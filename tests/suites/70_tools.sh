@@ -89,9 +89,13 @@ stopped() {
     wait $pid
     [ $? = 130 ] && [ ! -e $out ] && [ -z "$(ls $T | grep "^$1\.")" ] && grep -q cancelled $T/stop.log
 }
+if [ $SYSTEM != Windows ]; then
 check "compress stopped with SIGINT leaves no file" stopped stop1.mp4 INT $A compress $FX/clip.mp4 $T/stop1.mp4 --size 1920x1080 --fps 240 --bitrate 20000000
 check "compress stopped with SIGTERM leaves no file" stopped stop2.mp4 TERM $A compress $FX/clip.mp4 $T/stop2.mp4 --size 1920x1080 --fps 240 --bitrate 20000000 --audio aac
 check "reverse stopped with SIGINT leaves no file, also no scratch file" stopped stop3.mp4 INT $A reverse $FX/clip.mp4 $T/stop3.mp4 --memory 1
+else
+    skip "stopping a tool with SIGINT or SIGTERM (Windows has no such signals for a console program)"
+fi
 
 tool reverse $FX/clip.mp4 $T/back.mp4
 check "reverse the whole clip: frame N is source frame (last - N), timing, sound backwards" judged reverse $FX/clip.mp4 $T/back.mp4

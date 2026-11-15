@@ -4,7 +4,9 @@
 #include "../src/tools_common.h"
 #include "absent/audio.h"
 #include "cli.h"
+#ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
+#endif
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -892,6 +894,7 @@ bool firstSync() {
     return decoder && decoder->frame(0) && decoder->frame(5) && decoder->frame(40);
 }
 
+#ifdef __APPLE__
 bool scalerLabels() {
     CVPixelBufferRef source = nullptr;
     if (CVPixelBufferCreate(nullptr, 64, 64, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nullptr, &source) != kCVReturnSuccess) return false;
@@ -907,6 +910,7 @@ bool scalerLabels() {
     releaseBuffer(out);
     return out && out != source && same;
 }
+#endif
 
 bool finishTwice() {
     CaptureSpec spec;
@@ -984,7 +988,11 @@ const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"flac-rate", flacRate}, {"lace-bounds", laceBounds}, {"vorbis-modes", vorbisModes}, {"sps-limits", spsLimits}, {"tag-flags", tagFlags},
     {"pcm-checked", pcmChecked}, {"after-finish", afterFinish}, {"pcm-trim", pcmTrim}, {"long-file", longFile}, {"stream-flags", streamFlags},
     {"late-trim", lateTrim}, {"empty-sample", emptySample}, {"wide-clock", wideClock}, {"avi-repeated-index", aviRepeatedIndex}, {"track-seconds", trackSeconds},
-    {"first-sync", firstSync}, {"scaler-labels", scalerLabels}, {"finish-twice", finishTwice}, {"many-tracks", manyTracks}, {"long-gap", longGap}, {"wma-block-align", wmaBlockAlign},
+    {"first-sync", firstSync}, 
+#ifdef __APPLE__
+    {"scaler-labels", scalerLabels},
+#endif
+    {"finish-twice", finishTwice}, {"many-tracks", manyTracks}, {"long-gap", longGap}, {"wma-block-align", wmaBlockAlign},
 };
 
 int fixcheck(const Args& args) {

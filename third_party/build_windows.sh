@@ -97,7 +97,8 @@ fetch https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.bz2 aeeaae952d4db3
 sources=""
 for f in $(sed -n '/^SRC_GENERIC/,/^$/p' build/generic/sources.inc | grep -o '[a-z_0-9/]*\.c'); do sources="$sources src/$f"; done
 plain_library xvidcore $sources
-COMPILER=clang-cl with_cmake "-DINCLUDES=src" "-DDEFINES=ARCH_IS_GENERIC;ARCH_IS_64BIT;ARCH_IS_LITTLE_ENDIAN"
+sed -i "s/#if !defined(_MSC_VER) || defined(ARCH_IS_X86_64)/#if 1/" src/motion/gmc.c
+with_cmake "-DINCLUDES=src" "-DDEFINES=ARCH_IS_GENERIC;ARCH_IS_64BIT;ARCH_IS_LITTLE_ENDIAN"
 cp src/xvid.h "$PREFIX/include/"
 fi
 

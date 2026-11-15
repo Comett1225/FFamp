@@ -8,7 +8,7 @@ for f in hevc10_270p.mp4 hdr_pq_270p.mp4 hdr_hlg_270p.mp4 h264_mbaff_272p.mp4 h2
 done
 for f in vp9_270p.mp4 vp9_10bit_270p.mp4 vp9_270p.ivf av1_270p.mp4 av1_10bit_270p.mp4 av1_270p.ivf; do
     case $f in vp9*) library=libvpx ;; *) library=dav1d ;; esac
-    check "$f opens with the system decoder" vx_backend $f videotoolbox
+    if on_mac; then check "$f opens with the system decoder" vx_backend $f videotoolbox; fi
     check "$f opens with $library when asked" vx_backend $f $library --software
     check "software decode $f matches the checked checksum" vx_sum $f --software
     check "software seek $f equals the straight decode" python3 comparex.py selfseek $VX/$f 24 5 --software

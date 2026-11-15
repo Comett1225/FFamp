@@ -425,6 +425,7 @@ std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::ve
     }
     const VideoInfo info = mpeg ? VideoInfo() : videoInfo(track.configType, config);
     std::string why;
+    if (track.width < 64 || track.height < 64) return nullptr;
     for (bool useGpu : {d3dEnabled(), false}) {
         auto decoder = std::make_unique<MfVideoDecoder>();
         decoder->hevc = hevc;
@@ -449,6 +450,7 @@ std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::ve
 
 std::unique_ptr<SoftEncoder> openPlatformEncoder(const EncodeSpec& spec, std::string* error) {
     if (!mediaFoundation() || std::getenv("FFAMP_NO_SYSTEM_ENCODER")) return nullptr;
+    if (int64_t(spec.width) * spec.height < 320 * 240) return nullptr;
     for (bool hardware : {true, false}) {
         auto encoder = std::make_unique<MfVideoEncoder>();
         encoder->spec = spec;

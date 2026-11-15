@@ -43,7 +43,7 @@ done
 for c in h264 hevc av1 vp9; do
     case $c in h264 | hevc) e=mp4 ;; *) e=ivf ;; esac
     $A encode-surface $O/vx_surface_$c.$e --video $O/vx_src.bgra --size 480x270 --codec $c --bitrate 1500000 2> /dev/null
-    check "$c straight from BGRA surfaces: PSNR over 38 dB" python3 comparex.py quality $O/vx_surface_$c.$e $O/vx_ref.yuv 480 270 38
+    if on_mac; then check "$c straight from BGRA surfaces: PSNR over 38 dB" python3 comparex.py quality $O/vx_surface_$c.$e $O/vx_ref.yuv 480 270 38; else skip "$c straight from BGRA surfaces (IOSurface input exists only on the Mac)"; fi
 done
 check "surface H.264 opens in AVFoundation" ../build/avcheck $O/vx_surface_h264.mp4
 check "surface HEVC opens in AVFoundation" ../build/avcheck $O/vx_surface_hevc.mp4

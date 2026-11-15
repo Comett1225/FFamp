@@ -42,6 +42,11 @@ absent_optional(VPX ABSENT_VPX vpx/vpx_decoder.h libvpx.a vpx)
 absent_optional(SVTAV1 ABSENT_SVTAV1 svt-av1/EbSvtAv1Enc.h SvtAv1Enc)
 absent_optional(XVID ABSENT_XVID xvid.h libxvidcore.a xvidcore)
 
+if(ANDROID)
+    file(GLOB ANDROID_SOURCES CONFIGURE_DEPENDS src/android/*.cpp)
+    target_sources(ffamp_lib PRIVATE ${ANDROID_SOURCES})
+endif()
+
 if(APPLE)
     file(GLOB MAC_SOURCES CONFIGURE_DEPENDS src/mac/*.cpp src/mac/*.mm)
     target_sources(ffamp_lib PRIVATE ${MAC_SOURCES})

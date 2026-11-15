@@ -26,7 +26,7 @@ std::string fourccText(uint32_t value) {
 
 double Track::seconds() const {
     if (!timescale || order.empty()) return 0;
-    int64_t end = 0;
+    int64_t end = INT64_MIN;
     for (uint32_t i : order) end = std::max(end, samples[i].pts + int64_t(samples[i].duration));
     return double(end - mediaStart) / timescale;
 }

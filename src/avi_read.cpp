@@ -140,7 +140,7 @@ OrderFields orderFields(const std::vector<uint8_t>& set) {
     r.ue();
     r.ue();
     f.framesOnly = r.bit();
-    f.usable = r.ok && kind == 0 && f.numberBits <= 16 && f.countBits <= 16;
+    f.usable = r.ok && kind == 0 && f.numberBits >= 4 && f.numberBits <= 16 && f.countBits >= 4 && f.countBits <= 16;
     return f;
 }
 
@@ -436,6 +436,7 @@ public:
         s.ends.reserve(s.chunks.size());
         uint64_t total = 0;
         for (const Chunk& c : s.chunks) s.ends.push_back(total += c.size);
+        total = std::min(total, source.size());
         const bool pcm = s.tag == 1 || s.tag == 3;
         if (pcm) {
             const uint64_t frameBytes = uint64_t(t.channels) * uint64_t((t.bits + 7) / 8);

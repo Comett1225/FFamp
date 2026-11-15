@@ -548,7 +548,8 @@ struct WmaAudio : PacketDecoder {
     }
 
     void feed(const std::vector<uint8_t>& packet, std::vector<float>& out) override {
-        for (size_t at = 0; packet.size() - at >= size_t(blockAlign); at += size_t(blockAlign)) superframe(packet.data() + at, out);
+        const size_t limit = out.size() + size_t(most(packet.size())) * size_t(channels);
+        for (size_t at = 0; packet.size() - at >= size_t(blockAlign) && out.size() <= limit; at += size_t(blockAlign)) superframe(packet.data() + at, out);
     }
 
     void skim(const std::vector<uint8_t>& packet) override {
@@ -565,6 +566,8 @@ struct WmaAudio : PacketDecoder {
             for (int i = 0; i < frameLength; ++i) out[at + size_t(i) * size_t(channels) + size_t(ch)] = frameOut[ch][i];
     }
 
+    int64_t most(size_t size) const { return int64_t(size) * 32 + int64_t(frameLength) * 15; }
+
     bool counts(Reader& file, const Track& track, std::vector<int64_t>& frames) override {
         const size_t n = track.samples.size();
         frames.assign(n, 0);
@@ -574,7 +577,7 @@ struct WmaAudio : PacketDecoder {
             const uint32_t size = track.samples[i].size;
             const uint32_t units = size / uint32_t(blockAlign);
             if (!reservoir) {
-                frames[i] = int64_t(units) * frameLength;
+                frames[i] = std::min(int64_t(units) * frameLength, most(size));
                 continue;
             }
             packet.resize(size);
@@ -585,6 +588,7 @@ struct WmaAudio : PacketDecoder {
                 frames[i] += int64_t(first ? stated - 1 : stated) * frameLength;
                 first = false;
             }
+            frames[i] = std::min(frames[i], most(size));
         }
         if (n) frames[n - 1] += frameLength;
         return true;

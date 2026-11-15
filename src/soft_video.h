@@ -73,6 +73,8 @@ std::unique_ptr<SoftDecoder> openDe265(const std::vector<uint8_t>& config, std::
 std::unique_ptr<SoftEncoder> openX264(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftEncoder> openX265(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftDecoder> openXvid(const std::vector<uint8_t>& esds, int width, int height);
+std::unique_ptr<SoftDecoder> openProRes(uint32_t codec, std::string* error);
+std::unique_ptr<SoftDecoder> openDv();
 
 bool vp9Shape(const uint8_t* frame, size_t size, StreamShape& shape);
 std::vector<uint8_t> vp9Config(const StreamShape& shape, double fps, int bitrate);

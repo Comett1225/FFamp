@@ -20,8 +20,8 @@ def info(path, extra):
     width, height = (int(v) for v in found["size"].split("x"))
     chroma_width, chroma_height = (int(v) for v in found["chroma"].split("x"))
     found.update(width=width, height=height, depth=int(found["bits"]), count=int(found["frames"]), chroma_width=chroma_width, chroma_height=chroma_height)
-    layout = "444" if chroma_width == width else "420" if chroma_height < height else "422"
-    found["pix_fmt"] = "yuv" + layout + ("p" if found["depth"] == 8 else "p10le")
+    layout = "444" if chroma_width == width else "420" if chroma_height < height else "411" if chroma_width < (width + 1) // 2 else "422"
+    found["pix_fmt"] = "yuv" + layout + ("p" if found["depth"] == 8 else f"p{found['depth']}le")
     found["frame_bytes"] = (width * height + 2 * chroma_width * chroma_height) * (1 if found["depth"] == 8 else 2)
     return found
 

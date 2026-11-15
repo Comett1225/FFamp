@@ -196,7 +196,8 @@ void pictureToI420(const Picture& p, std::vector<uint8_t>& out) {
             const uint8_t* a = source + size_t(std::min(y * stepY, p.chromaHeight - 1)) * size_t(p.chromaWidth);
             const uint8_t* b = source + size_t(std::min(y * stepY + stepY - 1, p.chromaHeight - 1)) * size_t(p.chromaWidth);
             for (int x = 0; x < cw; ++x) {
-                const int x0 = std::min(x * stepX, p.chromaWidth - 1), x1 = std::min(x * stepX + stepX - 1, p.chromaWidth - 1);
+                const int x0 = p.chromaWidth < cw ? x * p.chromaWidth / cw : std::min(x * stepX, p.chromaWidth - 1);
+                const int x1 = p.chromaWidth < cw ? x0 : std::min(x * stepX + stepX - 1, p.chromaWidth - 1);
                 to[size_t(y) * size_t(cw) + size_t(x)] = uint8_t((a[x0] + a[x1] + b[x0] + b[x1] + 2) >> 2);
             }
         }
@@ -218,7 +219,7 @@ void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, in
     const float top = float((1 << p.bits) - 1), unit = float(1 << (p.bits - 8));
     const float lumaBase = p.color.full ? 0 : 16 * unit, lumaScale = p.color.full ? 1 / top : 1 / (219 * unit);
     const float chromaBase = 128 * unit, chromaScale = p.color.full ? 1 / top : 1 / (224 * unit);
-    const bool halfRows = p.chromaHeight < p.height, halfColumns = p.chromaWidth < p.width;
+    const bool halfRows = p.chromaHeight < p.height, halfColumns = p.chromaWidth < p.width, quarterColumns = p.chromaWidth * 2 < p.width;
     const std::vector<float>& linear = hlg ? levels.hlg : levels.pq;
 
 
@@ -269,7 +270,13 @@ void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, in
         const int ri = redFirst ? 0 : 2, bi = redFirst ? 2 : 0;
         for (int x = 0; x < p.width; ++x, row += 4) {
             float cb, cr;
-            if (halfColumns) {
+            if (quarterColumns) {
+                const size_t c = std::min(size_t(x / 4), cw - 1);
+                const size_t beside = x % 4 >= 2 ? c + 1 : (c > 0 ? c - 1 : 0);
+                const float t = x % 4 == 0 || x % 4 == 3 ? 0.375f : 0.125f;
+                cb = u[c] + t * (u[beside] - u[c]);
+                cr = v[c] + t * (v[beside] - v[c]);
+            } else if (halfColumns) {
                 const size_t c = std::min(size_t(x / 2), cw - 1);
                 const size_t beside = x % 2 ? c + 1 : (c > 0 ? c - 1 : 0);
                 cb = 0.75f * u[c] + 0.25f * u[beside];

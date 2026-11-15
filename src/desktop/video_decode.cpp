@@ -402,7 +402,10 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool part2 = codec == fourcc("mp4v") && track.configType == fourcc("esds");
     const bool jpeg = codec == fourcc("jpeg");
     const bool mpeg = codec == fourcc("mp1v") || codec == fourcc("mp2v");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg) return fail("video codec not supported by this decoder");
+    const bool twelve = codec == fourcc("ap4h") || codec == fourcc("ap4x");
+    const bool prores = twelve || codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco");
+    const bool dv = (codec >> 16) == 0x6476;
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -421,6 +424,13 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.chromaX = chroma == 2 ? 1 : 0;
         d.shape.chromaY = 0;
         if (chroma != 2 && chroma != 3) return fail("this APV picture format is not supported");
+    } else if (prores) {
+        d.shape.bits = twelve ? 12 : 10;
+        d.shape.chromaX = twelve ? 0 : 1;
+        d.shape.chromaY = 0;
+    } else if (dv) {
+        d.shape.chromaX = codec == fourcc("dvc ") || codec == fourcc("dvpp") ? 2 : 1;
+        d.shape.chromaY = codec == fourcc("dvcp") ? 1 : 0;
     } else if (part2 || jpeg || mpeg) {
         d.shape.chromaY = 1;
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
@@ -467,6 +477,10 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.color = Color();
     } else if (apv) {
         d.soft = openApvDecoder(error);
+    } else if (prores) {
+        d.soft = openProRes(codec, error);
+    } else if (dv) {
+        d.soft = openDv();
     } else if (av1) {
         d.soft = openDav1d(int(d.ahead), error);
         if (d.soft) d.ahead += d.ahead / 2;

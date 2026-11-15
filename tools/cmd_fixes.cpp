@@ -1,7 +1,10 @@
 #include "../src/aac_config.h"
+#include "../src/capture.h"
 #include "../src/nal.h"
+#include "../src/tools_common.h"
 #include "absent/audio.h"
 #include "cli.h"
+#include <CoreVideo/CoreVideo.h>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -784,13 +787,204 @@ bool wideClock() {
     return VideoDecoder::open(*source, *from) && !VideoDecoder::open(*source, copy);
 }
 
+void chunk(std::vector<uint8_t>& out, const char* id, const std::vector<uint8_t>& body) {
+    text(out, id);
+    little(out, body.size(), 4);
+    out.insert(out.end(), body.begin(), body.end());
+    if (body.size() & 1) out.push_back(0);
+}
+
+std::vector<uint8_t> listed(const char* kind, const std::vector<uint8_t>& body) {
+    std::vector<uint8_t> inner, out;
+    text(inner, kind);
+    inner.insert(inner.end(), body.begin(), body.end());
+    chunk(out, "LIST", inner);
+    return out;
+}
+
+std::vector<uint8_t> repeatedSound(uint16_t tag, const std::vector<uint8_t>& payload, int repeats) {
+    std::vector<uint8_t> header, format, stream, hdrl, movi, index, body, file;
+    text(header, "auds");
+    little(header, 0, 4);
+    little(header, 0, 4);
+    little(header, 0, 8);
+    little(header, 1, 4);
+    little(header, 8000, 4);
+    header.resize(header.size() + 28, 0);
+    little(format, tag, 2);
+    little(format, 1, 2);
+    little(format, 8000, 4);
+    little(format, 8000, 4);
+    little(format, 1, 2);
+    little(format, 8, 2);
+    chunk(stream, "strh", header);
+    chunk(stream, "strf", format);
+    chunk(hdrl, "avih", std::vector<uint8_t>(56, 0));
+    std::vector<uint8_t> list = listed("strl", stream);
+    hdrl.insert(hdrl.end(), list.begin(), list.end());
+    chunk(movi, "00wb", payload);
+    for (int i = 0; i < repeats; ++i) {
+        text(index, "00wb");
+        little(index, 0x10, 4);
+        little(index, 4, 4);
+        little(index, payload.size(), 4);
+    }
+    text(body, "AVI ");
+    for (const std::vector<uint8_t>& part : {listed("hdrl", hdrl), listed("movi", movi)}) body.insert(body.end(), part.begin(), part.end());
+    chunk(body, "idx1", index);
+    chunk(file, "RIFF", body);
+    return file;
+}
+
+bool aviRepeatedIndex() {
+    auto mp3 = Reader::open(fixtures + "/readers/cbr.mp3");
+    if (!mp3 || mp3->tracks().empty()) return false;
+    const Track& t = mp3->tracks()[0];
+    std::vector<uint8_t> frames;
+    for (uint32_t i = 0; i < t.samples.size() && frames.size() < 8192; ++i) {
+        std::vector<uint8_t> one(t.samples[i].size);
+        if (!mp3->read(t, i, one.data())) return false;
+        frames.insert(frames.end(), one.begin(), one.end());
+    }
+    for (const auto& [tag, payload] : {std::pair<uint16_t, std::vector<uint8_t>>{1, std::vector<uint8_t>(8192, 128)}, {0x55, frames}}) {
+        const std::vector<uint8_t> file = repeatedSound(tag, payload, 2000);
+        const std::string path = scratch("repeated.avi");
+        if (!save(path, file)) return false;
+        auto reader = Reader::open(path);
+        if (!reader || reader->tracks().empty()) return false;
+        uint64_t bytes = 0;
+        for (const Sample& s : reader->tracks()[0].samples) bytes += s.size;
+        if (!bytes || bytes > file.size()) return false;
+    }
+    return true;
+}
+
+bool trackSeconds() {
+    const std::string source = fixtures + "/asf/h264_mp3.asf";
+    std::vector<uint8_t> file = load(source);
+    static const uint8_t properties[16] = {0xA1, 0xDC, 0xAB, 0x8C, 0x47, 0xA9, 0xCF, 0x11, 0x8E, 0xE4, 0x00, 0xC0, 0x0C, 0x20, 0x53, 0x65};
+    auto at = std::search(file.begin(), file.end(), properties, properties + 16);
+    if (file.end() - at < 88) return false;
+    for (int i = 0; i < 8; ++i) at[80 + i] = uint8_t(uint64_t(100000) >> (8 * i));
+    const std::string path = scratch("late.asf");
+    auto plain = Reader::open(source);
+    if (!plain || !save(path, file)) return false;
+    auto late = Reader::open(path);
+    if (!late || late->tracks().size() != plain->tracks().size()) return false;
+    for (size_t i = 0; i < plain->tracks().size(); ++i)
+        if (late->tracks()[i].mediaStart >= 0 || std::fabs(late->tracks()[i].seconds() - plain->tracks()[i].seconds()) > 0.002) return false;
+    return true;
+}
+
+bool firstSync() {
+    std::vector<uint8_t> file = load(fixtures + "/probe/h264.mp4");
+    static const char name[] = "stss";
+    auto at = std::search(file.begin(), file.end(), name, name + 4);
+    if (file.end() - at < 20 || at[11] != 2 || at[15] != 1 || at[19] != 31) return false;
+    at[11] = 1;
+    at[15] = 31;
+    const std::string path = scratch("late_key.mp4");
+    if (!save(path, file)) return false;
+    auto reader = Reader::open(path);
+    const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+    if (!video || video->syncs.size() != 1 || video->syncs[0] != 30) return false;
+    auto decoder = VideoDecoder::open(*reader, *video);
+    return decoder && decoder->frame(0) && decoder->frame(5) && decoder->frame(40);
+}
+
+bool scalerLabels() {
+    CVPixelBufferRef source = nullptr;
+    if (CVPixelBufferCreate(nullptr, 64, 64, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nullptr, &source) != kCVReturnSuccess) return false;
+    CVBufferSetAttachment(source, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_SMPTE_C, kCVAttachmentMode_ShouldPropagate);
+    Frame frame;
+    frame.native = std::shared_ptr<void>(source, [](void* p) { CFRelease(p); });
+    frame.width = frame.height = 64;
+    Scaler scaler(64, 64);
+    void* out = scaler.fit(frame);
+    CFTypeRef kept = CVBufferCopyAttachment(source, kCVImageBufferColorPrimariesKey, nullptr);
+    const bool same = kept && CFEqual(kept, kCVImageBufferColorPrimaries_SMPTE_C);
+    if (kept) CFRelease(kept);
+    releaseBuffer(out);
+    return out && out != source && same;
+}
+
+bool finishTwice() {
+    CaptureSpec spec;
+    spec.video = kTestDevice;
+    spec.record = scratch("never.mp4");
+    CaptureRecorder recorder(spec, false);
+    return !recorder.finish(nullptr) && !recorder.finish(nullptr) && recorder.failed(nullptr);
+}
+
+bool manyTracks() {
+    const std::string path = scratch("many.mka");
+    auto writer = Writer::open(path);
+    if (!writer) return false;
+    std::vector<int> ids;
+    for (int i = 0; i < 130; ++i) ids.push_back(writer->add(soundSpec("lpcm", 48000, 48000, 1)));
+    const uint8_t frames[4] = {1, 2, 3, 4};
+    for (int id : ids) if (!writer->write(id, frames, 4, 0, 0, 2, true)) return false;
+    if (!writer->finish()) return false;
+    auto reader = Reader::open(path);
+    if (!reader || reader->tracks().size() != ids.size()) return false;
+    for (const Track& t : reader->tracks()) if (t.samples.size() != 1) return false;
+    return true;
+}
+
+bool longGap() {
+    auto source = Reader::open(fixtures + "/video/h264_270p.mp4");
+    const Track* from = source ? source->first(Kind::Video) : nullptr;
+    if (!from || from->samples.size() < 3) return false;
+    const std::string path = scratch("gap.mp4");
+    auto writer = Mp4Writer::open(path);
+    if (!writer) return false;
+    TrackSpec spec = specOf(*from);
+    spec.timescale = 1000000000;
+    int track = writer->add(spec);
+    const int64_t times[3] = {0, 5000000000, 5040000000};
+    std::vector<uint8_t> data;
+    for (uint32_t i = 0; i < 3; ++i) {
+        data.resize(from->samples[i].size);
+        if (!source->read(*from, i, data.data()) || !writer->write(track, data.data(), data.size(), times[i], times[i], 40000000, from->samples[i].sync)) return false;
+    }
+    if (!writer->finish()) return false;
+    auto reader = Reader::open(path);
+    const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+    if (!video || video->samples.size() != 3) return false;
+    for (uint32_t i = 0; i < 3; ++i) if (std::fabs(double(video->samples[i].dts) / video->timescale - double(times[i]) / 1e9) > 1e-6) return false;
+    return true;
+}
+
+bool wmaBlockAlign() {
+    std::vector<uint8_t> format;
+    little(format, 0x161, 2);
+    little(format, 1, 2);
+    little(format, 48000, 4);
+    little(format, 4000, 4);
+    little(format, 1, 2);
+    little(format, 16, 2);
+    little(format, 10, 2);
+    little(format, 0, 4);
+    little(format, 2, 2);
+    little(format, 0, 4);
+    std::vector<uint8_t> block = {0x81, 0, 0, 0x80};
+    block.resize(4 + 8192, 0xFF);
+    const std::string path = scratch("tiny_align.mka");
+    if (!save(path, matroska("A_MS/ACM", format, block))) return false;
+    auto reader = Reader::open(path);
+    if (!reader || reader->tracks().empty() || reader->tracks()[0].codec != fourcc("wma2")) return false;
+    auto decoder = AudioDecoder::open(*reader, reader->tracks()[0]);
+    return decoder && decoder->length() > 0 && decoder->length() < 1000000;
+}
+
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre},
     {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
     {"aac-rate", aacRate}, {"rf64-size", rf64Size}, {"aifc-flip", aifcFlip}, {"trun-offset", trunOffset}, {"decode-time-limit", decodeTimeLimit},
     {"flac-rate", flacRate}, {"lace-bounds", laceBounds}, {"vorbis-modes", vorbisModes}, {"sps-limits", spsLimits}, {"tag-flags", tagFlags},
     {"pcm-checked", pcmChecked}, {"after-finish", afterFinish}, {"pcm-trim", pcmTrim}, {"long-file", longFile}, {"stream-flags", streamFlags},
-    {"late-trim", lateTrim}, {"empty-sample", emptySample}, {"wide-clock", wideClock},
+    {"late-trim", lateTrim}, {"empty-sample", emptySample}, {"wide-clock", wideClock}, {"avi-repeated-index", aviRepeatedIndex}, {"track-seconds", trackSeconds},
+    {"first-sync", firstSync}, {"scaler-labels", scalerLabels}, {"finish-twice", finishTwice}, {"many-tracks", manyTracks}, {"long-gap", longGap}, {"wma-block-align", wmaBlockAlign},
 };
 
 int fixcheck(const Args& args) {

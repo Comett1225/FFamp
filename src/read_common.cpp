@@ -379,16 +379,16 @@ bool splitXiph(const std::vector<uint8_t>& laced, std::vector<View>& packets) {
     size_t count = size_t(laced[0]) + 1;
     size_t at = 1;
     std::vector<size_t> sizes;
-    size_t used = 0;
+    uint64_t used = 0;
     for (size_t i = 0; i + 1 < count; ++i) {
-        size_t size = 0;
+        uint64_t size = 0;
         for (;;) {
             if (at >= laced.size()) return false;
             uint8_t b = laced[at++];
             size += b;
             if (b != 255) break;
         }
-        sizes.push_back(size);
+        sizes.push_back(size_t(size));
         used += size;
     }
     if (used > laced.size() - at) return false;

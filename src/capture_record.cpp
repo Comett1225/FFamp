@@ -225,6 +225,7 @@ bool CaptureRecorder::finish(std::string* error) {
     std::lock_guard<std::mutex> hold(lock);
     auto fail = [&](const std::string& text) {
         if (error) *error = text;
+        if (problem.empty()) problem = text;
         writer.reset();
         if (!spec.record.empty()) removeFile(spec.record);
         return false;

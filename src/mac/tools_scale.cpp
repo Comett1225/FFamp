@@ -36,9 +36,13 @@ bool tagged(CVPixelBufferRef buffer, CFStringRef key, CFStringRef wanted, bool& 
 }
 
 void tag(CVPixelBufferRef buffer) {
-    CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
-    CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
-    CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVAttachmentMode_ShouldPropagate);
+    const CFStringRef keys[3] = {kCVImageBufferColorPrimariesKey, kCVImageBufferTransferFunctionKey, kCVImageBufferYCbCrMatrixKey};
+    const CFStringRef values[3] = {kCVImageBufferColorPrimaries_ITU_R_709_2, kCVImageBufferTransferFunction_ITU_R_709_2, kCVImageBufferYCbCrMatrix_ITU_R_709_2};
+    for (int i = 0; i < 3; ++i) {
+        bool present = false;
+        tagged(buffer, keys[i], values[i], present);
+        if (!present) CVBufferSetAttachment(buffer, keys[i], values[i], kCVAttachmentMode_ShouldPropagate);
+    }
 }
 
 }

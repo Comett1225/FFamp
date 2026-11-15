@@ -191,7 +191,7 @@ struct MkvWriter::Impl {
             if (lead && key) cues.push_back({clusterTime, track, size});
         }
         Bytes body;
-        body.u8(0x80 | uint32_t(track + 1));
+        length(body, uint64_t(track + 1));
         body.u16(uint32_t(int16_t(time - clusterTime)));
         body.u8(key && discard == 0 ? 0x80 : 0);
         if (discard) {

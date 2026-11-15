@@ -35,6 +35,7 @@ struct Crew {
     const std::function<void(int, int)>* work = nullptr;
     int rows = 0;
     int left = 0;
+    int busy = 0;
     uint64_t round = 0;
     std::atomic<int> next{1 << 30};
 
@@ -47,8 +48,11 @@ struct Crew {
                         std::unique_lock<std::mutex> hold(lock);
                         wake.wait(hold, [&] { return round != seen; });
                         seen = round;
+                        ++busy;
                     }
                     help();
+                    std::lock_guard<std::mutex> hold(lock);
+                    if (--busy == 0) done.notify_all();
                 }
             }).detach();
         }
@@ -67,7 +71,8 @@ struct Crew {
     void run(int count, const std::function<void(int, int)>& job) {
         std::lock_guard<std::mutex> mine(turn);
         {
-            std::lock_guard<std::mutex> hold(lock);
+            std::unique_lock<std::mutex> hold(lock);
+            done.wait(hold, [&] { return busy == 0; });
             work = &job;
             rows = count;
             parts = std::min(hands * 4, count / 16);

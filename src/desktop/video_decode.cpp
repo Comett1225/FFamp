@@ -367,7 +367,7 @@ struct VideoDecoder::Impl {
             --it;
             if (track->samples[*it].pts <= track->samples[target].pts) return *it;
         }
-        return keys.empty() ? 0 : keys.front();
+        return keys.empty() || keys.front() > target ? 0 : keys.front();
     }
 
     std::shared_ptr<Image> take(int64_t pts) {

@@ -160,7 +160,7 @@ if have_ffmpeg; then
     $A frames-in $O/cap_w.mp4 --size 320x180 --fps 30 --start 1.25 --audio-from fixtures/audio/aac_stereo_44k.m4a --in $O/cap_in.raw 2> /dev/null
     check "FFmpeg reads the frames-in file without complaint" clean $O/cap_w.mp4
     check "FFmpeg counts 30 frames" cap_frames $O/cap_w.mp4 30
-    check "FFmpeg sees the held first frame and the shifted second one" [ "$($FFPROBE -v error -select_streams v:0 -show_entries packet=pts_time -of csv=p=0 $O/cap_w.mp4 | sort -n | head -3 | tr '\n' ' ')" = "0.000000 1.250000 1.283333 " ]
+    check "FFmpeg sees the held first frame and the shifted second one" [ "$($FFPROBE -v error -select_streams v:0 -show_entries packet=pts_time -of csv=p=0 $O/cap_w.mp4 | tr -d '\r' | sort -n | head -3 | tr '\n' ' ')" = "0.000000 1.250000 1.283333 " ]
     cap_beats_mpeg4() {
         $F -f lavfi -i "$1" -frames:v 45 -pix_fmt yuv420p -f rawvideo $O/cap_src.yuv
         $F -f rawvideo -pix_fmt yuv420p -s 1280x720 -r 30 -i $O/cap_src.yuv -c:v mpeg4 -q:v 2 -pix_fmt yuv420p $O/cap_m4.mp4

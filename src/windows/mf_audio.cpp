@@ -115,6 +115,7 @@ struct MfAac : AacCore {
     int rate = 0;
     int channels = 0;
     int64_t clock = 0;
+    bool started = false;
 
     const char* name() const override { return "mediafoundation"; }
 
@@ -147,8 +148,16 @@ struct MfAac : AacCore {
         }
     }
 
+    bool lead(const AudioSink& sink) {
+        if (started) return true;
+        started = true;
+        const std::vector<int16_t> quiet(size_t(priming) * size_t(channels), 0);
+        return encode(quiet.data(), size_t(priming), sink);
+    }
+
     bool encode(const int16_t* pcm, size_t frames, const AudioSink& sink) override {
         if (!frames) return true;
+        if (!lead(sink)) return false;
         const size_t bytes = frames * size_t(channels) * 2;
         const int64_t duration = int64_t(frames) * 10000000 / rate;
         HRESULT result = S_OK;
@@ -160,6 +169,7 @@ struct MfAac : AacCore {
     }
 
     bool finish(const AudioSink& sink) override {
+        if (!lead(sink)) return false;
         transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
         transform->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
         return pull(sink);
@@ -234,7 +244,7 @@ std::unique_ptr<AacCore> openPlatformAac(int rate, int channels, int bitrate, st
     }
     encoder->transform->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     encoder->transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
-    encoder->priming = 0;
+    encoder->priming = 1024;
     return encoder;
 }
 

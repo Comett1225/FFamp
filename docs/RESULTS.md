@@ -806,7 +806,13 @@ the FFmpeg the app uses there today.
 
 `tests/run.sh` in Git Bash, FFamp built with clang-cl, the libraries with MSVC (no assembly yet):
 
-WINDOWS_SUITE
+Full run on the build before the last fixes: 2,392 pass, 109 fail, 184 skip. Reruns of the suites those fixes touched, on the final
+build: video 30 pass / 0 fail, audio 163 / 0, writers 369 / 0, tools 127 / 0, capture 207 / 1 (fixed afterwards: the check read
+ffprobe's Windows line endings), formats 271 / 73, videox 109 / 6. What still fails: AC-3, E-AC-3, AMR, ProRes, DV and H.263 (no decoder
+on Windows yet), the MPEG-1/2 and Motion JPEG checksum tables (made with VideoToolbox; the same files match ffmpeg's decode within the
+suite's floors), the Vorbis trim check (FFmpeg's x86 build writes the test file without an end trim, so the check's arithmetic does not
+apply), and the speed checks of the Windows Media decoders against FFmpeg on one thread (FFmpeg's x86 build uses SIMD there, FFamp's x86
+path is plain C++). Fuzz targets are not built on Windows (the driver is POSIX); those checks are skipped.
 
 Against ffmpeg, frame by frame and sample by sample:
 
@@ -815,16 +821,16 @@ Against ffmpeg, frame by frame and sample by sample:
 | H.264 decode, Media Foundation on the GPU (`mediafoundation-gpu`): six clips, 720p and 1080p, MP4, MOV, fragmented MP4 | every frame bit-exact (4,800 of 4,800), also the H.264 fixtures with B-frames, MBAFF and PAFF |
 | HEVC decode, Media Foundation on the GPU: 8 and 10-bit, HDR10 and HLG fixtures | every frame bit-exact |
 | 50 random jumps per clip, H.264 and HEVC 720p and 1080p | every frame bit-exact (one wrong HEVC frame after a long backward jump was found and fixed: the decoder now feeds a few more samples instead of draining) |
-| MPEG-1 and MPEG-2 decode (Media Foundation) | WINDOWS_MPEG |
-| JPEG pictures (WIC, its own YCbCr planes) | WINDOWS_JPEG |
-| AAC decode (Media Foundation, LC and HE) | WINDOWS_AAC |
+| MPEG-1 and MPEG-2 decode (Media Foundation, new in this round) | within the suite's floor against ffmpeg in MP4, MOV, Matroska and AVI |
+| Motion JPEG (WIC hands out the picture's own YCbCr planes) | within the suite's floor against ffmpeg, 4:2:0, 4:2:2 and 4:4:4 |
+| AAC decode (Media Foundation, one frame of delay as lead) | every audio check passes, HE-AAC v1 and v2 included; MP1/MP2/MP3 through mpg123 |
 | H.264 and HEVC encode (the GPU driver's encoder MFT) | 1080p at 305 and 333 fps, files clean in ffprobe and FFmpeg's decoder |
-| AAC encode (Media Foundation, 128 kbit/s) | length to the sample after priming 0 was measured (the encoder starts on the first input frame) |
+| AAC encode (Media Foundation, 96 to 192 kbit/s) | length to the sample, no offset; the encoder starts without a run-in, so FFamp feeds one silent frame and marks it as priming (otherwise the first 1,024 samples decode badly) |
 | Software paths with Media Foundation turned off (`FFAMP_NO_MEDIA_FOUNDATION=1`, what Windows N without the Media Feature Pack gets) | OpenH264, libde265, FAAD2, x264 work; HEVC bit-exact, H.264 as on Linux (below) |
 
 ## Linux
 
-`tests/run.sh` in WSL, gcc 13, libraries with assembly: LINUX_SUITE
+`tests/run.sh` in WSL, gcc 13, libraries with assembly, final build: 2,345 pass, 175 fail, 188 skip (all fuzz targets and their kept inputs pass).
 
 What is left failing and why:
 
@@ -849,4 +855,46 @@ job the way the app runs them (one program start per thumbnail on both sides; th
 gain is larger than these numbers show). The clips are the suite's 60-second 1080p H.264 (8 Mbit/s) and HEVC (5 Mbit/s) with AAC
 sound, and 300 raw 1080p frames for the export.
 
-SPEED_TABLES
+Windows (Media Foundation on the GPU for H.264 and HEVC, the GPU encoder for H.264 export):
+
+| Task | FFamp | FFmpeg | FFamp faster by |
+|---|---|---|---|
+| open + probe, H.264 clip | 10 ms | 69 ms | 7.0x |
+| open + probe, HEVC clip | 11 ms | 29 ms | 2.7x |
+| frame index (packet list), H.264 / HEVC | 91 / 68 ms | 129 / 76 ms | 1.4x / 1.1x |
+| 12 thumbnails, H.264 / HEVC | 3.0 / 6.3 s | 1.8 / 3.4 s | 0.60x / 0.54x |
+| decode 1,800 frames to memory, H.264 | 4.1 s | 1.4 s (software), 2.3 s (`-hwaccel d3d11va`) | 0.34x / 0.56x |
+| decode 1,800 frames to memory, HEVC | 5.8 s | 2.6 s (software), 2.4 s (d3d11va) | 0.44x / 0.42x |
+| trim 20 s from 10 s, H.264 / HEVC | 34 / 32 ms | 99 / 52 ms | 2.9x / 1.6x |
+| extract audio by copy, H.264 / HEVC clip | 22 / 23 ms | 92 / 53 ms | 4.1x / 2.3x |
+| extract audio to MP3 128 kbit/s | 338 ms | 295 ms | 0.87x |
+| export MP4, 300 frames 1080p H.264 8 Mbit/s + AAC 128 kbit/s | 981 ms | 794 ms (FFmpeg's vendor encoder for this GPU, `aac_mf`) | 0.81x |
+
+Linux (software libraries; FFmpeg's own decoders use frame threads):
+
+| Task | FFamp | FFmpeg | FFamp faster by |
+|---|---|---|---|
+| open + probe, H.264 / HEVC clip | 1 / 2 ms | 55 / 13 ms | 37x / 8.3x |
+| frame index, H.264 / HEVC | 64 / 44 ms | 63 / 19 ms | 0.98x / 0.44x |
+| 12 thumbnails, H.264 / HEVC | 4.1 / 9.4 s | 2.2 / 4.0 s | 0.54x / 0.42x |
+| decode 1,800 frames to memory, H.264 (OpenH264) | 17.3 s | 1.5 s | 0.09x |
+| decode 1,800 frames to memory, HEVC (libde265) | 11.2 s | 2.8 s | 0.25x |
+| trim 20 s from 10 s, H.264 / HEVC | 21 / 21 ms | 83 / 38 ms | 4.0x / 1.8x |
+| extract audio by copy, H.264 / HEVC clip | 8 / 7 ms | 83 / 36 ms | 10x / 5.0x |
+| extract audio to MP3 128 kbit/s | 354 ms | 375 ms | 1.06x |
+| export MP4, 300 frames 1080p H.264 8 Mbit/s + AAC 128 kbit/s | 1.43 s | 1.43 s (`libx264` veryfast, `aac`) | 1.00x |
+
+What the numbers say:
+
+- Opening, probing, trimming and copying sound are faster on both systems, as on the Mac and Android: FFamp's readers start at once.
+- Decoding is where FFamp loses on these two systems today. On Linux OpenH264 decodes on one thread (104 fps for this noisy 1080p
+  clip against FFmpeg's 1,200 fps with frame threads); its own frame threads lost frames at the end of the stream in a test, so they
+  are off. libde265 uses its slice threads only. On Windows the GPU decodes, but every picture is copied back through Media Foundation,
+  copied into FFamp's frame and turned into I420 on one thread (about 435 fps for H.264, 310 for HEVC). Thumbnails follow the decoder,
+  plus a Media Foundation start per program here. In the app FFamp runs in its own process, so the per-program start disappears, but
+  the decode speed remains the gap to close: OpenH264 frame threads, a second decoder instance ahead in the next group, or VA-API on
+  Linux; on Windows handing the D3D11 texture to the app without the copies.
+- Exporting is level on Linux (x264 on both sides) and 19 % slower on Windows, where FFmpeg drives the GPU through the vendor's own
+  interface and FFamp through the vendor's Media Foundation MFT.
+
+Commands: `tests/speed.py <folder with the suite's clips>`, best of two to five runs; FFmpeg is the BtbN 9.0.2 build the app bundles.

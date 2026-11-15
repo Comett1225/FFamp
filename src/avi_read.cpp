@@ -588,6 +588,7 @@ public:
         const bool avc = t.codec == fourcc("avc1");
         const bool vc1 = vc1Codec(t.codec) && !t.config.empty();
         const bool ms = msmpeg4Codec(t.codec);
+        const bool h263 = t.codec == fourcc("h263");
         std::vector<Shown> frames;
         frames.reserve(s.chunks.size());
         NalList sps, pps;
@@ -660,6 +661,12 @@ public:
                 if (!p) continue;
                 f.type = msmpeg4PictureType(t.codec, p, want);
                 if (f.type < 0) f.type = 1;
+            } else if (h263 && !f.empty) {
+                const size_t want = std::min<size_t>(c.size, kHead);
+                const uint8_t* p = source.view(c.at, want);
+                if (!p) continue;
+                f.type = h263PictureType(p, want);
+                if (f.type < 0) f.type = 1;
             } else if ((part2 || mpeg) && !f.empty) {
                 const size_t want = packedStream ? c.size : std::min<size_t>(c.size, kHead);
                 const uint8_t* p = source.view(c.at, want);
@@ -716,7 +723,7 @@ public:
             t.configType = fourcc("esds");
             t.config = mpeg4Descriptor(chosen.data(), chosen.size());
         }
-        const bool typed = avc || part2 || mpeg || vc1 || ms;
+        const bool typed = avc || part2 || mpeg || vc1 || ms || h263;
         bool reordered = false;
         if (part2 || mpeg || vc1) for (const Shown& f : frames) reordered = reordered || (!f.empty && f.type == 2);
         std::vector<int64_t> slots(frames.size(), 0);

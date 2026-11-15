@@ -13,7 +13,7 @@ done
 for f in $FA_AUDIO; do case $f in *aac*|*opus*|*mp3*|*mp2*) judge=float_check ;; *) judge=check ;; esac; $judge "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
 for f in $FA_VIDEO; do
     table=pictures
-    case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; esac
+    case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; h263*) on_mac || table=pictures_desktop ;; esac
     check "$f pictures decode to the checked checksum" listed $table $f $A decode $FX/$f
 done
 
@@ -123,6 +123,7 @@ check "AC-3 2.1 comes out as 5.1 with every channel in its place" $FC layout $FX
 
 echo "== formats: pictures against ffmpeg's own decode"
 while read f floor; do
+    case $f in h263*) on_mac || floor=0 ;; esac
     check "decode $f" python3 comparex.py decode $FX/$f $floor
 done <<TABLE
 mpeg4.mp4 45

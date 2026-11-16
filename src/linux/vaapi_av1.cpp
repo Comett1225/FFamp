@@ -766,7 +766,7 @@ struct Av1Decoder : SoftDecoder {
         if (!session.ready() || cur.upscaled != session.width() || cur.height != session.height() || deep != session.tenBit()) {
             if (!key || !show) return false;
             for (Slot& slot : slots) slot.surface = VA_INVALID_SURFACE;
-            if (!session.open(VAProfileAV1Profile0, cur.upscaled, cur.height, deep, 10)) return false;
+            if (d3d12WrongTenBit(deep, cur.height) || !session.open(VAProfileAV1Profile0, cur.upscaled, cur.height, deep, 10)) return false;
         }
         const bool intra = key || cur.type == kIntraOnly;
         for (int i = 0; i < 7 && !intra; ++i) if (slots[pic.ref_frame_idx[i]].surface == VA_INVALID_SURFACE) return false;
@@ -917,7 +917,7 @@ std::unique_ptr<SoftDecoder> openVaapiAv1(const std::vector<uint8_t>& config, co
         return fail("the AV1 sequence header is not one the GPU decodes");
     if (decoder->seq.grain) return fail("AV1 film grain is applied by the software decoder");
     const bool deep = shape.bits > 8;
-    if (deep && vaapi()->d3d12 && height % 16 >= 2 && height % 16 <= 9) return fail("the GPU decodes the chroma of this 10-bit AV1 frame height wrongly");
+    if (d3d12WrongTenBit(deep, height)) return fail("the GPU decodes the chroma of this 10-bit AV1 frame height wrongly");
     if (!vaDecodes(VAProfileAV1Profile0) || !decoder->session.open(VAProfileAV1Profile0, width, height, deep, 10))
         return fail("the GPU does not decode AV1 Main");
     return decoder;

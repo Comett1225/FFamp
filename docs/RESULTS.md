@@ -1429,3 +1429,28 @@ handing 4K60 to Media Foundation is needed on this PC. The price is processor ti
 decoder against about 1.1 with Media Foundation (whose processor time is the copy back from the GPU and FFamp's own work); at 4K30 and
 1080p60 the difference is under half a core. The own decoder still uses less processor time than FFmpeg's software decoder everywhere.
 At 4K, Media Foundation is the faster of the two by up to 15 % (the GPU's decoder), at 1080p the own decoder is 43 % faster.
+
+## Linking next to FFmpeg, encoder names
+
+The app links FFamp into the same native library as FFmpeg on every desktop. The H.264 port defined about 700 functions and tables
+under FFmpeg's own names (`av_frame_alloc`, `ff_h264_decode_init`, the assembly's `ff_*` functions), and FFamp's `av_*` functions
+stood in for FFmpeg's in the app's FFmpeg preview decoder (a double free on Linux). Every such name now carries the `ffamp_` prefix
+(CONVENTIONS); `nm` finds no `av_`, `avpriv_` or `ff_` symbol in the Windows, Linux or Mac (arm64, NEON) library, and the H.264 suite
+checks it. `encoders()` now names `h264_mf`, `hevc_mf`, `aac_mf` and `aac` on Windows and `libx264`, `libx265` and `aac` on Linux,
+the names the app's export chooses from; `fixes: encoder-names` checks them and runs each listed video encoder's trial.
+
+## Suites
+
+Full runs of `tests/run.sh` (pass / fail / skip), with the conformance set present:
+
+| System | This round | Merged round 2 |
+|---|---|---|
+| Windows (clang-cl, libraries with NASM) | 3,105 / 5 / 222 | 3,087 / 6 / 223 |
+| Linux (WSL, gcc 13, VA-API through d3d12) | 3,260 / 7 / 201 | 3,248 / 8 / 202 |
+
+No new failure. `fixes: channel-order` passes on both systems now. The new checks: the seven conformance groups (they replace one
+skip), own decoder first on Windows and Media Foundation first with `FFAMP_SYSTEM_H264` (backend, and every frame and 50 random frames
+of the 720p and 1080p clips bit-exact through Media Foundation, so the fallback stays tested), the symbol check, the two 6.1 orders
+against ffmpeg and the encoder names. What still fails is what failed in the merged run: `rd_vorbis.ogg`'s trim (both), the WMA 2
+600 s speed checks and the 10-bit HEVC whole-program rate (Windows), `wv_speed_v3.avi`'s one-thread speed (both), and on Linux the
+100-frame AAC file (vo-aacenc's priming), the RGBA frame rates through WSL's d3d12 copy-out and dav1d's 400 fps.

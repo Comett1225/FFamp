@@ -71,6 +71,7 @@ std::unique_ptr<SoftDecoder> openMsmpeg4(uint32_t codec, const std::vector<uint8
 std::unique_ptr<SoftDecoder> openH263(std::string* error);
 std::unique_ptr<SoftDecoder> openOpenH264(const std::vector<uint8_t>& config, std::string* error);
 std::unique_ptr<SoftDecoder> openDe265(const std::vector<uint8_t>& config, std::string* error);
+std::unique_ptr<SoftDecoder> openMpeg2(const std::vector<uint8_t>& config, std::string* error);
 std::unique_ptr<SoftEncoder> openX264(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftEncoder> openX265(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftDecoder> openXvid(const std::vector<uint8_t>& esds, int width, int height);

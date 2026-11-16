@@ -97,7 +97,16 @@ make install >/dev/null
 fetch https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz 40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210 x265 x265_4.2.tar.gz
 SOURCE=source with_cmake -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_PIC=ON -DHIGH_BIT_DEPTH=OFF -DENABLE_LIBNUMA=OFF -DENABLE_HDR10_PLUS=OFF
 
-for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore openh264 de265 faad vo-aacenc x264 x265; do
+fetch https://download.videolan.org/contrib/libmpeg2/libmpeg2-0.5.1.tar.gz dee22e893cb5fc2b2b6ebd60b88478ab8556cb3b93f9a0d7ce8f3b61851871d4 mpeg2 libmpeg2-0.5.1.tar.gz
+./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --disable-shared --enable-static --with-pic --disable-sdl --without-x >/dev/null
+make -C libmpeg2 -j"$JOBS" >/dev/null
+make -C libmpeg2 install >/dev/null
+make -C include install >/dev/null
+
+fetch https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz c27ad72a68da151177929aa969ae773a2da5ac2af9ce946079314fdac8cece7f jpeg libjpeg-turbo-3.2.1.tar.gz
+with_cmake -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=OFF -DWITH_TOOLS=OFF -DWITH_TESTS=OFF
+
+for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore openh264 de265 faad vo-aacenc x264 x265 mpeg2 jpeg; do
     file="$PREFIX/lib/lib$lib.a"
     [ -f "$file" ] || { echo "missing $file" >&2; exit 1; }
     printf '%s %s bytes\n' "lib$lib.a" "$(stat -c %s "$file")"

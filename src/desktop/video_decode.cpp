@@ -490,13 +490,10 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     } else if (vp8 || vp9) {
         if (track.alpha) d.softMask = openVpxDecoder(vp8, nullptr);
         d.soft = openVpxDecoder(vp8, error);
-    } else if (mpeg) {
-        if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft && error) *error = problem.empty() ? "MPEG-1 and MPEG-2 video are not decoded on this system yet" : problem;
     } else {
         std::string fallback;
         if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft) d.soft = h264 ? openOpenH264(config, &fallback) : openDe265(config, &fallback);
+        if (!d.soft) d.soft = mpeg ? openMpeg2(config, &fallback) : h264 ? openOpenH264(config, &fallback) : openDe265(config, &fallback);
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
     }
     if (!d.soft) return nullptr;

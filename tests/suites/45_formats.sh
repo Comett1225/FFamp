@@ -10,7 +10,8 @@ for f in $(cut -d' ' -f3 $FX/packets.md5); do
     check "packets of $f match the checked table" listed packets $f $A packets $FX/$f
     check "probe of $f matches the checked output" listed probe $f $A probe --json $FX/$f
 done
-for f in $FA_AUDIO; do case $f in *aac*|*opus*|*mp3*|*mp2*) judge=float_check ;; *) judge=check ;; esac; $judge "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
+mac_check() { if on_mac; then check "$@"; else skip "$1 (checksum made with AudioToolbox, whose AMR-WB decoder differs from opencore-amr in a few dozen samples; judged against ffmpeg's libopencore_amrwb instead)"; fi; }
+for f in $FA_AUDIO; do case $f in *aac*|*opus*|*mp3*|*mp2*|*ac3*) judge=float_check ;; amr_wb*) judge=mac_check ;; *) judge=check ;; esac; $judge "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
 for f in $FA_VIDEO; do
     table=pictures
     case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; esac
@@ -19,6 +20,7 @@ done
 
 echo "== formats: known signals, random access, the same stream in different wrappings (no FFmpeg)"
 while read f rate channels seconds least; do
+    if ! on_mac && [ $f = caf_he_aac.caf ]; then skip "$f: no offset from its source signal (FFmpeg's and this system's HE-AAC decoders keep a 962-frame delay; judged against ffmpeg in 54_aac)"; continue; fi
     check "$f: rate, channels, length to the sample, no offset from its source signal" python3 audio.py truth $FX/$f $rate $channels $seconds $least 0
 done <<TABLE
 ac3_mono.mka 44100 1 1.5 25
@@ -95,6 +97,7 @@ have_ffmpeg || { skip "formats against ffmpeg and ffprobe"; return 0; }
 
 echo "== formats: sound against ffmpeg's own decode"
 while read f least; do
+    if own_aac && [ $f = caf_aac.caf ]; then least=135; fi
     check "$f against ffmpeg" python3 audio.py against $FX/$f $least 0 0
 done <<TABLE
 ac3_51.ac3 50
@@ -119,6 +122,22 @@ TABLE
 for f in caf_s16be.caf caf_s24le.caf caf_f32le.caf caf_alac.caf caf_flac.caf avi_mjpeg_pcm.avi avi_mjpeg422_pcm.avi avi_mpeg1_pcm.avi avi_dv_pcm.avi; do
     check "$f bit-exact against ffmpeg" python3 audio.py against $FX/$f 200 0 0 exact
 done
+if ! on_mac; then
+    for f in amr_nb.amr amr_nb.3gp caf_amr.caf; do check "$f bit-exact against ffmpeg's libopencore_amrnb" python3 audio.py against $FX/$f 200 0 0 exact libopencore_amrnb; done
+    for f in amr_wb.amr amr_wb.3gp; do check "$f bit-exact against ffmpeg's libopencore_amrwb" python3 audio.py against $FX/$f 200 0 0 exact libopencore_amrwb; done
+    if $F -i $FX/amr_nb.amr -c:a libopencore_amrnb -b:a 12200 $O/fx_amr.amr 2> /dev/null; then
+        python3 audio.py signal 8000 1 3 $O/fx_amr8.wav
+        for kbps in 4750 5150 5900 6700 7400 7950 10200 12200; do
+            for dtx in 0 1; do
+                $F -i $O/fx_amr8.wav -c:a libopencore_amrnb -b:a $kbps -dtx $dtx $O/fx_amr.amr
+                check "AMR-NB $kbps bit/s, DTX $dtx: bit-exact against ffmpeg's libopencore_amrnb" python3 audio.py against $O/fx_amr.amr 200 0 0 exact libopencore_amrnb
+            done
+        done
+        rm -f $O/fx_amr*
+    else
+        skip "AMR-NB modes against libopencore_amrnb (ffmpeg has no AMR-NB encoder)"
+    fi
+fi
 check "AC-3 2.1 comes out as 5.1 with every channel in its place" $FC layout $FX/ac3_21.ac3 "5.1|FL=FL|FR=FR|LFE=LFE" 6 45
 
 echo "== formats: pictures against ffmpeg's own decode"

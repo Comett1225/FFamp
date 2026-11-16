@@ -6,6 +6,7 @@ O=out
 SYSTEM="$(uname -s)"
 case "$SYSTEM" in Darwin) ;; MINGW*|MSYS*|CYGWIN*) SYSTEM=Windows; A=../build/ffamp.exe ;; *) SYSTEM=Linux ;; esac
 on_mac() { [ "$SYSTEM" = Darwin ]; }
+own_aac() { [ "$SYSTEM" = Linux ] || [ -n "${FFAMP_NO_SYSTEM_AUDIO:-}" ]; }
 command -v md5 > /dev/null || md5() { md5sum | cut -d' ' -f1; }
 on_mac || stat() { if [ "$1" = -f ] && [ "$2" = %z ]; then command stat -c %s "$3"; else command stat "$@"; fi; }
 APPLE_JUDGES=" ../build/avcheck ../build/audiocheck av_opens av_frames apple_frames apple_same apple_lossy apple_payload opens "

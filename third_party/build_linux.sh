@@ -82,8 +82,8 @@ make OS=linux ARCH=x86_64 USE_ASM=Yes BUILDTYPE=Release PREFIX="$PREFIX" LIBDIR_
 fetch https://github.com/strukturag/libde265/archive/refs/tags/v1.1.3.tar.gz 189baa08fd6d2dd34db099de411bd6b2e6bd5eb88e81236a3d0fa3826b9715c4 de265 libde265-v1.1.3.tar.gz
 with_cmake -DENABLE_SDL=OFF -DENABLE_DECODER=OFF -DENABLE_ENCODER=OFF
 
-fetch https://github.com/knik0/faad2/archive/refs/tags/2.11.4.tar.gz ee479ccbae4a8387ab696e6f21a481bd83fe3881471cafa81b4ae59d7d3aed43 faad2 faad2-2.11.4.tar.gz
-with_cmake -DFAAD_BUILD_CLI=OFF
+fetch https://downloads.sourceforge.net/project/opencore-amr/opencore-amr/opencore-amr-0.1.6.tar.gz 483eb4061088e2b34b358e47540b5d495a96cd468e361050fae615b1809dc4a1 amr opencore-amr-0.1.6.tar.gz
+with_configure --disable-amrnb-encoder --disable-examples
 
 fetch https://downloads.sourceforge.net/project/opencore-amr/vo-aacenc/vo-aacenc-0.1.3.tar.gz e51a7477a359f18df7c4f82d195dab4e14e7414cbd48cf79cc195fc446850f36 voaac vo-aacenc-0.1.3.tar.gz
 with_configure
@@ -97,7 +97,7 @@ make install >/dev/null
 fetch https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz 40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210 x265 x265_4.2.tar.gz
 SOURCE=source with_cmake -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_PIC=ON -DHIGH_BIT_DEPTH=OFF -DENABLE_LIBNUMA=OFF -DENABLE_HDR10_PLUS=OFF
 
-for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore openh264 de265 faad vo-aacenc x264 x265; do
+for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore openh264 de265 opencore-amrnb opencore-amrwb vo-aacenc x264 x265; do
     file="$PREFIX/lib/lib$lib.a"
     [ -f "$file" ] || { echo "missing $file" >&2; exit 1; }
     printf '%s %s bytes\n' "lib$lib.a" "$(stat -c %s "$file")"

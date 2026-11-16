@@ -115,9 +115,18 @@ fetch https://github.com/strukturag/libde265/archive/refs/tags/v1.1.3.tar.gz 189
 with_cmake -DENABLE_SDL=OFF -DENABLE_DECODER=OFF -DENABLE_ENCODER=OFF
 fi
 
-if step faad2; then
-fetch https://github.com/knik0/faad2/archive/refs/tags/2.11.4.tar.gz ee479ccbae4a8387ab696e6f21a481bd83fe3881471cafa81b4ae59d7d3aed43 faad2 faad2-2.11.4.tar.gz
-with_cmake -DFAAD_BUILD_CLI=OFF
+if step amr; then
+fetch https://downloads.sourceforge.net/project/opencore-amr/opencore-amr/opencore-amr-0.1.6.tar.gz 483eb4061088e2b34b358e47540b5d495a96cd468e361050fae615b1809dc4a1 amr opencore-amr-0.1.6.tar.gz
+NB=opencore/codecs_v2/audio/gsm_amr/amr_nb
+WB=opencore/codecs_v2/audio/gsm_amr/amr_wb
+plain_library opencore-amrnb amrnb/wrapper.cpp $(ls $NB/dec/src/*.cpp $NB/common/src/*.cpp | grep -v -E '/(decoder_gsm_amr|pvgsmamrdecoder|bits2prm|copy|div_32|l_abs|r_fft|vad1|vad2)\.cpp$')
+with_cmake "-DINCLUDES=oscl;$NB/dec/src;$NB/common/include;$NB/dec/include;opencore/codecs_v2/audio/gsm_amr/common/dec/include;$NB/enc/src" "-DDEFINES=DISABLE_AMRNB_ENCODER"
+rm -rf out
+plain_library opencore-amrwb amrwb/wrapper.cpp $(ls $WB/dec/src/*.cpp | grep -v '/decoder_amr_wb\.cpp$')
+with_cmake "-DINCLUDES=oscl;$WB/dec/src;$WB/dec/include;opencore/codecs_v2/audio/gsm_amr/common/dec/include"
+mkdir -p "$PREFIX/include/opencore-amrnb" "$PREFIX/include/opencore-amrwb"
+cp amrnb/interf_dec.h "$PREFIX/include/opencore-amrnb/"
+cp amrwb/dec_if.h amrwb/if_rom.h "$PREFIX/include/opencore-amrwb/"
 fi
 
 if step voaac; then

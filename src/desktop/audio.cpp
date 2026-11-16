@@ -16,6 +16,8 @@ const int kRates[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16
 std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error) {
     if (track.codec == fourcc("fLaC")) return openFlacAudio(track, error);
     if (track.codec == fourcc("alac")) return openAlacAudio(track, error);
+    if (track.codec == fourcc("ac-3") || track.codec == fourcc("ec-3")) return openAc3Audio(track, firstPacket, error);
+    if (track.codec == fourcc("samr") || track.codec == fourcc("sawb")) return openAmrAudio(track, error);
     const bool aac = track.codec == fourcc("mp4a"), mpeg = track.codec == fourcc(".mp3") || track.codec == fourcc(".mp2") || track.codec == fourcc(".mp1");
     if (!aac && !mpeg) {
         if (error) *error = "no decoder for this audio codec on this system yet";
@@ -23,8 +25,7 @@ std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::ve
     }
     std::string problem;
     if (auto system = openPlatformAudio(track, firstPacket, &problem)) return system;
-    auto decoder = aac ? openFaadAudio(track, error) : openMpg123Audio(track, firstPacket, error);
-    return decoder;
+    return aac ? openAacAudio(track, firstPacket, error) : openMpg123Audio(track, firstPacket, error);
 }
 
 struct AacEncoder::Impl {

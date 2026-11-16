@@ -106,6 +106,7 @@ check "damaged copies of every fixture" $P fuzz $FA $rounds 11
 have_ffmpeg || return 0
 echo "== audio in: against ffmpeg's own decode"
 while read f least tail late extra; do
+    if own_aac; then case $f in he_aac*) least=135 extra=peer ;; aac*) least=135 ;; esac; fi
     check "$f against ffmpeg" $P against $FA/$f $least $tail $late $extra
 done <<TABLE
 aac_mono_44k.m4a 45 0 0
@@ -158,10 +159,11 @@ $P signal 44100 2 50 $O/au_long.wav
 [ -f $O/au_ff_opus.mp4 ] || $F -i $O/au_long.wav -ar 48000 -c:a libopus -b:a 96k $O/au_ff_opus.mp4
 [ -f $O/au_ff_flac.mp4 ] || $F -i $O/au_long.wav -c:a flac $O/au_ff_flac.mp4
 rm -f $O/au_long.wav
-check "50 s AAC against ffmpeg" $P against $O/au_ff_aac.m4a 50 0 0
+if own_aac; then AAC_FLOOR=135; else AAC_FLOOR=50; fi
+check "50 s AAC against ffmpeg" $P against $O/au_ff_aac.m4a $AAC_FLOOR 0 0
 check "50 s MP3 against ffmpeg" $P against $O/au_ff_mp3.mp4 75 0 0
 check "50 s Opus against ffmpeg" $P against $O/au_ff_opus.mp4 110 648 0
 check "50 s FLAC bit-exact against ffmpeg" $P against $O/au_ff_flac.mp4 200 0 0 exact
 for f in au_ff_aac.m4a au_ff_mp3.mp4 au_ff_opus.mp4 au_ff_flac.mp4; do check "50 s $f: random reads across restart points" $P chunks adecode $O/$f 60 5; done
-check "the video suite's 10 s AAC track against ffmpeg" $P against $O/h264_720.mp4 60 0 0
+check "the video suite's 10 s AAC track against ffmpeg" $P against $O/h264_720.mp4 $((AAC_FLOOR > 60 ? AAC_FLOOR : 60)) 0 0
 check "the video suite's 10 s AAC track as 44.1 kHz stereo" $P reader $O/h264_720.mp4 44100 2 f32le 60 0

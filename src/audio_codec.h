@@ -38,7 +38,8 @@ struct AacCore {
 std::unique_ptr<AacCore> openVoAac(int rate, int channels, int bitrate, std::string* error);
 std::unique_ptr<PacketDecoder> openFlacAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openAlacAudio(const Track& track, std::string* error);
-std::unique_ptr<PacketDecoder> openFaadAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openAacAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
+std::unique_ptr<PacketDecoder> openAmrAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openMpg123Audio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openOpusAudio(const Track& track, std::string* error);
@@ -49,5 +50,6 @@ std::unique_ptr<PacketDecoder> openWmaLosslessAudio(const Track& track, std::str
 std::unique_ptr<PacketDecoder> openWmaVoiceAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openWaveAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openTtaAudio(const Track& track, std::string* error);
+std::unique_ptr<PacketDecoder> openAc3Audio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 
 }

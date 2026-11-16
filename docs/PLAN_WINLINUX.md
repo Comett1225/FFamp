@@ -62,12 +62,12 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | DV | VideoToolbox | own decoder based on FFmpeg's (planned) | same | own, LGPL-derived |
 | H.263 | VideoToolbox | own (the H.263 core FFamp has for WMV and MS-MPEG4, planned) | same | own |
 | Lossless video and the rest of the gaps rounds | own | own | own | own |
-| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FAAD2 when missing | FAAD2 | GPL-2.0-or-later |
+| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
 | MP3, MP2, MP1 | AudioToolbox | mpg123 (Media Foundation's MP3 decoder was tried: it places the sound 624 frames later than FFmpeg's) | mpg123 | LGPL-2.1-or-later (already in the Mac dependency list) |
 | Opus, Vorbis | libopus, libvorbis | same | same | BSD-3-Clause (already in FFamp) |
 | FLAC | AudioToolbox | own decoder written from RFC 9639 (round 1) | same | own |
 | ALAC | AudioToolbox | own decoder based on FFmpeg's (round 1) | same | own, LGPL-derived (NOTICE) |
-| AC-3, E-AC-3 | AudioToolbox | own decoder based on FFmpeg's (planned; Media Foundation's Dolby decoder is not on every edition) | same | own, LGPL-derived |
+| AC-3, E-AC-3 | AudioToolbox | own decoder based on FFmpeg's (Media Foundation's Dolby decoder is not on every edition) | same | own, LGPL-derived |
 | AMR-NB, AMR-WB | AudioToolbox | opencore-amr | opencore-amr | Apache-2.0 |
 | WMA family, ADPCM, G.711, TTA, DTS, TrueHD, WavPack | own | own | own | own |
 
@@ -87,8 +87,8 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 |---|---|---|---|
 | OpenH264 decoder | 1.8 MB | 1.1 MB | Linux H.264, Windows fallback |
 | libde265 | 1.3 MB | 3.2 MB | Linux HEVC, Windows fallback |
-| FAAD2 | 0.6 MB | 0.6 MB | Linux AAC, Windows fallback |
 | vo-aacenc | 0.2 MB | 0.3 MB | AAC encode where Media Foundation cannot |
+| opencore-amr (decoders) | 0.4 MB | 0.4 MB | AMR-NB and AMR-WB decode on both systems |
 | mpg123 | 0.5 MB | 0.7 MB | MP1/MP2/MP3 decode on both systems |
 | x264 (8-bit) | 1.3 MB | 2.0 MB | Linux H.264 encode, Windows fallback |
 | x265 (8-bit) | 7.9 MB | 4.2 MB | Linux HEVC encode, Windows fallback |
@@ -102,7 +102,7 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 
 | Missing part | Effect |
 |---|---|
-| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: OpenH264, libde265, FAAD2, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. |
+| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: OpenH264, libde265, FFamp's own AAC decoder, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. |
 | HEVC Video Extensions not installed | HEVC decodes with libde265; HEVC export uses the GPU driver's encoder MFT when there is one, else x265 |
 | No GPU video decoder (old GPU, remote desktop, virtual machine) | Media Foundation's software H.264 decoder; HEVC through libde265 |
 | GPU encoder MFT refuses the size or is busy | Microsoft's software H.264 MFT, then x264 (the encoder trial picks it as the app does today) |
@@ -119,9 +119,9 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 
 ## Decisions for the owner
 
-1. **Patent-pooled codecs built from source** (H.264 through OpenH264 and x264, HEVC through libde265 and x265, AAC through FAAD2
-   and vo-aacenc). Built into FFamp they carry the same patent exposure the app already has by bundling FFmpeg, which contains all of
-   them. Alternative for H.264 decode only: download Cisco's OpenH264 binary on first use (Cisco pays the royalties), at the cost of a
+1. **Patent-pooled codecs built from source** (H.264 through OpenH264 and x264, HEVC through libde265 and x265, AAC through FFamp's
+   own decoder and vo-aacenc, AMR through opencore-amr). Built into FFamp they carry the same patent exposure the app already has by
+   bundling FFmpeg, which contains all of them. Alternative for H.264 decode only: download Cisco's OpenH264 binary on first use (Cisco pays the royalties), at the cost of a
    download and of the "nothing extra" goal. Default in this plan: build from source, as FFmpeg was.
 2. **AAC encoder.** vo-aacenc (LC only) is the software AAC encoder here; FFmpeg's own AAC encoder (what the Linux app uses today) can
    be ported instead if the owner prefers parity over size. Round 1 measures vo-aacenc against FFmpeg.
@@ -133,9 +133,8 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
    bit-exact, interlaced included; High 10 and 4:2:2 fail there too.
 4. **HEVC software export** costs x265 (4 to 8 MB). Alternative: offer HEVC export only where a hardware encoder exists. Default:
    ship x265, as the BtbN FFmpeg build does.
-5. **HE-AAC v2 (parametric stereo) on Linux.** FAAD2's parametric stereo differs from FFmpeg's (17.6 dB left, 9.5 dB right on the
-   suite's file; Apple's decoder matches FFmpeg to 100 dB). Plain AAC and HE-AAC v1 match FFmpeg at 130 dB or better. Options: accept,
-   or port FFmpeg's AAC decoder later. Windows uses Media Foundation's decoder.
+5. **HE-AAC v2 (parametric stereo) on Linux.** Decided (2026-11-15): FFmpeg's AAC decoder is ported (LC, HE-AAC, HE-AAC v2), FAAD2
+   is gone. It is as close to FFmpeg's output as FFmpeg's own C code is to its SIMD code (RESULTS, round 2).
 6. **NASM on Windows.** The Windows libraries are built without assembly because the PC has no NASM; dav1d, libvpx, x264, x265 and
    SVT-AV1 are several times slower without it. Media Foundation covers H.264 and HEVC, so this matters for VP9, AV1 and the software
    fallbacks. Fetching NASM (one program, from its own site) would fix it; not done without the owner's go.

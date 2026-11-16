@@ -32,6 +32,7 @@ std::shared_ptr<Image> ImagePool::take() {
             std::lock_guard<std::mutex> hold(pool->lock);
             if (pool->spare.size() < 24) {
                 done->alpha.clear();
+                done->picture.keep.reset();
                 pool->spare.emplace_back(done);
                 return;
             }
@@ -294,7 +295,9 @@ struct VideoDecoder::Impl {
             if (!shape.color.known) shape.color = p.color;
         }
         if (!keep || p.stamp < floor) return;
-        auto image = pool->copy(p);
+        auto image = pool->take();
+        if (p.keep && !p.alpha) image->picture = p;
+        else fillImage(*image, p);
         {
             std::lock_guard<std::mutex> hold(lock);
             ready[p.stamp] = std::move(image);
@@ -479,7 +482,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     } else {
         std::string fallback;
         if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft) d.soft = h264 ? openOpenH264(config, &fallback) : openDe265(config, &fallback);
+        if (!d.soft) d.soft = h264 ? openH264(config, &fallback) : openDe265(config, &fallback);
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
     }
     if (!d.soft) return nullptr;

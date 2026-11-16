@@ -692,6 +692,7 @@ static void deliver(AVFrame *f, FFampH264Sink sink, void *opaque)
     out.primaries = f->color_primaries;
     out.transfer = f->color_trc;
     out.matrix = f->colorspace;
+    out.handle = f;
     sink(opaque, &out);
 }
 
@@ -912,4 +913,22 @@ void ffamp_h264_close(FFampH264 *dec)
         pool_unref(dec->pool);
     av_free(dec->extradata);
     av_free(dec);
+}
+
+void *ffamp_h264_keep(const FFampH264Frame *frame)
+{
+    AVFrame *copy = av_frame_alloc();
+    if (!copy)
+        return NULL;
+    if (av_frame_ref(copy, frame->handle) < 0) {
+        av_frame_free(&copy);
+        return NULL;
+    }
+    return copy;
+}
+
+void ffamp_h264_release(void *kept)
+{
+    AVFrame *frame = kept;
+    av_frame_free(&frame);
 }

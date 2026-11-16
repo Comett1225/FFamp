@@ -20,6 +20,7 @@ typedef struct FFampH264Frame {
     int primaries, transfer, matrix;
     int key, interlaced, top_field_first, corrupt;
     int64_t pts;
+    void *handle;
 } FFampH264Frame;
 
 typedef void (*FFampH264Sink)(void *opaque, const FFampH264Frame *frame);
@@ -31,6 +32,8 @@ int ffamp_h264_decode(FFampH264 *dec, const uint8_t *data, int size, int64_t pts
 int ffamp_h264_drain(FFampH264 *dec, FFampH264Sink sink, void *opaque);
 void ffamp_h264_flush(FFampH264 *dec);
 void ffamp_h264_close(FFampH264 *dec);
+void *ffamp_h264_keep(const FFampH264Frame *frame);
+void ffamp_h264_release(void *kept);
 
 #ifdef __cplusplus
 }

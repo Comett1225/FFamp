@@ -848,7 +848,38 @@ stream (the next jump now restarts at a key frame), GIF videos are written witho
 decode times), and the scaler took the colour matrix of an unlabelled picture from the size after scaling (a 270p clip upscaled to
 720p switched from BT.601 to BT.709).
 
-## Speed against FFmpeg
+## Linux: MPEG-1/2 through libmpeg2, Motion JPEG through libjpeg-turbo (round 2)
+
+Against ffmpeg's own decode, plane by plane (`tests/comparex.py decode`); both libraries use other IDCTs than FFmpeg, so no frame
+is identical, and none is far off:
+
+| Files | Lowest / mean PSNR |
+|---|---|
+| Fixtures: MPEG-2 in MP4, MOV, Matroska, AVI; MPEG-1 in MOV, Matroska, AVI | 62.8 / 64.7 dB; 63.4 / 65.3 dB |
+| Fixtures: Motion JPEG 4:2:0 (MOV, AVI), 4:2:2 (MOV, AVI), 4:4:4 (Matroska) | 67.0 / 67.3; 66.7 / 67.0; 67.3 / 67.9 dB |
+| MPEG-1 576p MOV; 203x117 AVI | 62.1 / 63.1; 60.2 / 62.3 dB |
+| MPEG-2 576p MP4; open GOP, 3 B-frames, non-linear quantiser, intra VLC (MOV) | 62.1 / 63.1; 62.3 / 63.1 dB |
+| MPEG-2 interlaced frame pictures, top first with alternate scan (Matroska), bottom first (AVI) | 62.1 / 63.2 dB |
+| MPEG-2 field pictures, top first and bottom first (MP4) | 65.1 / 65.1 dB |
+| XDCAM HD422-style 1080i 4:2:2 long GOP (`xd5c` MOV); IMX-style 720x608 4:2:2 intra, 10-bit DC (`mx5p` MOV) | 62.6 / 63.6; 65.0 / 65.1 dB |
+| Motion JPEG 4:2:0 AVI, 4:2:2 MOV, 4:4:4 AVI and MOV, 203x117, AVI without Huffman tables | 64.3 to 65.0 dB |
+
+- Random frames equal the straight decode in every file (the fixtures and the 19 made by the suite), so jumps land on ffmpeg's
+  pictures within the same margins. A picture size change inside a stream gives each part as its own file does; the sequence
+  display extension's colour reaches the frame; a cut that starts inside an open GOP decodes, its first B-pictures shown as the key
+  picture they lead to.
+- Damaged copies: eight cut or flipped copies of each of the 19 files, and 150 more of eight of them, decode or fail cleanly. A
+  sanitised fuzz run of the video target (12 minutes, seeded with MPEG and Motion JPEG files) found
+  that libmpeg2 shows a picture from freed buffers when a stream ends right after a sequence header with a new size; nothing is
+  shown before the first picture of a sequence now (`tests/fixtures/fuzz/video`).
+- Greyscale, 4:1:1, progressive and RGB JPEG pictures were checked by hand (planes 64.6 dB, BGRA 62.9 dB for greyscale, 51.9 dB for
+  RGB, which goes through WIC's limited BT.709 conversion).
+- Formats suite on Linux: 261 pass, 83 fail before; 298 pass, 46 fail after (the 37 MPEG-1/2 and Motion JPEG checks, the 1 GB
+  Motion JPEG AVI among them, now pass; what fails is AC-3, AMR, H.264 through OpenH264 and two alpha checksums). The videox
+  suite's new section: 80 pass. The fuzz suite: 23 pass.
+- Speed, 250 frames, best of three: MPEG-2 1080i at 25 Mbit/s 0.72 s (ffmpeg 0.25 s with its frame threads, 0.71 s on one thread);
+  Motion JPEG 1080p 4:2:2 1.95 s (ffmpeg 2.11 s, 2.73 s on one thread). libmpeg2 decodes on one thread.
+
 
 Whole-program wall time, best of several runs, nothing else running on the PC. FFamp's tool against FFmpeg's programs doing the same
 job the way the app runs them (one program start per thumbnail on both sides; the app itself calls FFamp in its own process, so its

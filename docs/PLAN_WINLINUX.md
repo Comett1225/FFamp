@@ -57,8 +57,8 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | VC-1, WMV7/8, MS-MPEG4 | own | own | own | own |
 | MPEG-4 part 2 (DivX, Xvid) | xvidcore | xvidcore | xvidcore | GPL-2.0-or-later (already in FFamp) |
 | ProRes | VideoToolbox | own decoder based on FFmpeg's (round 2) | same | own, LGPL-derived (NOTICE) |
-| MPEG-1, MPEG-2 | VideoToolbox | Media Foundation MPEG-2 decoder; libmpeg2 when missing | libmpeg2 | GPL-2.0-or-later |
-| Motion JPEG, JPEG stills | VideoToolbox / ImageIO | WIC | libjpeg-turbo | IJG + BSD-3-Clause |
+| MPEG-1, MPEG-2 | VideoToolbox | Media Foundation MPEG-2 decoder (libmpeg2 for Windows without Media Foundation not built yet) | libmpeg2 0.5.1 (round 2) | GPL-2.0-or-later |
+| Motion JPEG, JPEG stills | VideoToolbox / ImageIO | WIC | libjpeg-turbo 3.2.1, the libjpeg API (round 2) | IJG (its SIMD code: zlib) |
 | DV | VideoToolbox | own decoder based on FFmpeg's (round 2) | same | own, LGPL-derived |
 | H.263 | VideoToolbox | own (the H.263 core FFamp has for WMV and MS-MPEG4, planned) | same | own |
 | Lossless video and the rest of the gaps rounds | own | own | own | own |
@@ -92,6 +92,8 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | mpg123 | 0.5 MB | 0.7 MB | MP1/MP2/MP3 decode on both systems |
 | x264 (8-bit) | 1.3 MB | 2.0 MB | Linux H.264 encode, Windows fallback |
 | x265 (8-bit) | 7.9 MB | 4.2 MB | Linux HEVC encode, Windows fallback |
+| libmpeg2 | 0.2 MB | not built (Media Foundation) | Linux MPEG-1/2 decode |
+| libjpeg-turbo | 1.2 MB | not built (WIC) | Linux Motion JPEG and JPEG decode |
 | libvpx, dav1d, SVT-AV1, libopus, libvorbis, libogg, LAME, liboapv, xvidcore | 22 MB together | 14 MB together | all systems |
 
 Whole programs: the FFamp command-line tool with every library linked in is 11.6 MB on Windows and 25.5 MB on Linux (stripped).
@@ -102,7 +104,7 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 
 | Missing part | Effect |
 |---|---|
-| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: OpenH264, libde265, FAAD2, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. |
+| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: OpenH264, libde265, FAAD2, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. MPEG-1/2 does not decode there until libmpeg2 is built for Windows. |
 | HEVC Video Extensions not installed | HEVC decodes with libde265; HEVC export uses the GPU driver's encoder MFT when there is one, else x265 |
 | No GPU video decoder (old GPU, remote desktop, virtual machine) | Media Foundation's software H.264 decoder; HEVC through libde265 |
 | GPU encoder MFT refuses the size or is busy | Microsoft's software H.264 MFT, then x264 (the encoder trial picks it as the app does today) |
@@ -115,6 +117,8 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 - No non-free code: no fdk-aac, no Cisco binary blob, no proprietary codec SDK. Media Foundation and WIC are system libraries
   (the GPL's system library exception).
 - Decoders written from FFmpeg's code (ProRes, DV, FLAC, ALAC, AC-3, H.263) get one line each in `docs/NOTICE.md`, as before.
+- libjpeg-turbo's IJG licence asks that the documentation of a program shipped without its source say "this software is based in
+  part on the work of the Independent JPEG Group"; that line goes into the app's notices with the licence texts.
 - Each bundled library's licence text goes next to the app's notices (round 3 of the app work, as on Mac).
 
 ## Decisions for the owner

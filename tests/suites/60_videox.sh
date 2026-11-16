@@ -139,6 +139,90 @@ else
     rm -f $O/pd_ref.* $O/pd_a.raw
 fi
 
+echo "== videox: MPEG-1/2 through libmpeg2 and Motion JPEG through libjpeg-turbo against ffmpeg"
+if [ "$SYSTEM" != Linux ]; then
+    skip "libmpeg2 and libjpeg-turbo against ffmpeg (system decoders on the Mac and Windows)"
+else
+    MD="testsrc2=size=720x576:rate=25,noise=alls=12:allf=t"
+    MH="testsrc2=size=1920x1080:rate=25,noise=alls=12:allf=t"
+    mv_make() { [ -f $O/$1 ] || $F -f lavfi -i "$2" "${@:3}" $O/$1; }
+    mv_own() { $A videoinfo $O/$1 | grep -q "backend $2 "; }
+    mv_cut() { $A decode $O/mv_cut.mkv > /dev/null && [ "$($A frames $O/mv_cut.mkv --list 0 | md5)" = "$($A frames $O/mv_cut.mkv --list 3 | md5)" ]; }
+    mv_colour() { $A videoinfo $O/mv_mpeg2_colour.avi | grep -q "size 720x576 .* primaries 1 transfer 1 matrix 1 "; }
+    mv_make mv_mpeg1.mov "$MD" -frames:v 30 -c:v mpeg1video -q:v 4 -g 12 -bf 2
+    mv_make mv_mpeg1_odd.avi "testsrc2=size=203x117:rate=25,noise=alls=12:allf=t" -frames:v 20 -c:v mpeg1video -q:v 4 -g 9 -bf 1
+    mv_make mv_mpeg2.mp4 "$MD" -frames:v 30 -c:v mpeg2video -q:v 4 -g 12 -bf 2
+    mv_make mv_mpeg2_open.mov "$MD" -frames:v 40 -c:v mpeg2video -q:v 4 -g 12 -bf 3 -intra_vlc 1 -non_linear_quant 1 -qmax 28
+    mv_make mv_mpeg2_tff.mkv "$MD,setfield=tff" -frames:v 30 -c:v mpeg2video -q:v 4 -g 12 -bf 2 -flags +ildct+ilme -alternate_scan 1
+    mv_make mv_mpeg2_bff.avi "$MD,setfield=bff" -frames:v 30 -c:v mpeg2video -q:v 4 -g 12 -bf 2 -flags +ildct+ilme
+    mv_make mv_mpeg2_colour.avi "$MD,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709" -frames:v 10 -c:v mpeg2video -q:v 4 -g 5
+    mv_make mv_xdcam422.mov "$MH,setfield=tff" -frames:v 14 -c:v mpeg2video -pix_fmt yuv422p -q:v 4 -g 12 -bf 2 -flags +ildct+ilme
+    mv_make mv_imx.mov "testsrc2=size=720x608:rate=25,noise=alls=12:allf=t,setfield=tff" -frames:v 10 -c:v mpeg2video -pix_fmt yuv422p -g 1 -bf 0 -dc 10 -intra_vlc 1 \
+        -non_linear_quant 1 -qmax 28 -q:v 2 -flags +ildct -tag:v mx5p
+    for order in top bottom; do
+        [ -f $O/mv_fields_$order.mp4 ] && continue
+        $F -f lavfi -i "$MD,setfield=$([ $order = top ] && echo tff || echo bff),separatefields" -frames:v 16 -c:v mpeg2video -g 1 -bf 0 -q:v 3 -f mpeg2video $O/mv_half.m2v
+        python3 mpeg_craft.py fields $O/mv_half.m2v $O/mv_fields.m2v $order
+        $F -fflags +genpts -r 25 -i $O/mv_fields.m2v -c copy $O/mv_fields_$order.mp4
+        rm -f $O/mv_half.m2v $O/mv_fields.m2v
+    done
+    if [ ! -f $O/mv_joined.mkv ]; then
+        $F -f lavfi -i "$MD" -frames:v 10 -c:v mpeg2video -q:v 4 -g 5 -bf 0 -f mpeg2video $O/mv_a.m2v
+        $F -f lavfi -i "testsrc2=size=480x270:rate=25,noise=alls=12:allf=t" -frames:v 10 -c:v mpeg2video -q:v 4 -g 5 -bf 0 -f mpeg2video $O/mv_b.m2v
+        cat $O/mv_a.m2v $O/mv_b.m2v > $O/mv_ab.m2v
+        for p in a b ab; do $F -fflags +genpts -r 25 -i $O/mv_$p.m2v -c copy $O/mv_$p.mkv; done
+        mv $O/mv_ab.mkv $O/mv_joined.mkv
+        rm -f $O/mv_*.m2v
+    fi
+    if [ ! -f $O/mv_cut.mkv ]; then
+        $F -ss 0.5 -i $O/mv_mpeg2_open.mov -c copy -f mpeg2video $O/mv_cut.m2v
+        $F -fflags +genpts -r 25 -i $O/mv_cut.m2v -c copy $O/mv_cut.mkv
+        rm -f $O/mv_cut.m2v
+    fi
+    mv_make mv_mjpeg420.avi "$MD" -frames:v 10 -c:v mjpeg -q:v 4 -pix_fmt yuvj420p
+    mv_make mv_mjpeg422.mov "$MD" -frames:v 10 -c:v mjpeg -q:v 4 -pix_fmt yuvj422p
+    mv_make mv_mjpeg444.avi "$MD" -frames:v 10 -c:v mjpeg -q:v 4 -pix_fmt yuvj444p
+    mv_make mv_mjpeg444.mov "$MD" -frames:v 10 -c:v mjpeg -q:v 2 -pix_fmt yuvj444p
+    mv_make mv_mjpeg_odd.mov "testsrc2=size=203x117:rate=25,noise=alls=12:allf=t" -frames:v 10 -c:v mjpeg -q:v 4 -pix_fmt yuvj420p
+    if [ ! -f $O/mv_mjpeg_bare.avi ]; then
+        $F -f lavfi -i "$MD" -frames:v 10 -c:v mjpeg -q:v 4 -huffman default -pix_fmt yuvj422p -f mjpeg $O/mv_tables.mjpeg
+        python3 mpeg_craft.py nohuffman $O/mv_tables.mjpeg $O/mv_bare.mjpeg
+        $F -f mjpeg -framerate 25 -i $O/mv_bare.mjpeg -c copy $O/mv_mjpeg_bare.avi
+        rm -f $O/mv_tables.mjpeg $O/mv_bare.mjpeg
+    fi
+    while read f floor; do
+        case $f in *mjpeg*) backend=libjpeg-turbo ;; *) backend=libmpeg2 ;; esac
+        check "$f opens with $backend" mv_own $f $backend
+        check "decode $f against ffmpeg (other IDCT, within $floor dB)" python3 comparex.py decode $O/$f $floor
+        check "random frames of $f equal the straight decode" python3 comparex.py selfseek $O/$f 10 3
+        check "damaged copies of $f never crash" python3 comparex.py fuzz $O/$f 8 5
+    done <<TABLE
+mv_mpeg1.mov 55
+mv_mpeg1_odd.avi 55
+mv_mpeg2.mp4 55
+mv_mpeg2_open.mov 55
+mv_mpeg2_tff.mkv 55
+mv_mpeg2_bff.avi 55
+mv_mpeg2_colour.avi 55
+mv_xdcam422.mov 55
+mv_imx.mov 55
+mv_fields_top.mp4 55
+mv_fields_bottom.mp4 55
+mv_a.mkv 55
+mv_b.mkv 55
+mv_mjpeg420.avi 60
+mv_mjpeg422.mov 60
+mv_mjpeg444.avi 60
+mv_mjpeg444.mov 60
+mv_mjpeg_odd.mov 60
+mv_mjpeg_bare.avi 60
+TABLE
+    check "the MPEG-2 colour comes from the sequence display extension" mv_colour
+    check "a cut that starts inside an open GOP decodes, its first B-pictures shown as the key picture they lead to" mv_cut
+    check "random frames of that cut equal the straight decode" python3 comparex.py selfseek $O/mv_cut.mkv 10 3
+    check "a picture size change in the stream gives each part as its own file does" [ "$($A decode $O/mv_joined.mkv | md5)" = "$( { $A decode $O/mv_a.mkv; $A decode $O/mv_b.mkv; } | md5)" ]
+fi
+
 echo "== videox: AV1 and VP9 at 1080p against ffmpeg's libsvtav1 and libvpx-vp9, same bitrate and speed setting"
 VXN=60
 [ -n "${QUICK:-}" ] || VXN=150

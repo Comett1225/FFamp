@@ -102,7 +102,16 @@ mkdir -p "$PREFIX/include/va"
 cp va/*.h va/drm/va_drm.h "$PREFIX/include/va/"
 sed -e 's/@VA_API_MAJOR_VERSION@/1/' -e 's/@VA_API_MINOR_VERSION@/22/' -e 's/@VA_API_MICRO_VERSION@/0/' -e 's/@VA_API_VERSION@/1.22.0/' va/va_version.h.in > "$PREFIX/include/va/va_version.h"
 
-for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore openh264 de265 faad vo-aacenc x264 x265; do
+fetch https://download.videolan.org/contrib/libmpeg2/libmpeg2-0.5.1.tar.gz dee22e893cb5fc2b2b6ebd60b88478ab8556cb3b93f9a0d7ce8f3b61851871d4 mpeg2 libmpeg2-0.5.1.tar.gz
+./configure --prefix="$PREFIX" --libdir="$PREFIX/lib" --disable-shared --enable-static --with-pic --disable-sdl --without-x >/dev/null
+make -C libmpeg2 -j"$JOBS" >/dev/null
+make -C libmpeg2 install >/dev/null
+make -C include install >/dev/null
+
+fetch https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.1/libjpeg-turbo-3.2.1.tar.gz c27ad72a68da151177929aa969ae773a2da5ac2af9ce946079314fdac8cece7f jpeg libjpeg-turbo-3.2.1.tar.gz
+with_cmake -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=OFF -DWITH_TOOLS=OFF -DWITH_TESTS=OFF
+
+for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore openh264 de265 faad vo-aacenc x264 x265 mpeg2 jpeg; do
     file="$PREFIX/lib/lib$lib.a"
     [ -f "$file" ] || { echo "missing $file" >&2; exit 1; }
     printf '%s %s bytes\n' "lib$lib.a" "$(stat -c %s "$file")"

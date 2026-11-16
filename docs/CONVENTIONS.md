@@ -428,14 +428,15 @@ list; `Sample.offset` is then free for the reader's use.
   the GPU when the MFT takes a D3D11 device manager: backend `mediafoundation-gpu`, else `mediafoundation`), `openPlatformEncoder` (the
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
   out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
-  `openStillDecoder` (WIC on Windows; Linux has no JPEG decoder yet). Linux returns nothing from the hooks yet.
+  `openStillDecoder` (WIC on Windows, libjpeg-turbo on Linux). Linux returns nothing from the other hooks yet.
 - Software paths: OpenH264, libde265, FAAD2, mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder places its
   sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore, libopus,
-  libvorbis, LAME. `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
+  libvorbis, LAME, libmpeg2 (MPEG-1/2 when no system decoder takes the stream: always on Linux), libjpeg-turbo (Linux).
+  `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
 - Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media
   Foundation after a flush, OpenH264) need no drain inside a stream. `SoftDecoder::drainKeepsState` is false for decoders whose drain
-  ends the stream (OpenH264, Media Foundation): after such a drain the next jump starts again at a key frame.
+  ends the stream (OpenH264, Media Foundation, libmpeg2): after such a drain the next jump starts again at a key frame.
   `SoftDecoder::weavesFields` is true for Media Foundation, which returns one frame for an H.264 field pair.
 - A frame the stream leaves without colour labels is labelled as VideoToolbox labels it: BT.601 with SMPTE C primaries below 720
   lines, BT.709 from 720 lines. Media Foundation is not used for pictures under 64 pixels wide or high (its decoder returns nothing)
@@ -445,6 +446,20 @@ list; `Sample.offset` is then free for the reader's use.
   ffmpeg: ProRes 422 as 10-bit, 4444 and XQ as 12-bit with the alpha plane handed out at 8 bits as swscale rounds it ((a + 8) >> 4);
   DV in the size and chroma layout of the profile its frames name (4:1:1, 4:2:0, 4:2:2; DVCPRO HD 1080 is 1280 or 1440 wide, as in
   FFmpeg). 4:1:1 pictures convert to BGRA with the chroma sample centred on its four pixels, as swscale does.
+- MPEG-1/2 on Linux: libmpeg2 (backend `libmpeg2`, `openMpeg2`), used whenever `openPlatformVideo` gives nothing. Each sample's time
+  goes in as libmpeg2's picture tag and comes back on the picture it shows, so B-frame order needs no help; field pictures are woven
+  in libmpeg2's own frame, and a sequence header with a new size ends the old pictures and starts again. A slice ends only at the
+  next start code, so pictures come out one sample late; the drain (a sequence end code) ends the stream. B-pictures that lead an
+  open GOP with no earlier reference (a file cut there, the first pictures after a jump) are handed out as the key picture they lead
+  to, where FFmpeg drops them. Colour comes from the sequence display extension; the range is always limited. libmpeg2's x86 IDCT
+  (SSE2) rounds differently from its C IDCT and from FFmpeg's: 60 to 65 dB against ffmpeg.
+- Motion JPEG and JPEG pictures on Linux: libjpeg-turbo (backend `libjpeg-turbo`, `openStillDecoder`), as WIC on Windows: the
+  picture's own YCbCr planes (4:2:0, 4:2:2, 4:4:4, 4:1:1; greyscale with neutral 4:2:0 chroma) from `jpeg_read_raw_data`, full
+  range, BT.601; RGB and other layouts through BGRX into limited BT.709 4:4:4, as WIC's fallback. libjpeg-turbo fills in the standard
+  Huffman tables when a frame has none (AVI Motion JPEG). Two-field Motion JPEG packets are not put together (WIC does not either).
+- The formats suite's MPEG-1/2 and Motion JPEG checksums are VideoToolbox's on the Mac and `pictures_linux.md5` on Linux (x86-64,
+  libmpeg2's SIMD path); Windows skips them (Media Foundation and WIC), and every system judges the same files against ffmpeg within
+  the suite's floor.
 - Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
   vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built
   from source for x264 and libvpx; no assembly yet). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so

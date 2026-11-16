@@ -88,6 +88,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | OpenH264 decoder | 1.8 MB | 1.1 MB | Linux H.264, Windows fallback |
 | libde265 | 1.3 MB | 3.2 MB | Linux HEVC, Windows fallback |
 | vo-aacenc | 0.2 MB | 0.3 MB | AAC encode where Media Foundation cannot |
+| opencore-amr (decoders) | 0.4 MB | 0.4 MB | AMR-NB and AMR-WB decode on both systems |
 | mpg123 | 0.5 MB | 0.7 MB | MP1/MP2/MP3 decode on both systems |
 | x264 (8-bit) | 1.3 MB | 2.0 MB | Linux H.264 encode, Windows fallback |
 | x265 (8-bit) | 7.9 MB | 4.2 MB | Linux HEVC encode, Windows fallback |
@@ -119,8 +120,8 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 ## Decisions for the owner
 
 1. **Patent-pooled codecs built from source** (H.264 through OpenH264 and x264, HEVC through libde265 and x265, AAC through FFamp's
-   own decoder and vo-aacenc, AMR through opencore-amr). Built into FFamp they carry the same patent exposure the app already has by bundling FFmpeg, which contains all of
-   them. Alternative for H.264 decode only: download Cisco's OpenH264 binary on first use (Cisco pays the royalties), at the cost of a
+   own decoder and vo-aacenc, AMR through opencore-amr). Built into FFamp they carry the same patent exposure the app already has by
+   bundling FFmpeg, which contains all of them. Alternative for H.264 decode only: download Cisco's OpenH264 binary on first use (Cisco pays the royalties), at the cost of a
    download and of the "nothing extra" goal. Default in this plan: build from source, as FFmpeg was.
 2. **AAC encoder.** vo-aacenc (LC only) is the software AAC encoder here; FFmpeg's own AAC encoder (what the Linux app uses today) can
    be ported instead if the owner prefers parity over size. Round 1 measures vo-aacenc against FFmpeg.

@@ -17,6 +17,7 @@ std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::ve
     if (track.codec == fourcc("fLaC")) return openFlacAudio(track, error);
     if (track.codec == fourcc("alac")) return openAlacAudio(track, error);
     if (track.codec == fourcc("ac-3") || track.codec == fourcc("ec-3")) return openAc3Audio(track, firstPacket, error);
+    if (track.codec == fourcc("samr") || track.codec == fourcc("sawb")) return openAmrAudio(track, error);
     const bool aac = track.codec == fourcc("mp4a"), mpeg = track.codec == fourcc(".mp3") || track.codec == fourcc(".mp2") || track.codec == fourcc(".mp1");
     if (!aac && !mpeg) {
         if (error) *error = "no decoder for this audio codec on this system yet";

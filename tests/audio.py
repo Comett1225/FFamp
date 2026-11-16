@@ -291,7 +291,7 @@ if __name__ == "__main__":
     elif kind == "truth":
         ok = truth(a[0], int(a[1]), int(a[2]), float(a[3]), float(a[4]), int(a[5]), a[6:])
     elif kind == "against":
-        ok = against(a[0], float(a[1]), int(a[2]), int(a[3]), "exact" in a[4:], ["-c:a", "libopus"] if "libopus" in a[4:] else [], "remix" in a[4:], "peer" in a[4:])
+        ok = against(a[0], float(a[1]), int(a[2]), int(a[3]), "exact" in a[4:], next((["-c:a", x] for x in a[4:] if x.startswith("lib")), []), "remix" in a[4:], "peer" in a[4:])
     elif kind == "checksum":
         ok = checksum(a[0], a[1])
     elif kind == "chunks":

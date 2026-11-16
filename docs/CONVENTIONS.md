@@ -104,9 +104,13 @@ list; `Sample.offset` is then free for the reader's use.
 
 ## Decoded sound (`AudioDecoder`)
 
-- Channel order by count, the same for every codec and for the mixer and the WAV writer: 3 = FL FR FC, 4 = FL FR FC BC (WAV mask 0x107),
-  5 = FL FR FC BL BR, 6 = FL FR FC LFE BL BR, 7 = FL FR FC LFE BC SL SR (WAV mask 0x70F), 8 = FL FR FC LFE BL BR SL SR.
+- Channel order by count, for the mixer and the WAV writer and, on the Mac, for every codec: 3 = FL FR FC, 4 = FL FR FC BC (WAV mask
+  0x107), 5 = FL FR FC BL BR, 6 = FL FR FC LFE BL BR, 7 = FL FR FC LFE BC SL SR (WAV mask 0x70F), 8 = FL FR FC LFE BL BR SL SR.
   FLAC comes out in its own file order, which is this order (4-channel FLAC and Opus are really quad: all four channels are kept).
+- Off the Mac every decoder gives FFmpeg's order, which differs from the order by count where FFmpeg's layout does: 6.1 ALAC and AAC
+  come out as FL FR FC LFE BL BR BC (`6.1(back)`), AAC with a program config element in FFmpeg's order for its layout. Such decoders
+  state their layout as an FFmpeg channel mask (`AudioDecoder::layout()`, 0 when the order is the one by count), and `PcmReader`'s
+  mixer places each channel by it, so a 6.1 file mixes to stereo with every channel on its own side on every system.
 - A gap between packets that the reader keeps, a packet that cannot be read and a packet the decoder rejects are played as silence of
   the same length, so the sound after them stays at its own time.
 - `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
@@ -435,6 +439,12 @@ list; `Sample.offset` is then free for the reader's use.
   out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
   `openStillDecoder` (WIC on Windows, libjpeg-turbo on Linux). On Linux `openPlatformVideo` is VA-API (below); the other hooks return
   nothing there yet.
+- H.264 on Windows goes to FFamp's own decoder first; Media Foundation decodes it only when that decoder cannot open the stream
+  (`FFAMP_SYSTEM_H264` puts Media Foundation first again, for tests and speed comparisons). HEVC and MPEG-2 stay on Media Foundation
+  first. On Linux VA-API stays first for H.264.
+- `encoders()` names the encoders `VideoEncoder` and `AacEncoder` really use, under FFmpeg's names for the same job: `h264_mf`,
+  `hevc_mf` and `aac_mf` on Windows (x264, x265 and vo-aacenc behind them where Media Foundation cannot), `libx264` and `libx265` on
+  Linux, and `aac` for vo-aacenc on both.
 - Media Foundation on the GPU: each picture's texture is copied into one of three staging textures of FFamp's own and mapped two
   pictures later, so the copy never waits for the GPU (pictures leave the decoder up to two samples later; the drain hands out the
   rest, a reset drops them). One D3D11 device and DXGI device manager serve every Media Foundation decoder of a process (made again
@@ -478,6 +488,18 @@ list; `Sample.offset` is then free for the reader's use.
   to 16), `FFAMP_H264_SLICES` (slice threads instead of frame threads), `FFAMP_H264_CPU` (a mask on the CPU features; 0 runs the plain
   C), `FFAMP_H264_FILL` (fills new frame buffers with a byte, to find output that depends on unwritten memory). `ffamp h264 <file>`
   decodes a file's H.264 track with it on every system, the Mac included, and writes the raw planes.
+- The H.264 decoder starts with the reorder delay FFmpeg's stream probe finds (`ffamp_h264_guess_delay`): when a sequence parameter set
+  of the configuration has no VUI reorder count, a throwaway one-thread decoder runs over the first packets (7 to 20 shown pictures,
+  250 packets at most) and its reorder delay is given to the real one, so pictures shown before the first key picture in display
+  order are not dropped as out of order. `VideoDecoder` and `ffamp h264` both do this; with a reorder count in the stream nothing is
+  decoded twice.
+- Every libavutil and libavcodec name the port defines carries the `ffamp_` prefix (`src/h264/ffamp_names.h`, force-included in each
+  C file; the x86 assembly's `private_prefix` is `ffamp_ff`, the AArch64 assembly's `EXTERN_ASM` is `ffamp_`), so FFamp links into one
+  library with FFmpeg without standing in for its functions. A name added to the port goes into that header; the H.264 suite fails
+  when the library defines an `av_`, `avpriv_` or `ff_` symbol.
+- FFmpeg's FATE h264 conformance tests (`tests/h264_fate.txt`: 185 bitstreams of the ITU-T H.264.1 set in seven groups) run when
+  `H264_CONFORMANCE` names the `h264-conformance` folder of the FATE suite (or `FATE_SAMPLES` the suite); each file is compared frame
+  by frame with `-f framemd5` against ffmpeg with one thread, frame threads and slice threads. The bitstreams are not in the repository.
 - FLAC (written from RFC 9639) and ALAC (based on FFmpeg's) are FFamp's own decoders on Windows and Linux, bit-exact with ffmpeg.
 - AC-3 and E-AC-3 are FFamp's own decoder on Windows and Linux (`src/ac3_decode.cpp`, based on FFmpeg's `ac3`/`eac3` float decoders,
   NOTICE), 135 dB or better against ffmpeg with its length and timing to the sample (no lead). It follows FFmpeg 9.0, which

@@ -1333,3 +1333,99 @@ What the numbers say:
   decoder comes first is left as it was: Media Foundation on Windows (the owner has not decided), VA-API on Linux (`wl-video`'s
   choice; native Intel and AMD drivers, where the copy-out is not paravirtualised, were not available to measure).
 - HEVC has no fast software decoder yet (libde265, 0.21x to 0.26x); the GPU paths cover it on Windows (1.33x).
+
+# Windows and Linux follow-up: own H.264 first on Windows, 6.1 in FFmpeg's order, FATE h264 conformance
+
+Owner decisions of 2026-11-16, on branch `wl-followup`. Same PC and judge as before (Windows 11 and Ubuntu 24.04 under WSL, the BtbN
+FFmpeg 9.0.2 the app bundles).
+
+## FATE h264 conformance
+
+FFmpeg's FATE suite folder `h264-conformance` (rsync://fate-suite.ffmpeg.org/fate-suite/h264-conformance/, the ITU-T H.264.1 / JVT
+bitstreams), fetched with the owner's go onto the Windows PC and into WSL only: 197 files, 139,889,402 bytes. FFmpeg's
+`tests/fate/h264.mak` uses 185 of them (`tests/h264_fate.txt`); each was decoded by FFamp's own decoder with one thread, frame threads
+and slice threads and compared frame by frame with `ffmpeg -threads 1 -f framemd5` of the same bitstream.
+
+| Group | Files | Windows (clang-cl, NASM) | Linux x86-64 (gcc, NASM) |
+|---|---|---|---|
+| Baseline and Extended profile | 32 | 32 pass | 32 pass |
+| Main profile CAVLC, progressive | 10 | 10 pass | 10 pass |
+| Main profile CABAC, progressive | 30 | 30 pass | 30 pass |
+| Interlaced (field pictures, PAFF, MBAFF) | 44 | 44 pass | 44 pass |
+| Multiple reference frames and MMCO | 11 | 11 pass | 11 pass |
+| FRExt High profile, 8 bits | 42 | 42 pass | 42 pass |
+| FRExt High 10 and High 4:2:2 | 16 | 16 pass | 16 pass |
+
+The first run passed 156 of the 185: 29 files (Toshiba, Sony, HHI, Tandberg, among them most of the interlaced ones) came out 2 to 9
+pictures short at the start. Those streams have B-pictures and no VUI reorder count, and some show pictures before their first key
+picture. FFmpeg's decoder drops such pictures as out of order too when it starts with a reorder delay of 0, but the ffmpeg program
+never starts there: its stream probe decodes the first 7 to 20 pictures and hands the reorder delay it found to the real decoder.
+FFamp's decoder now does the same (`ffamp_h264_guess_delay`, CONVENTIONS), in `ffamp h264` and in `VideoDecoder`, and all 185 pass on
+both systems. Streams with a reorder count (every x264 file) are not decoded twice.
+
+The suite (`54_h264`) runs the seven groups when `H264_CONFORMANCE` (or `FATE_SAMPLES`) points at the folder and skips them otherwise;
+the bitstreams are not in the repository.
+
+## 6.1 sound off the Mac
+
+FFamp's own ALAC and AAC decoders already gave 6.1 in FFmpeg's order (FL FR FC LFE BL BR BC, FFmpeg's `6.1(back)`), which is what
+`54_aac` asked; `fixes: channel-order` asked for the Mac's WAVE 6.1 order (FL FR FC LFE BC SL SR). Off the Mac FFmpeg's order is now the
+rule (the check follows it, and the fixes suite judges both 6.1 fixtures against ffmpeg there); the Mac is unchanged. Media Foundation's
+AAC decoder refuses 6.1 and 7.1, so FFamp's own decoder takes them on Windows too.
+
+The order was not the whole problem: FFamp's mixer placed 7 channels by count as FL FR FC LFE BC SL SR, so with FFmpeg's order a 6.1
+file mixed down to stereo with the left back channel in the middle, the right back channel on the left and the back centre on the
+right. The decoders now state their FFmpeg layout and the mixer places each channel by it; the 6.1 ALAC fixture mixes to stereo at
+0.986 / 1.157 peak, ffmpeg's `-ac 2` gives 0.988 / 1.159, the Mac 0.986 / 1.157. AAC with other FFmpeg layouts (2.1, 3.0(back),
+hexagonal, 7.1(wide) through a program config element) is mixed by its layout the same way.
+
+How the app takes it (read in the app's 5.2 tree and in the Windows/Linux switch branch): the desktop sound path asks FFamp's
+`PcmReader` for the file's own channel count, so no mixing happens in FFamp, and mixes to stereo itself with `downmixGains(channels, 0)`,
+which places 7 channels as Android's 5.1 + back centre: FL FR FC LFE BL BR BC. That is FFmpeg's order for 6.1 ALAC and AAC, so each
+channel lands on its own speaker. The viewer's playback asks `PcmReader` for 2 channels, which goes through FFamp's mixer and now places
+them by layout as well. For comparison, the app's FFmpeg path today (`-ac 7`) turns a 6.1(back) file into FFmpeg's 6.1 with both back
+channels folded into the back centre and silent side channels, which the app's mixdown then puts on the left only. Two things outside
+this change: on the Mac (AudioToolbox's WAVE 6.1 order) and for 6.1 files whose layout really is FL FR FC LFE BC SL SR (7-channel
+FLAC, WAV with mask 0x70F) the app's count-based mixdown puts the back centre on the left, the left side channel on the right and the
+right side channel in the middle, with FFmpeg as with FFamp; the app would need the layout (or to ask FFamp for 2 channels) to place
+those.
+
+## Windows: FFamp's own H.264 decoder first
+
+`tests/speed.py` on the idle PC, the suite's 60 s 1080p H.264 clip; "Media Foundation" is the same build with `FFAMP_SYSTEM_H264=1`
+(the order before this round). The factor is FFmpeg's time over FFamp's.
+
+| Task (H.264 1080p, 60 s) | Own decoder first (now) | Media Foundation first (before) | FFmpeg software | FFmpeg `-hwaccel d3d11va` |
+|---|---|---|---|---|
+| decode to memory | 1.18 s (1.22x) | 1.70 s (0.84x) | 1.43 s | 2.56 s |
+| 12 thumbnails, a program start each | 0.70 s (2.64x) | 2.05 s (0.92x) | 1.86 s | |
+| 50 random frames in one program (`10_video` seek, all exact) | 35 ms per frame (median 34) | 32 ms (median 33) | 145 ms per jump (a program each, `cliseek`) | |
+
+The other rows of the merged table (probe, index, trim, audio, export, HEVC) did not move. The thumbnails gain most: Media Foundation
+starts a D3D11 device and its decoder in every program, the own decoder starts in a few milliseconds. Random jumps inside one program
+are 3 ms slower on the own decoder, whose frame threads need a few more packets before the first picture of a jump comes out.
+
+Real time and processor use (`tests/speed.py --realtime`): 20 s clips made by x264 veryfast with B-frames, testsrc2 with noise at
+15, 45 and 80 Mbit/s, decoded to memory as fast as possible. "CPU while playing" is the process's whole processor time over the 20
+seconds of the clip, what decoding at the clip's own speed costs (the PC has 8 cores, 16 threads).
+
+| Clip | Decoder | Frames per second | Against real time | CPU while playing |
+|---|---|---|---|---|
+| 1080p60, 15 Mbit/s | FFamp, own decoder | 1,483 | 24.7x | 0.33 cores (2 %) |
+| | FFamp, Media Foundation on the GPU | 1,039 | 17.3x | 0.13 cores (1 %) |
+| | FFmpeg software | 1,261 | 21.0x | 0.46 cores (3 %) |
+| | FFmpeg `-hwaccel d3d11va` | 684 | 11.4x | 0.21 cores (1 %) |
+| 4K30, 45 Mbit/s | FFamp, own decoder | 248 | 8.3x | 0.84 cores (5 %) |
+| | FFamp, Media Foundation on the GPU | 286 | 9.5x | 0.51 cores (3 %) |
+| | FFmpeg software | 234 | 7.8x | 1.03 cores (6 %) |
+| | FFmpeg `-hwaccel d3d11va` | 188 | 6.3x | 0.43 cores (3 %) |
+| 4K60, 80 Mbit/s | FFamp, own decoder | 294 | 4.9x | 1.81 cores (11 %) |
+| | FFamp, Media Foundation on the GPU | 298 | 5.0x | 1.08 cores (7 %) |
+| | FFmpeg software | 253 | 4.2x | 2.20 cores (14 %) |
+| | FFmpeg `-hwaccel d3d11va` | 190 | 3.2x | 1.05 cores (7 %) |
+
+Every clip keeps real time on the own decoder with a wide margin, 4K60 included (4.9 times faster than real time), so no rule for
+handing 4K60 to Media Foundation is needed on this PC. The price is processor time: playing 4K60 costs about 1.8 cores on the own
+decoder against about 1.1 with Media Foundation (whose processor time is the copy back from the GPU and FFamp's own work); at 4K30 and
+1080p60 the difference is under half a core. The own decoder still uses less processor time than FFmpeg's software decoder everywhere.
+At 4K, Media Foundation is the faster of the two by up to 15 % (the GPU's decoder), at 1080p the own decoder is 43 % faster.

@@ -127,5 +127,57 @@ def libraries(folder):
                 f"FFmpeg {settings[0]}")
 
 
+def timed(command, env=None):
+    start = time.perf_counter()
+    if WINDOWS:
+        import ctypes
+        from ctypes import wintypes
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        code = process.wait()
+        times = [wintypes.FILETIME() for _ in range(4)]
+        ctypes.windll.kernel32.GetProcessTimes(wintypes.HANDLE(int(process._handle)), *[ctypes.byref(t) for t in times])
+        cpu = sum((t.dwHighDateTime << 32 | t.dwLowDateTime) for t in times[2:]) / 1e7
+    else:
+        import resource
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        code = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env).returncode
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        cpu = after.ru_utime - before.ru_utime + after.ru_stime - before.ru_stime
+    return (time.perf_counter() - start, cpu) if code == 0 else (None, None)
+
+
+def realtime(folder):
+    F = [FFMPEG, "-nostdin", "-v", "error", "-y"]
+    clips = {"h264_1080p60.mp4": ("1920x1080", 60, "15M"), "h264_2160p30.mp4": ("3840x2160", 30, "45M"), "h264_2160p60.mp4": ("3840x2160", 60, "80M")}
+    print("| Clip (20 s, x264 veryfast, B-frames) | Decoder | Decode time | Frames per second | Real time | CPU while playing |")
+    print("|---|---|---|---|---|---|")
+    for name, (size, rate, bitrate) in clips.items():
+        clip = os.path.join(folder, name)
+        if not os.path.exists(clip):
+            subprocess.run(F + ["-f", "lavfi", "-i", f"testsrc2=size={size}:rate={rate},noise=alls=10:allf=t", "-t", "20", "-c:v", "libx264", "-preset", "veryfast",
+                                "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate, "-g", str(rate), "-pix_fmt", "yuv420p", clip], check=True)
+        frames, seconds = 20 * rate, 20.0
+        raw = ["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"]
+        runs = [("FFamp, own decoder", [AMEDIA, "decode", clip], None)]
+        if WINDOWS:
+            runs.append(("FFamp, Media Foundation", [AMEDIA, "decode", clip], dict(os.environ, FFAMP_SYSTEM_H264="1")))
+        runs.append(("FFmpeg software", [FFMPEG, "-v", "error", "-i", clip, *raw], None))
+        if WINDOWS:
+            runs.append(("FFmpeg -hwaccel d3d11va", [FFMPEG, "-v", "error", "-hwaccel", "d3d11va", "-i", clip, *raw], None))
+        for label, command, env in runs:
+            results = [timed(command, env) for _ in range(2)]
+            wall, cpu = min(results, key=lambda r: r[0] if r[0] is not None else 1e9)
+            if wall is None:
+                print(f"| {name} | {label} | fails | | | |", flush=True)
+                continue
+            fps = frames / wall
+            print(f"| {name} | {label} | {wall:.2f} s | {fps:.0f} | {fps / rate:.1f}x | {cpu / seconds:.2f} cores ({100 * cpu / seconds / os.cpu_count():.0f} % of {os.cpu_count()}) |", flush=True)
+
+
 if __name__ == "__main__":
-    libraries(sys.argv[1]) if "--libraries" in sys.argv else main(sys.argv[1])
+    if "--libraries" in sys.argv:
+        libraries(sys.argv[1])
+    elif "--realtime" in sys.argv:
+        realtime(sys.argv[1])
+    else:
+        main(sys.argv[1])

@@ -14,6 +14,12 @@ if [ -x ../build/fuzz_h264 ]; then
 else
     skip "h264 fuzz target (the fuzz targets are not built on this system)"
 fi
+h4_names() {
+    local lib=../build/libffamp.a nm=nm
+    [ "$SYSTEM" = Windows ] && lib=../build/libffamp.lib nm=llvm-nm
+    [ -f $lib ] && [ -z "$($nm -g --defined-only $lib 2> /dev/null | awk 'NF == 3 {print $3}' | grep -E '^_?(av|avpriv|ff)_')" ]
+}
+check "the library defines no av_, avpriv_ or ff_ symbol, so it links next to FFmpeg without standing in for it" h4_names
 h4_default() { [ "$(env ${2:+FFAMP_SYSTEM_H264=1} $A videoinfo "$1" | sed -n 's/.*backend \([^ ]*\).*/\1/p')" = "$3" ]; }
 if [ "$SYSTEM" = Windows ]; then
     check "H.264 decodes with FFamp's own decoder first on Windows" h4_default $HV/h264_270p.mp4 "" h264

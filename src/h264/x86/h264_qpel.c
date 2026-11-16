@@ -7,14 +7,14 @@
 #include "qpel.h"
 
 void ff_avg_pixels4_mmxext(uint8_t *dst, const uint8_t *src, ptrdiff_t stride);
-void ff_put_pixels4x4_l2_mmxext(uint8_t *dst, const uint8_t *src1, const uint8_t *src2,
+void ffamp_ff_put_pixels4x4_l2_mmxext(uint8_t *dst, const uint8_t *src1, const uint8_t *src2,
                                 ptrdiff_t stride);
-void ff_avg_pixels4x4_l2_mmxext(uint8_t *dst, const uint8_t *src1, const uint8_t *src2,
+void ffamp_ff_avg_pixels4x4_l2_mmxext(uint8_t *dst, const uint8_t *src1, const uint8_t *src2,
                                 ptrdiff_t stride);
 #define ff_put_pixels4x4_l2_mmxext(dst, src1, src2, dststride, src1stride) \
-    ff_put_pixels4x4_l2_mmxext((dst), (src1), (src2), (dststride))
+    ffamp_ff_put_pixels4x4_l2_mmxext((dst), (src1), (src2), (dststride))
 #define ff_avg_pixels4x4_l2_mmxext(dst, src1, src2, dststride, src1stride) \
-    ff_avg_pixels4x4_l2_mmxext((dst), (src1), (src2), (dststride))
+    ffamp_ff_avg_pixels4x4_l2_mmxext((dst), (src1), (src2), (dststride))
 #define ff_put_pixels8x8_l2_sse2  ff_put_pixels8x8_l2_mmxext
 #define ff_avg_pixels8x8_l2_sse2  ff_avg_pixels8x8_l2_mmxext
 

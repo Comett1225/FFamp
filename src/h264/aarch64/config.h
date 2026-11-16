@@ -14,9 +14,9 @@
 #define CONFIG_RV40_DECODER 0
 #define CONFIG_VC1DSP 0
 #if defined(__APPLE__)
-#define EXTERN_ASM _
+#define EXTERN_ASM _ffamp_
 #define HAVE_SECTION_DATA_REL_RO 0
 #else
-#define EXTERN_ASM
+#define EXTERN_ASM ffamp_
 #define HAVE_SECTION_DATA_REL_RO 1
 #endif

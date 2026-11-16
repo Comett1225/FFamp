@@ -82,7 +82,8 @@ typedef int x86_reg;
 #   define NAMED_CONSTRAINTS_ARRAY(...)
 #else
 
-#   define MANGLE(a) "%["#a"]"
+#   define MANGLE_NAMED(a) "%["#a"]"
+#   define MANGLE(a) MANGLE_NAMED(a)
 
 #   define FE_0(P,X) P(X)
 #   define FE_1(P,X,X1) P(X), FE_0(P,X1)

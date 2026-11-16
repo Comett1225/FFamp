@@ -1269,3 +1269,67 @@ the fixes, speed check and speed suites only ran on `wl-video` and here. Nothing
 
 What the merge changed in the results: the d3d12 scaling-matrix clip of `61_vaapi` now decodes on FFamp's own decoder, every frame
 bit-exact (OpenH264 gave 71.9 dB); `54_h264`, `53_ac3`, `54_aac`, `53_h263`, `60_videox` and `61_vaapi` pass whole on both systems.
+
+## Speed against FFmpeg
+
+`tests/speed.py` on the merged build, nothing else running on the PC, the suite's 60 s 1080p clips; FFmpeg is the BtbN 9.0.2 build the
+app bundles. The factor is FFmpeg's time over FFamp's (above 1: FFamp is faster).
+
+Windows, default paths (Media Foundation on the GPU for H.264 and HEVC, the GPU encoder for H.264 export):
+
+| Task | FFamp | FFmpeg | Factor |
+|---|---|---|---|
+| open + probe, H.264 / HEVC clip | 13 / 13 ms | 72 / 32 ms | 5.4x / 2.4x |
+| frame index, H.264 / HEVC | 96 / 73 ms | 128 / 82 ms | 1.34x / 1.13x |
+| 12 thumbnails, H.264 / HEVC | 2.17 / 3.62 s | 1.89 / 3.57 s | 0.87x / 0.99x |
+| decode to memory, H.264 | 1.71 s | 1.46 s (software), 2.45 s (`-hwaccel d3d11va`) | 0.86x / 1.44x |
+| decode to memory, HEVC | 2.00 s | 2.67 s (software), 2.64 s (d3d11va) | 1.33x / 1.32x |
+| trim 20 s from 10 s, H.264 / HEVC | 38 / 35 ms | 101 / 60 ms | 2.7x / 1.7x |
+| extract audio by copy, H.264 / HEVC clip | 26 / 26 ms | 99 / 55 ms | 3.8x / 2.1x |
+| extract audio to MP3 128 kbit/s | 348 ms | 309 ms | 0.89x |
+| export MP4, 300 frames 1080p H.264 8 Mbit/s + AAC 128 kbit/s | 1,043 ms | 827 ms (`h264_amf`) | 0.79x |
+
+Linux (WSL), default paths (VA-API through Mesa's d3d12 driver for H.264 and HEVC):
+
+| Task | FFamp | FFmpeg | Factor |
+|---|---|---|---|
+| open + probe, H.264 / HEVC clip | 2 / 2 ms | 55 / 12 ms | 29x / 8.0x |
+| frame index, H.264 / HEVC | 64 / 44 ms | 65 / 20 ms | 1.01x / 0.45x |
+| 12 thumbnails, H.264 / HEVC (VA-API) | 3.79 / 5.15 s | 2.14 / 4.04 s | 0.56x / 0.78x |
+| decode to memory, H.264 / HEVC (VA-API) | 8.89 / 10.2 s | 1.57 / 2.89 s | 0.18x / 0.28x |
+| trim 20 s from 10 s, H.264 / HEVC | 21 / 20 ms | 83 / 37 ms | 3.9x / 1.8x |
+| extract audio by copy, H.264 / HEVC clip | 6 / 7 ms | 83 / 37 ms | 13x / 5.4x |
+| extract audio to MP3 128 kbit/s | 279 ms | 385 ms | 1.38x |
+| export MP4, 300 frames 1080p H.264 8 Mbit/s + AAC 128 kbit/s | 1.40 s | 1.39 s (`libx264` veryfast, `aac`) | 0.99x |
+
+H.264 through FFamp's own decoder (frame threads, assembly), on Windows with `FFAMP_NO_MEDIA_FOUNDATION=1` and on Linux with
+`FFAMP_NO_VAAPI=1`, and as `speed.py --libraries` runs it (`--software`):
+
+| Task (H.264 clip) | Windows FFamp | FFmpeg | Factor | Linux FFamp | FFmpeg | Factor |
+|---|---|---|---|---|---|---|
+| decode to memory | 1.18 s | 1.45 s | 1.23x | 1.34 s | 1.52 s | 1.13x |
+| decode to memory, `--software` | 1.17 s | 1.44 s | 1.22x | 1.33 s | 1.56 s | 1.17x |
+| 12 thumbnails (a program start each) | 0.74 s | 1.86 s | 2.53x | 0.88 s | 2.15 s | 2.45x |
+| decode against FFmpeg's `-hwaccel d3d11va` | 1.18 s | 2.59 s | 2.20x | | | |
+
+The other software libraries (`speed.py --libraries`, Media Foundation and VA-API off):
+
+| Library task (1080p) | Windows FFamp / FFmpeg | Linux FFamp / FFmpeg |
+|---|---|---|
+| HEVC decode, 60 s (libde265) | 13.0 / 2.69 s (0.21x) | 10.9 / 2.88 s (0.26x) |
+| VP9 decode, 60 s (libvpx) | 2.61 / 2.24 s (0.86x) | 3.42 / 2.36 s (0.69x) |
+| AV1 decode, 60 s (dav1d) | 1.82 / 2.07 s (1.14x) | 2.56 / 3.39 s (1.32x) |
+| H.264 encode, 300 frames (x264) | 0.73 / 0.75 s (1.02x) | 1.42 / 1.42 s (1.00x) |
+| HEVC encode, 300 frames (x265) | 4.03 / 3.61 s (0.90x) | 4.01 / 3.73 s (0.93x) |
+| AV1 encode, 300 frames (SVT-AV1) | 1.09 / 1.08 s (0.99x) | 1.09 / 1.13 s (1.04x) |
+| VP9 encode, 300 frames (libvpx) | 1.36 / 1.39 s (1.02x) | 1.77 / 1.96 s (1.11x) |
+
+What the numbers say:
+
+- FFamp's own H.264 decoder beats FFmpeg's software decoder on both systems (1.13x to 1.23x) and FFmpeg's D3D11VA path by 2.2x; with
+  it, 12 thumbnails take less than half of FFmpeg's time on both systems.
+- The default H.264 paths are slower than that decoder: Media Foundation on the GPU decodes at 0.86x FFmpeg (the GPU's own limit,
+  `wl-video`), and VA-API under WSL at 0.18x, because every picture comes out through the d3d12 driver at about 200 fps. Which
+  decoder comes first is left as it was: Media Foundation on Windows (the owner has not decided), VA-API on Linux (`wl-video`'s
+  choice; native Intel and AMD drivers, where the copy-out is not paravirtualised, were not available to measure).
+- HEVC has no fast software decoder yet (libde265, 0.21x to 0.26x); the GPU paths cover it on Windows (1.33x).

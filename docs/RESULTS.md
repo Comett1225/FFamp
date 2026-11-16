@@ -927,5 +927,43 @@ The damaged-stream comparison also shows why the assembly matters for parity: FF
 differently from its C code, and its arm64 CABAC checks the end of the slice where the C and x86 code do not; with the assembly ported,
 FFamp follows the FFmpeg of the same system.
 
-Fuzz target `fuzz_h264` (packets with two-byte lengths, 1 to 4 frame threads or slice threads, flushes in between): 300,000 runs
-blind on the Mac without a crash or a hang; five kept inputs.
+Fuzz target `fuzz_h264` (packets with two-byte lengths, 1 to 4 frame threads or slice threads, flushes in between, five kept
+inputs): 300,000 runs on the Mac and 62,500 under AddressSanitizer in WSL without a crash, a hang or a memory error. 159 decodes of the
+test clips, the damaged copies and the fixtures (one thread, frame threads, slice threads) under AddressSanitizer with leak checks and
+UndefinedBehaviorSanitizer (FFmpeg's deliberate signed shifts and wrap-around excepted): no error.
+
+## Suites
+
+| System | Full run | Round 1 | H.264 |
+|---|---|---|---|
+| Linux (WSL, gcc 13, assembly) | 2,469 pass, 109 fail, 189 skip | 2,345 / 175 / 188 | no H.264 failure left (the ~60 OpenH264 B-frame checks and the interlaced fixtures now pass); 54_h264 all pass |
+| Windows (clang-cl, NASM 3.02 assembly) | 2,463 pass, 85 fail, 196 skip | 2,392 / 109 / 184 | none; 54_h264 all pass (57, the fuzz target is not built on Windows) |
+
+What still fails on both is outside H.264: AC-3, E-AC-3, AMR, ProRes, DV, H.263, MPEG-1/2 and Motion JPEG (decoders of the other
+round 2 helpers, not on this branch), HE-AAC v2 on Linux, the Vorbis trim check, the alpha VP8/VP9 BGRA checksums, `bad_sample.mp4`'s
+checksum (made from VideoToolbox's concealment of its broken picture), the 1 GB Motion JPEG AVI on Linux and the one-thread speed checks
+of the Windows Media decoders.
+
+## Speed against FFmpeg
+
+The suite's 60 s 1080p clip (8 Mbit/s, noisy, x264 veryfast with B-frames), best of three, nothing else running on the PC; FFmpeg is the
+BtbN 9.0.2 build the app bundles. "Decoder only" is `ffamp h264 --null` against `ffmpeg -f null`; "decode to memory" is the
+`tests/speed.py` job (`ffamp decode` against `ffmpeg -f rawvideo`).
+
+| Job | Linux (WSL) FFamp | FFmpeg | Windows FFamp | FFmpeg |
+|---|---|---|---|---|
+| decoder only, one thread | 6.93 s | 7.07 s | 9.71 s | 10.34 s |
+| decoder only, threads (CPU count + 1) | 1.24 s | 1.38 s | 1.12 s | 1.29 s |
+| decode to memory, FFamp's H.264 decoder | 1.40 s (1.13x) | 1.59 s | 1.32 s (1.20x, `--software`) | 1.58 s |
+| 12 thumbnails (one program start each) | 0.86 s (2.53x) | 2.16 s | 3.23 s with Media Foundation | 1.84 s |
+
+Round 1 had 17.3 s (0.09x) for the Linux decode and 4.1 s for Linux thumbnails. On Windows the default path is still Media Foundation
+on the GPU (4.13 s for the decode, 0.36x, because every picture comes back from the GPU through Media Foundation); FFamp's decoder on
+the CPU decodes the same clip in 1.32 s, faster than FFmpeg's software decoder (1.58 s) and its D3D11VA path (2.66 s).
+
+arm64 (the Mac's M4, NEON build, a 10 s 1080p clip, decoder only): 0.17 to 0.20 s with threads against `ffmpeg -f null`'s 0.33 s (a
+program start included), 0.84 s against 0.89 s on one thread; without NEON 1.08 s. Linux arm64 itself was not measured (no such
+machine here).
+
+The pictures go to the `VideoDecoder` without a copy: `Picture.keep` holds the decoder's frame and the `Image` points at its planes.
+Copying each 1080p picture cost about a fifth of the decode time.

@@ -17,7 +17,11 @@ void pairs(Vlc& vlc, int bits, size_t count, const T (*table)[2], const int32_t*
     vlc.build(bits, count, lengths.data(), codes.data(), symbols);
 }
 
-void rlTable(RlTable& rl, int n, int last, const uint16_t (*codes)[2], const int8_t* run, const int8_t* level) {
+}
+
+const uint8_t kIdentityQscale[32] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
+
+void buildRl(RlTable& rl, int n, int last, const uint16_t (*codes)[2], const int8_t* run, const int8_t* level) {
     rl.n = n;
     rl.last = last;
     rl.run = run;
@@ -32,6 +36,8 @@ void rlTable(RlTable& rl, int n, int last, const uint16_t (*codes)[2], const int
         }
     }
 }
+
+namespace {
 
 void v2DcTable(Vlc& vlc, const uint8_t (*tab)[2]) {
     std::vector<uint8_t> lengths(512);
@@ -103,12 +109,12 @@ const Tables& tables() {
         t.msMv[1].buildInOrder(9, 1100, kMvTable1Lens, kMvTable1, 0);
         const uint32_t (*inter[4])[2] = {kMbNonIntra2, kMbNonIntra3, kMbNonIntra4, kMbNonIntra1};
         for (int i = 0; i < 4; i++) pairs(t.mbNonIntra[i], 9, 128, inter[i]);
-        rlTable(t.rl[0], 132, 85, kTable0Vlc, kTable0Run, kTable0Level);
-        rlTable(t.rl[1], 185, 119, kTable2Vlc, kTable2Run, kTable2Level);
-        rlTable(t.rl[2], 102, 67, kMpeg4IntraVlc, kMpeg4IntraRun, kMpeg4IntraLevel);
-        rlTable(t.rl[3], 148, 81, kTable1Vlc, kTable1Run, kTable1Level);
-        rlTable(t.rl[4], 168, 99, kTable4Vlc, kTable4Run, kTable4Level);
-        rlTable(t.rl[5], 102, 58, kInterVlc, kInterRun, kInterLevel);
+        buildRl(t.rl[0], 132, 85, kTable0Vlc, kTable0Run, kTable0Level);
+        buildRl(t.rl[1], 185, 119, kTable2Vlc, kTable2Run, kTable2Level);
+        buildRl(t.rl[2], 102, 67, kMpeg4IntraVlc, kMpeg4IntraRun, kMpeg4IntraLevel);
+        buildRl(t.rl[3], 148, 81, kTable1Vlc, kTable1Run, kTable1Level);
+        buildRl(t.rl[4], 168, 99, kTable4Vlc, kTable4Run, kTable4Level);
+        buildRl(t.rl[5], 102, 58, kInterVlc, kInterRun, kInterLevel);
         return t;
     }();
     return made;
@@ -184,7 +190,7 @@ void Mpv::initBlockIndex() {
 
 void Mpv::setQscale(int q) {
     qscale = std::clamp(q, 1, 31);
-    chromaQscale = qscale;
+    chromaQscale = chromaQscaleTable[qscale];
     yDcScale = yDcScaleTable[qscale];
     cDcScale = cDcScaleTable[chromaQscale];
 }
@@ -325,16 +331,16 @@ void Mpv::loopFilter() {
         if (qpTc) {
             vFilter(y, linesize, qpTc);
             vFilter(y + 8, linesize, qpTc);
-            vFilter(cb, uvlinesize, qpTc);
-            vFilter(cr, uvlinesize, qpTc);
+            vFilter(cb, uvlinesize, chromaQscaleTable[qpTc]);
+            vFilter(cr, uvlinesize, chromaQscaleTable[qpTc]);
         }
         if (qpTt) hFilter(y - 8 * linesize + 8, linesize, qpTt);
         if (mbX) {
             const int qpDt = (qpTt || skipped(xy - 1 - mbStride)) ? qpTt : qt[xy - 1 - mbStride];
             if (qpDt) {
                 hFilter(y - 8 * linesize, linesize, qpDt);
-                hFilter(cb - 8 * uvlinesize, uvlinesize, qpDt);
-                hFilter(cr - 8 * uvlinesize, uvlinesize, qpDt);
+                hFilter(cb - 8 * uvlinesize, uvlinesize, chromaQscaleTable[qpDt]);
+                hFilter(cr - 8 * uvlinesize, uvlinesize, chromaQscaleTable[qpDt]);
             }
         }
     }
@@ -348,8 +354,8 @@ void Mpv::loopFilter() {
             hFilter(y, linesize, qpLc);
             if (mbY + 1 == mbHeight) {
                 hFilter(y + 8 * linesize, linesize, qpLc);
-                hFilter(cb, uvlinesize, qpLc);
-                hFilter(cr, uvlinesize, qpLc);
+                hFilter(cb, uvlinesize, chromaQscaleTable[qpLc]);
+                hFilter(cr, uvlinesize, chromaQscaleTable[qpLc]);
             }
         }
     }

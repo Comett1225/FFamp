@@ -405,7 +405,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool twelve = codec == fourcc("ap4h") || codec == fourcc("ap4x");
     const bool prores = twelve || codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco");
     const bool dv = (codec >> 16) == 0x6476;
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv) return fail("video codec not supported by this decoder");
+    const bool h263 = codec == fourcc("h263");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv && !h263) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -469,6 +470,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.soft = openVc1(codec, config, track.width, track.height, error);
     } else if (msmpeg4) {
         d.soft = openMsmpeg4(codec, config, track.width, track.height, error);
+    } else if (h263) {
+        d.soft = openH263(error);
     } else if (part2) {
         d.soft = openXvid(config, track.width, track.height);
         if (!d.soft) return fail("MPEG-4 part 2 video needs xvidcore, which was not found when building");

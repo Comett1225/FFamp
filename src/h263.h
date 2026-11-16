@@ -58,6 +58,7 @@ extern const uint8_t kX8OrientLowquant[4][12][2];
 extern const uint8_t kX8OrientHighquant[2][12][2];
 extern const uint8_t kX8DcQuant[2][8][34][2];
 extern const uint8_t kX8AcQuant[2][2][8][77][2];
+extern const uint8_t kIdentityQscale[32];
 
 constexpr int kPictureI = 1, kPictureP = 2;
 constexpr int kMsmpeg4v1 = 1, kMsmpeg4v2 = 2, kMsmpeg4v3 = 3, kWmv1 = 4, kWmv2 = 5;
@@ -92,6 +93,7 @@ struct Tables {
     RlTable rl[6];
 };
 const Tables& tables();
+void buildRl(RlTable& rl, int n, int last, const uint16_t (*codes)[2], const int8_t* run, const int8_t* level);
 
 struct Mpv {
     int version = 0;
@@ -105,6 +107,7 @@ struct Mpv {
     int qscale = 1, chromaQscale = 1, yDcScale = 0, cDcScale = 0;
     const uint8_t* yDcScaleTable = nullptr;
     const uint8_t* cDcScaleTable = nullptr;
+    const uint8_t* chromaQscaleTable = kIdentityQscale;
     int mbX = 0, mbY = 0, resyncMbX = 0, resyncMbY = 0, firstSliceLine = 0;
     int blockIndex[6] = {}, blockWrap[6] = {};
     uint8_t* dest[3] = {};

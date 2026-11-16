@@ -16,6 +16,7 @@ std::unique_ptr<Reader> openCaf(const std::string& path, std::string* error);
 std::unique_ptr<Reader> openAsf(const std::string& path, std::string* error);
 const char* windowsMediaName(uint32_t codec);
 int msmpeg4PictureType(uint32_t codec, const uint8_t* data, size_t size);
+int h263PictureType(const uint8_t* data, size_t size);
 int vc1PictureType(uint32_t codec, const std::vector<uint8_t>& config, const uint8_t* sample, size_t size);
 inline bool msmpeg4Codec(uint32_t codec) {
     return codec == fourcc("MPG4") || codec == fourcc("MP42") || codec == fourcc("MP43") || codec == fourcc("WMV1") || codec == fourcc("WMV2");

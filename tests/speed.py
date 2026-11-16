@@ -96,5 +96,36 @@ def main(folder):
         row("export MP4, 300 frames 1080p H.264 8 Mbit/s + AAC 128 kbit/s", best([ours], 2), best([theirs], 2), f"FFmpeg {encoder}; FFamp: {note}")
 
 
+def libraries(folder):
+    F = [FFMPEG, "-nostdin", "-v", "error", "-y"]
+    big = "testsrc2=size=1920x1080:rate=30,noise=alls=10:allf=t"
+    made = {"vp9_1080_60s.webm": ["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1", "-b:v", "5M"],
+            "av1_1080_60s.mp4": ["-c:v", "libsvtav1", "-preset", "10", "-b:v", "4M"]}
+    for name, codec in made.items():
+        if not os.path.exists(os.path.join(folder, name)):
+            subprocess.run(F + ["-f", "lavfi", "-i", big, "-t", "60", *codec, "-g", "60", "-pix_fmt", "yuv420p", os.path.join(folder, name)], check=True)
+    raw, scratch = os.path.join(folder, "raw_1080.yuv"), os.path.join(folder, "speed")
+    os.makedirs(scratch, exist_ok=True)
+    os.environ.update(FFAMP_NO_SYSTEM_ENCODER="1", FFAMP_NO_MEDIA_FOUNDATION="1")
+    print("| Library task | FFamp | FFmpeg | FFamp faster by | Note |")
+    print("|---|---|---|---|---|")
+    for name in ("h264_1080_60s.mp4", "hevc_1080_60s.mp4", "vp9_1080_60s.webm", "av1_1080_60s.mp4"):
+        clip = os.path.join(folder, name)
+        if not os.path.exists(clip):
+            continue
+        ours = [AMEDIA, "decode", clip, "--software"]
+        backend = subprocess.run([AMEDIA, "videoinfo", clip, "--software"], capture_output=True, text=True).stdout.split("backend ")[-1].split()[0]
+        row(f"software decode to memory, {name}", best([ours], 2), best([[FFMPEG, "-v", "error", "-i", clip, "-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"]], 2), f"FFamp {backend}")
+    theirs = {"h264": ["libx264", "-preset", "veryfast"], "hevc": ["libx265", "-preset", "fast", "-x265-params", "log-level=error"], "av1": ["libsvtav1", "-preset", "10"],
+              "vp9": ["libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"]}
+    if os.path.exists(raw):
+        for codec, settings in theirs.items():
+            out = os.path.join(scratch, f"lib_{codec}" + (".webm" if codec == "vp9" else ".mp4"))
+            row(f"software encode, 300 frames 1080p {codec} 8 Mbit/s",
+                best([[AMEDIA, "encode", out, "--video", raw, "--size", "1920x1080", "--fps", "30", "--frames", "300", "--codec", codec, "--bitrate", "8000000"]], 2),
+                best([F + ["-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", "1920x1080", "-r", "30", "-i", raw, "-frames:v", "300", "-c:v", *settings, "-b:v", "8M", "-g", "30", out]], 2),
+                f"FFmpeg {settings[0]}")
+
+
 if __name__ == "__main__":
-    main(sys.argv[1])
+    libraries(sys.argv[1]) if "--libraries" in sys.argv else main(sys.argv[1])

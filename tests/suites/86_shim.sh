@@ -1,4 +1,5 @@
 echo "== stand-ins: the two programs of experiments/absentmotion/shim accept the app's command lines and nothing else (no FFmpeg)"
+on_mac || { skip "the stand-in programs (built on the Mac only)"; return 0; }
 cmake -S .. -B ../build -DABSENT_SHIM=ON > /dev/null && cmake --build ../build --target shim_ffmpeg shim_ffprobe > /dev/null || exit 1
 SH=../build/shim
 SO=$O/shim

@@ -70,15 +70,38 @@ void shapeImage(Image& image, int width, int height, int chromaWidth, int chroma
 }
 
 void fillImage(Image& image, const Picture& from) {
-    shapeImage(image, from.width, from.height, from.chromaWidth, from.chromaHeight, from.bits, from.interleaved);
+    shapeImage(image, from.width, from.height, from.chromaWidth, from.chromaHeight, from.bits, false);
     Picture& to = image.picture;
     to.shift = from.shift;
     to.stamp = from.stamp;
     to.color = from.color;
-    for (int plane = 0; plane < (from.interleaved ? 2 : 3); ++plane) {
-        const int rows = plane ? from.chromaHeight : from.height;
-        for (int y = 0; y < rows; ++y) memcpy(const_cast<uint8_t*>(to.plane[plane]) + size_t(y) * to.stride[plane], from.plane[plane] + size_t(y) * from.stride[plane], to.stride[plane]);
-    }
+    const size_t unit = from.bits > 8 ? 2 : 1, lumaRow = size_t(from.width) * unit, chromaRow = size_t(from.chromaWidth) * unit;
+    inParallel(from.height, [&](int top, int bottom) {
+        for (int y = top; y < bottom; ++y) memcpy(const_cast<uint8_t*>(to.plane[0]) + size_t(y) * to.stride[0], from.plane[0] + size_t(y) * from.stride[0], lumaRow);
+        const int first = int(int64_t(top) * from.chromaHeight / from.height), last = int(int64_t(bottom) * from.chromaHeight / from.height);
+        for (int y = first; y < last; ++y) {
+            uint8_t* u = const_cast<uint8_t*>(to.plane[1]) + size_t(y) * to.stride[1];
+            uint8_t* v = const_cast<uint8_t*>(to.plane[2]) + size_t(y) * to.stride[2];
+            if (!from.interleaved) {
+                memcpy(u, from.plane[1] + size_t(y) * from.stride[1], chromaRow);
+                memcpy(v, from.plane[2] + size_t(y) * from.stride[2], chromaRow);
+            } else if (unit == 1) {
+                const uint8_t* line = from.plane[1] + size_t(y) * from.stride[1];
+                for (int x = 0; x < from.chromaWidth; ++x) {
+                    u[x] = line[2 * x];
+                    v[x] = line[2 * x + 1];
+                }
+            } else {
+                const uint16_t* line = reinterpret_cast<const uint16_t*>(from.plane[1] + size_t(y) * from.stride[1]);
+                uint16_t* uu = reinterpret_cast<uint16_t*>(u);
+                uint16_t* vv = reinterpret_cast<uint16_t*>(v);
+                for (int x = 0; x < from.chromaWidth; ++x) {
+                    uu[x] = line[2 * x];
+                    vv[x] = line[2 * x + 1];
+                }
+            }
+        }
+    });
     if (from.alpha) {
         image.alpha.resize(size_t(from.width) * size_t(from.height));
         for (int y = 0; y < from.height; ++y) memcpy(image.alpha.data() + size_t(y) * size_t(from.width), from.alpha + size_t(y) * from.alphaStride, size_t(from.width));
@@ -139,7 +162,7 @@ struct VideoDecoder::Impl {
     std::map<int64_t, std::shared_ptr<Image>> ready;
     std::atomic<uint64_t> shown{0};
     std::atomic<int64_t> floor{0};
-    bool keep = true;
+    std::atomic<bool> keep{true};
     uint32_t ahead = 8;
     uint32_t next = kNone;
     uint32_t last = kNone;
@@ -296,7 +319,7 @@ struct VideoDecoder::Impl {
             std::lock_guard<std::mutex> hold(lock);
             if (!shape.color.known) shape.color = p.color;
         }
-        if (!keep || p.stamp < floor) return;
+        if (!keep || p.stamp < floor || !p.plane[0]) return;
         auto image = pool->take();
         if (p.keep && !p.alpha) image->picture = p;
         else fillImage(*image, p);
@@ -410,7 +433,11 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool part2 = codec == fourcc("mp4v") && track.configType == fourcc("esds");
     const bool jpeg = codec == fourcc("jpeg");
     const bool mpeg = codec == fourcc("mp1v") || codec == fourcc("mp2v");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg) return fail("video codec not supported by this decoder");
+    const bool twelve = codec == fourcc("ap4h") || codec == fourcc("ap4x");
+    const bool prores = twelve || codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco");
+    const bool dv = (codec >> 16) == 0x6476;
+    const bool h263 = codec == fourcc("h263");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv && !h263) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -429,6 +456,13 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.chromaX = chroma == 2 ? 1 : 0;
         d.shape.chromaY = 0;
         if (chroma != 2 && chroma != 3) return fail("this APV picture format is not supported");
+    } else if (prores) {
+        d.shape.bits = twelve ? 12 : 10;
+        d.shape.chromaX = twelve ? 0 : 1;
+        d.shape.chromaY = 0;
+    } else if (dv) {
+        d.shape.chromaX = codec == fourcc("dvc ") || codec == fourcc("dvpp") ? 2 : 1;
+        d.shape.chromaY = codec == fourcc("dvcp") ? 1 : 0;
     } else if (part2 || jpeg || mpeg) {
         d.shape.chromaY = 1;
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
@@ -467,6 +501,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.soft = openVc1(codec, config, track.width, track.height, error);
     } else if (msmpeg4) {
         d.soft = openMsmpeg4(codec, config, track.width, track.height, error);
+    } else if (h263) {
+        d.soft = openH263(error);
     } else if (part2) {
         d.soft = openXvid(config, track.width, track.height);
         if (!d.soft) return fail("MPEG-4 part 2 video needs xvidcore, which was not found when building");
@@ -475,24 +511,30 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.color = Color();
     } else if (apv) {
         d.soft = openApvDecoder(error);
+    } else if (prores) {
+        d.soft = openProRes(codec, error);
+    } else if (dv) {
+        d.soft = openDv();
     } else if (av1) {
-        d.soft = openDav1d(int(d.ahead), error);
-        if (d.soft) d.ahead += d.ahead / 2;
+        if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
+        if (!d.soft) {
+            d.soft = openDav1d(int(d.ahead), error);
+            if (d.soft) d.ahead += d.ahead / 2;
+        }
     } else if (vp8 || vp9) {
         if (track.alpha) d.softMask = openVpxDecoder(vp8, nullptr);
-        d.soft = openVpxDecoder(vp8, error);
-    } else if (mpeg) {
-        if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft && error) *error = problem.empty() ? "MPEG-1 and MPEG-2 video are not decoded on this system yet" : problem;
+        if (vp9 && !software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
+        if (!d.soft) d.soft = openVpxDecoder(vp8, error);
     } else {
         std::string fallback;
         const VideoInfo info = h264 ? videoInfo(track.configType, config) : VideoInfo();
         const bool systemProfile = !h264 || (info.bitDepth == 8 && info.chroma == 1);
         if (!software && systemProfile) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft) d.soft = h264 ? openH264(config, &fallback) : openDe265(config, &fallback);
+        if (!d.soft) d.soft = mpeg ? openMpeg2(config, &fallback) : h264 ? openH264(config, &fallback) : openDe265(config, &fallback);
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
     }
     if (!d.soft) return nullptr;
+    d.soft->wanted = [&d](int64_t stamp) { return d.keep && stamp >= d.floor; };
     d.backend = d.soft->name();
     return decoder;
 }

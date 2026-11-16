@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 PREFIX="${1:-}"
-[ -n "$PREFIX" ] || { echo "usage: third_party/build_windows.sh <prefix> [work folder]  (Git Bash inside a vcvars64 shell, cmake and ninja on PATH; the libraries build with MSVC, FFamp itself with clang-cl)" >&2; exit 2; }
+[ -n "$PREFIX" ] || { echo "usage: third_party/build_windows.sh <prefix> [work folder]  (Git Bash inside a vcvars64 shell, cmake, ninja and nasm on PATH; the libraries build with MSVC, FFamp itself with clang-cl)" >&2; exit 2; }
+command -v nasm > /dev/null || { echo "nasm is not on PATH (the portable zip from nasm.us is enough)" >&2; exit 2; }
 mkdir -p "$PREFIX"
 PREFIX="$(cd "$PREFIX" && pwd -W)"
 WORK="${2:-$PREFIX/work}"
@@ -89,7 +90,7 @@ fi
 
 if step svtav1; then
 fetch https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.3.0/SVT-AV1-v4.3.0.tar.bz2 9223ce06e6172ad41357ed23b3b00f036e03794b86b0e20ea9ccb3f648b8955d svtav1 SVT-AV1-v4.3.0.tar.bz2
-with_cmake -DBUILD_APPS=OFF -DBUILD_TESTING=OFF -DSVT_AV1_LTO=OFF -DCOMPILE_C_ONLY=ON
+with_cmake -DBUILD_APPS=OFF -DBUILD_TESTING=OFF -DSVT_AV1_LTO=OFF
 fi
 
 if step xvid; then
@@ -131,7 +132,7 @@ fi
 
 if step x265; then
 fetch https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz 40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210 x265 x265_4.2.tar.gz
-SOURCE=source with_cmake -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_ASSEMBLY=OFF -DHIGH_BIT_DEPTH=OFF -DSTATIC_LINK_CRT=OFF -DENABLE_HDR10_PLUS=OFF
+SOURCE=source with_cmake -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_ASSEMBLY=ON -DHIGH_BIT_DEPTH=OFF -DSTATIC_LINK_CRT=OFF -DENABLE_HDR10_PLUS=OFF
 fi
 
 export PATH="$(cygpath -u "$VCToolsInstallDir")bin/Hostx64/x64:$(cygpath -u "$WORK")/bin:$PATH"
@@ -144,7 +145,7 @@ fi
 
 if step x264; then
 fetch https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.bz2 6eeb82934e69fd51e043bd8c5b0d152839638d1ce7aa4eea65a3fedcf83ff224 x264 x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.bz2
-CC=cl ./configure --prefix="$PREFIX" --enable-static --disable-cli --disable-asm --disable-opencl --bit-depth=8 --chroma-format=420 \
+CC=cl ./configure --prefix="$PREFIX" --enable-static --disable-cli --disable-opencl --bit-depth=8 --chroma-format=420 \
     --disable-lavf --disable-swscale --disable-ffms --disable-gpac --disable-lsmash >/dev/null
 make -j"$JOBS" >/dev/null
 make install >/dev/null
@@ -152,10 +153,11 @@ fi
 
 if step vpx; then
 fetch https://github.com/webmproject/libvpx/archive/refs/tags/v1.17.0.tar.gz 1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a vpx v1.17.0.tar.gz
+sed -i 's/^PORTS_SRCS-$(CONFIG_MSVS) += float_control_word.asm/PORTS_SRCS-yes += float_control_word.asm/' vpx_ports/vpx_ports.mk
 CC="clang --target=x86_64-pc-windows-msvc" CXX="clang++ --target=x86_64-pc-windows-msvc" AR=llvm-ar LD="clang --target=x86_64-pc-windows-msvc" \
-    ./configure --target=generic-gnu --prefix="$PREFIX" --disable-examples --disable-tools --disable-docs --disable-unit-tests --disable-shared --enable-static \
+    ./configure --target=x86_64-win64-gcc --as=nasm --prefix="$PREFIX" --disable-examples --disable-tools --disable-docs --disable-unit-tests --disable-shared --enable-static \
     --enable-vp9-highbitdepth --enable-multithread >/dev/null
-for file in Makefile config.mk *-generic-gnu.mk; do sed -i "s#$(pwd)#$(pwd -W)#g" $file; done
+for file in Makefile config.mk *-win64-gcc.mk; do sed -i "s#$(pwd)#$(pwd -W)#g" $file; done
 make -j"$JOBS" >/dev/null
 make install >/dev/null
 fi
@@ -163,7 +165,7 @@ fi
 if step dav1d; then
 fetch https://code.videolan.org/videolan/dav1d/-/archive/1.5.4/dav1d-1.5.4.tar.bz2 2abfb0c89212e6e4733a54e0ae509ec00a5b845a6360946f918806e14aedb011 dav1d dav1d-1.5.4.tar.bz2
 python -m pip install -q meson >/dev/null
-CC=cl meson setup out --buildtype release --default-library static --prefix "$PREFIX" --libdir lib -Db_vscrt=md -Denable_asm=false -Denable_tools=false -Denable_tests=false >/dev/null
+CC=cl meson setup out --buildtype release --default-library static --prefix "$PREFIX" --libdir lib -Db_vscrt=md -Denable_asm=true -Denable_tools=false -Denable_tests=false >/dev/null
 ninja -C out -j "$JOBS" >/dev/null
 ninja -C out install >/dev/null
 fi

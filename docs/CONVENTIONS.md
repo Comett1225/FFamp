@@ -375,6 +375,20 @@ list; `Sample.offset` is then free for the reader's use.
   differ. A jump starts a fresh decoder at the key frame before; the prediction state FFmpeg keeps across pictures is rebuilt by every
   I-picture, so jumps give the straight decode.
 
+## H.263 and H.263+ (`h263`, `src/h263_decode.cpp`, backend `h263`, Windows and Linux)
+
+- FFamp's own decoder on the H.263 core, based on FFmpeg's (`docs/NOTICE.md`), behind `SoftDecoder` (`openH263`); `VideoDecoder`
+  picks it for `h263` on Windows and Linux. The Mac keeps VideoToolbox for H.263.
+- The picture size comes from each picture header (the five standard formats and H.263+ custom sizes, which may change between
+  pictures). Baseline, GOB headers, long vectors, PB-frames (the B part is read and dropped, as FFmpeg does), and the H.263+ options
+  FFmpeg decodes: unrestricted vectors, advanced prediction (4MV and OBMC), advanced intra coding, deblocking, slices, alternative
+  inter VLC, modified quantisation, rounding type. H.263+ B-pictures (Annex O) are not decoded (`decode` returns `false`).
+- Bit-exact with the FFmpeg of each system: on x86-64 the IDCT keeps the C simple IDCT's shortcut for DC-only rows (FFmpeg's SSE2
+  IDCT copies it) and the 8-wide no-rounding horizontal and vertical half-pel averages are the approximate ones FFmpeg's x86 build
+  uses (`ff_put_no_rnd_pixels8_x2_approx`, `_y2_approx`); arm64 builds take the NEON IDCT and exact averages, as FFmpeg there.
+- In AVI, H.263 key frames are the I-pictures read from each chunk's picture header (FFmpeg's AVI writer marks every chunk).
+- Macroblocks that do not decode are filled from the picture before (grey at the start); FFmpeg's error resilience differs there.
+
 ## G.711, ADPCM and sound in more containers (`src/wave_audio.cpp`, gaps round)
 
 - One decoder, based on FFmpeg's (`docs/NOTICE.md`), bit-exact with it (16-bit output as `x / 32768`): A-law and mu-law, IMA ADPCM
@@ -408,22 +422,44 @@ list; `Sample.offset` is then free for the reader's use.
 ## Windows and Linux (`src/desktop`, `src/windows`, `src/linux`, `docs/PLAN_WINLINUX.md`)
 
 - One desktop layer for both systems: `VideoDecoder`, `VideoEncoder`, `AacEncoder`, `Scaler`, the GIF reader and the capture session
-  (test devices only so far). Frames live in memory: `Frame.native` is an `Image` (planar, or two-plane with `interleaved`, 8 or 16-bit
-  samples with the decoder's `shift`), recycled through a small pool; `withPixelBuffer` hands out its `Picture`. Every decoder is a
-  `SoftDecoder` and every encoder a `SoftEncoder`, so the jump, read-ahead, concealment and field-pair logic is the Mac's soft path.
+  (test devices only so far). Frames live in memory: `Frame.native` is an `Image` (always planar, 8 or 16-bit samples with the decoder's
+  `shift`; two-plane pictures from the GPU are split while they are copied in, rows spread over the pixel crew), recycled through a small
+  pool; `withPixelBuffer` hands out its `Picture`. Every decoder is a `SoftDecoder` and every encoder a `SoftEncoder`, so the jump,
+  read-ahead, concealment and field-pair logic is the Mac's soft path.
+- `SoftDecoder::wanted(stamp)` is set by `VideoDecoder`: false for pictures it will not keep (before the asked frame after a jump, or
+  everything in `run()`). Media Foundation and VA-API then skip the copy from the GPU and hand a picture with only its stamp and colour
+  (no planes), which `store` counts and drops; software decoders ignore it.
 - Platform hooks, picked at run time with the software libraries behind them: `openPlatformVideo` (Media Foundation H.264 and HEVC, through
   the GPU when the MFT takes a D3D11 device manager: backend `mediafoundation-gpu`, else `mediafoundation`), `openPlatformEncoder` (the
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
   out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
-  `openStillDecoder` (WIC on Windows; Linux has no JPEG decoder yet). Linux returns nothing from the hooks yet.
+  `openStillDecoder` (WIC on Windows, libjpeg-turbo on Linux). On Linux `openPlatformVideo` is VA-API (below); the other hooks return
+  nothing there yet.
+- Media Foundation on the GPU: each picture's texture is copied into one of three staging textures of FFamp's own and mapped two
+  pictures later, so the copy never waits for the GPU (pictures leave the decoder up to two samples later; the drain hands out the
+  rest, a reset drops them). One D3D11 device and DXGI device manager serve every Media Foundation decoder of a process (made again
+  after a device removal). Microsoft's H.264 and MPEG-2 decoders are created by their class IDs, without the MFT enumeration. Their
+  DLL (`msmpeg2vdec.dll`) calls `SetThreadAffinityMask` when a stream begins, and on the Windows test PC (with WSL 2 running) that
+  call waited 0 to 1.4 s at the first stream of every process, also without the GPU; FFamp points that DLL's import of the function at one that leaves
+  the affinity alone (`skipAffinityCalls`), and the first stream starts in about 1 ms.
+- VA-API on Linux (`src/linux/vaapi*.cpp`, backend `vaapi`): libva and libva-drm are loaded with `dlopen` at the first video open, the
+  first render node that initialises is used (Mesa's d3d12 driver under WSL, picked through `GALLIUM_DRIVER`), and any failure falls
+  back to the software decoders; `FFAMP_NO_VAAPI` turns it off. The libva 2.22.0 headers come from `build_linux.sh` (`ABSENT_VAAPI`);
+  nothing is linked. H.264 (8-bit 4:2:0, progressive, MBAFF and field pairs woven into one frame), HEVC Main and Main 10, VP9 profiles
+  0 and 2 and AV1 Main (8 and 10-bit) are parsed by FFamp and sent as VA-API picture and slice buffers; pictures are copied out as
+  NV12 or P010 after `vaSyncSurface2` (2 s at most), and a failed submit or copy-out stops the GPU path for that decoder. Under the
+  d3d12 driver three cases stay on the software decoders (H.264 on FFamp's own decoder) because the driver gets them wrong: H.264 with non-flat scaling matrices
+  (it ignores them), 10-bit VP9 and AV1 whose height % 16 is 2 to 9 (wrong chroma and inter pictures), and AV1 film grain. NVIDIA's
+  driver has no VA-API; see `docs/PLAN_WINLINUX.md` for what NVDEC would take.
 - Software paths: FFamp's own H.264 decoder (below), libde265, FFamp's own AAC decoder (`src/aac_*.cpp`: LC, HE-AAC, HE-AAC v2) and
   AC-3/E-AC-3 decoder, opencore-amr (AMR-NB, AMR-WB), mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder
   places its sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore,
-  libopus, libvorbis, LAME. `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
+  libopus, libvorbis, LAME, libmpeg2 (MPEG-1/2 when no system decoder takes the stream: always on Linux), libjpeg-turbo (Linux).
+  `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
 - Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media
   Foundation after a flush, the H.264 decoder's frame threads) need no drain inside a stream. `SoftDecoder::drainKeepsState` is false for
-  decoders whose drain ends the stream (the H.264 decoder, Media Foundation): after such a drain the next jump starts again at a key frame.
+  decoders whose drain ends the stream (the H.264 decoder, Media Foundation, libmpeg2): after such a drain the next jump starts again at a key frame.
   `SoftDecoder::weavesFields` is true for Media Foundation and the H.264 decoder, which return one frame for an H.264 field pair. When a
   picture never arrives after a jump (a recovery point that is not an IDR, such as x264's intra refresh, whose pictures the H.264 decoder
   holds back until the refresh is complete, as FFmpeg does), the decoder starts again up to three key frames earlier before concealing.
@@ -431,7 +467,7 @@ list; `Sample.offset` is then free for the reader's use.
 - A frame the stream leaves without colour labels is labelled as VideoToolbox labels it: BT.601 with SMPTE C primaries below 720
   lines, BT.709 from 720 lines. Media Foundation is not used for pictures under 64 pixels wide or high (its decoder returns nothing)
   nor for encoding frames under 320 x 240 (the GPU encoders undershoot the bitrate and smear such frames); x264 and the H.264 decoder take them.
-  H.264 with more than 8 bits or other than 4:2:0 goes straight to the H.264 decoder (Media Foundation does not decode it).
+  H.264 with more than 8 bits or other than 4:2:0 goes straight to the H.264 decoder (Media Foundation and the VA-API path do not decode it).
 - H.264 (`src/h264`): FFmpeg 9.0.2's H.264 decoder ported in plain C (the library's only C, kept close to FFmpeg's files so its assembly
   and later fixes carry over) over a small libavutil layer (`ffbase.h`, `ffbase.c`), with FFmpeg's frame threads and slice threads
   (`h264_ffamp.c`, API in `h264_ffamp.h`), FFmpeg's x86-64 assembly (NASM, `x86/`, built when CMake finds NASM; `ABSENT_H264_ASM=OFF` turns
@@ -455,8 +491,27 @@ list; `Sample.offset` is then free for the reader's use.
   to four channels run together in one SIMD pass with `InverseMdct`'s arithmetic, bit for bit. `tests/ac3_make.py` writes streams
   with the syntax ffmpeg's encoders never use (dual mono, 2/2 with LFE, block switching, AHT, SPX, one to three blocks per frame,
   dependent substreams, enhanced coupling) for the checks against ffmpeg.
+- ProRes and DV (based on FFmpeg's) are FFamp's own video decoders on Windows and Linux (backends `prores` and `dv`), bit-exact with
+  ffmpeg: ProRes 422 as 10-bit, 4444 and XQ as 12-bit with the alpha plane handed out at 8 bits as swscale rounds it ((a + 8) >> 4);
+  DV in the size and chroma layout of the profile its frames name (4:1:1, 4:2:0, 4:2:2; DVCPRO HD 1080 is 1280 or 1440 wide, as in
+  FFmpeg). 4:1:1 pictures convert to BGRA with the chroma sample centred on its four pixels, as swscale does.
+- MPEG-1/2 on Linux: libmpeg2 (backend `libmpeg2`, `openMpeg2`), used whenever `openPlatformVideo` gives nothing. Each sample's time
+  goes in as libmpeg2's picture tag and comes back on the picture it shows, so B-frame order needs no help; field pictures are woven
+  in libmpeg2's own frame, and a sequence header with a new size ends the old pictures and starts again. A slice ends only at the
+  next start code, so pictures come out one sample late; the drain (a sequence end code) ends the stream. B-pictures that lead an
+  open GOP with no earlier reference (a file cut there, the first pictures after a jump) are handed out as the key picture they lead
+  to, where FFmpeg drops them. Colour comes from the sequence display extension; the range is always limited. libmpeg2's x86 IDCT
+  (SSE2) rounds differently from its C IDCT and from FFmpeg's: 60 to 65 dB against ffmpeg.
+- Motion JPEG and JPEG pictures on Linux: libjpeg-turbo (backend `libjpeg-turbo`, `openStillDecoder`), as WIC on Windows: the
+  picture's own YCbCr planes (4:2:0, 4:2:2, 4:4:4, 4:1:1; greyscale with neutral 4:2:0 chroma) from `jpeg_read_raw_data`, full
+  range, BT.601; RGB and other layouts through BGRX into limited BT.709 4:4:4, as WIC's fallback. libjpeg-turbo fills in the standard
+  Huffman tables when a frame has none (AVI Motion JPEG). Two-field Motion JPEG packets are not put together (WIC does not either).
+- The formats suite's MPEG-1/2 and Motion JPEG checksums are VideoToolbox's on the Mac and `pictures_linux.md5` on Linux (x86-64,
+  libmpeg2's SIMD path); Windows skips them (Media Foundation and WIC), and every system judges the same files against ffmpeg within
+  the suite's floor.
 - Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
-  vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built
-  from source for x264 and libvpx; no assembly yet). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so
+  vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, GNU make built from source for x264 and libvpx; NASM from the
+  portable zip of nasm.us on PATH, so x264, x265, dav1d, SVT-AV1, libvpx (x86-64 Windows target) and FFamp's own H.264 decoder build their assembly;
+  NASM is a build tool only and never ships). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so
   the CLI's import library cannot overwrite it; clang's builtins library is linked for 128-bit division). Paths given to FFamp are UTF-8
   on every system (`openFile`, `removeFile`, `fileBytes` in `src/portable.h`).

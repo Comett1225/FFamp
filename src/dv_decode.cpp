@@ -185,9 +185,11 @@ struct BitWriter {
     int64_t count = 0;
 
     void put(uint32_t value, int n) {
-        for (int i = n - 1; i >= 0; i--, count++) {
-            if (count >= capacity) return;
-            if ((value >> i) & 1) data[count >> 3] |= uint8_t(0x80 >> (count & 7));
+        while (n > 0 && count < capacity) {
+            const int room = 8 - int(count & 7), take = std::min(room, n);
+            data[count >> 3] |= uint8_t(((value >> (n - take)) & ((1u << take) - 1)) << (room - take));
+            count += take;
+            n -= take;
         }
     }
 };
@@ -424,7 +426,7 @@ public:
         if (found != sys) setProfile(*found);
         frame = data;
         frameBytes = size;
-        parallelFor(chunks.size(), [&](size_t i) { decodeChunk(chunks[i]); });
+        inParallel(int(chunks.size()), [&](int from, int to) { for (int i = from; i < to; i++) decodeChunk(chunks[size_t(i)]); });
         Picture p;
         p.stamp = stamp;
         p.width = sys->width;

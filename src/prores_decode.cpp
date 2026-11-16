@@ -32,18 +32,18 @@ inline uint32_t be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(
 inline int16_t saturate16(int value) { return int16_t(std::clamp(value, -32768, 32767)); }
 
 bool codeword(BitReader& in, unsigned codebook, unsigned& value) {
-    const uint32_t cache = in.peek(32);
+    const uint64_t cache = in.cache();
+    const uint32_t top = uint32_t(cache >> 32);
     const unsigned switchBits = codebook & 3, riceOrder = codebook >> 5, expOrder = (codebook >> 2) & 7;
-    const unsigned q = cache ? unsigned(__builtin_clz(cache)) : 31;
+    const unsigned q = top ? unsigned(__builtin_clz(top)) : 31;
     if (q > switchBits) {
         const unsigned bits = expOrder - switchBits + (q << 1);
         if (bits > 31) return false;
-        value = in.peek(int(bits)) - (1u << expOrder) + ((switchBits + 1) << riceOrder);
+        value = uint32_t(cache >> (64 - bits)) - (1u << expOrder) + ((switchBits + 1) << riceOrder);
         in.skip(bits);
     } else if (riceOrder) {
-        in.skip(q + 1);
-        value = (q << riceOrder) + in.peek(int(riceOrder));
-        in.skip(riceOrder);
+        value = (q << riceOrder) + uint32_t((cache << (q + 1)) >> (64 - riceOrder));
+        in.skip(q + 1 + riceOrder);
     } else {
         value = q;
         in.skip(q + 1);
@@ -293,7 +293,7 @@ private:
 
     bool decodeSlices() {
         std::vector<char> failed(slices.size(), 0);
-        parallelFor(slices.size(), [&](size_t i) { failed[i] = !decodeSlice(slices[i]); });
+        inParallel(int(slices.size()), [&](int from, int to) { for (int i = from; i < to; i++) failed[size_t(i)] = !decodeSlice(slices[size_t(i)]); });
         return std::count(failed.begin(), failed.end(), 1) < std::ptrdiff_t(slices.size());
     }
 

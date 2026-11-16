@@ -1,6 +1,7 @@
 #pragma once
 #include "absent/media.h"
 #include <functional>
+#include <memory>
 
 namespace absent {
 
@@ -18,6 +19,7 @@ struct Picture {
     size_t alphaStride = 0;
     int64_t stamp = 0;
     Color color;
+    std::shared_ptr<const void> keep;
 };
 
 struct StreamShape {
@@ -68,7 +70,7 @@ std::unique_ptr<SoftEncoder> openApvEncoder(const EncodeSpec& spec, std::string*
 std::unique_ptr<SoftDecoder> openApvDecoder(std::string* error);
 std::unique_ptr<SoftDecoder> openVc1(uint32_t codec, const std::vector<uint8_t>& config, int width, int height, std::string* error);
 std::unique_ptr<SoftDecoder> openMsmpeg4(uint32_t codec, const std::vector<uint8_t>& config, int width, int height, std::string* error);
-std::unique_ptr<SoftDecoder> openOpenH264(const std::vector<uint8_t>& config, std::string* error);
+std::unique_ptr<SoftDecoder> openH264(const std::vector<uint8_t>& config, std::string* error);
 std::unique_ptr<SoftDecoder> openDe265(const std::vector<uint8_t>& config, std::string* error);
 std::unique_ptr<SoftEncoder> openX264(const EncodeSpec& spec, std::string* error);
 std::unique_ptr<SoftEncoder> openX265(const EncodeSpec& spec, std::string* error);

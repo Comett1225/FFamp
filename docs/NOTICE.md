@@ -45,6 +45,133 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `src/aac_sbr.cpp`: `libavcodec/aacsbr.c`, `libavcodec/aacsbr_template.c`, `libavcodec/aacsbr.h`, `libavcodec/sbr.h`, `libavcodec/sbrdsp.c`, `libavcodec/sbrdsp_template.c`, `libavcodec/x86/sbrdsp.asm` (the order of its sums), `libavcodec/aacps.c`, `libavcodec/aacps.h`, `libavcodec/aacps_common.c`, `libavcodec/aacps_tablegen.h`, `libavcodec/aacpsdsp_template.c`, `libavcodec/x86/aacpsdsp.asm` (the order of its sums), `libavcodec/aac/aacdec_tab.c`, `libavutil/float_dsp.c`, `libavutil/x86/float_dsp.asm`; Copyright (c) 2008-2009 Robert Swain, Copyright (c) 2009-2010 Alex Converse, Copyright (c) 2010 Alex Converse, Copyright (C) 2012 Christophe Gisquet, Copyright (C) 2015 James Almer, Copyright (c) 2005-2006 Oded Shimon, Copyright (c) 2006-2007 Maxim Gavrilov, Copyright 2005 Balatoni Denes, Copyright 2006 Loren Merritt; LGPL-2.1-or-later.
 - `src/aac_tables.cpp`: `libavcodec/aactab.c`, `libavcodec/aac/aacdec_tab.c`, `libavcodec/aacsbrdata.h`, `libavcodec/sbrdsp_template.c`, `libavcodec/aacpsdata.c` (converted by script); Copyright (c) 2005-2006 Oded Shimon, Copyright (c) 2006-2007 Maxim Gavrilov, Copyright (c) 2008-2009 Robert Swain, Copyright (c) 2009-2010 Alex Converse, Copyright (c) 2010 Alex Converse; LGPL-2.1-or-later.
 - `src/aac.h`: `libavcodec/sbr.h`, `libavcodec/aacps.h`, `libavcodec/aacsbr.h`, `libavcodec/aac_defines.h`, `libavutil/float_dsp.c`; Copyright (c) 2008-2009 Robert Swain, Copyright (c) 2010 Alex Converse, Copyright 2005 Balatoni Denes, Copyright 2006 Loren Merritt (`aac_defines.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/bit_depth_template.c`: `libavcodec/bit_depth_template.c`; the FFmpeg project (`bit_depth_template.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/cabac.c`: `libavcodec/cabac.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/cabac.h`: `libavcodec/cabac.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/cabac_functions.h`: `libavcodec/cabac_functions.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/copy_block.h`: `libavcodec/copy_block.h`; the FFmpeg project (`copy_block.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/error_resilience.c`: `libavcodec/error_resilience.c`; Copyright (c) 2002-2004 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/error_resilience.h`: `libavcodec/error_resilience.h`; the FFmpeg project (`error_resilience.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/get_bits.h`: `libavcodec/get_bits.h`; Copyright (c) 2004 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/golomb.c`: `libavcodec/golomb.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/golomb.h`: `libavcodec/golomb.h`; Copyright (c) 2003 Michael Niedermayer, Copyright (c) 2004 Alex Beregszaszi; LGPL-2.1-or-later.
+- `src/h264/h264.h`: `libavcodec/h264.h`; the FFmpeg project (`h264.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h2645_parse.c`: `libavcodec/h2645_parse.c`; the FFmpeg project (`h2645_parse.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/h2645_parse.h`: `libavcodec/h2645_parse.h`; the FFmpeg project (`h2645_parse.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h2645_sei.c`: `libavcodec/h2645_sei.c`; Copyright (c) 2003 Michael Niedermayer, Copyright (C) 2012 - 2013 Guillaume Martres, Copyright (C) 2012 - 2013 Gildas Cocherel, Copyright (C) 2013 Vittorio Giovara; LGPL-2.1-or-later.
+- `src/h264/h2645_sei.h`: `libavcodec/h2645_sei.h`; the FFmpeg project (`h2645_sei.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h2645_vui.c`: `libavcodec/h2645_vui.c`; Copyright (c) 2003 Michael Niedermayer, Copyright (C) 2012 - 2013 Guillaume Martres, Copyright (C) 2012 - 2013 Mickael Raulet, Copyright (C) 2012 - 2013 Gildas Cocherel, Copyright (C) 2013 Vittorio Giovara; LGPL-2.1-or-later.
+- `src/h264/h2645_vui.h`: `libavcodec/h2645_vui.h`; the FFmpeg project (`h2645_vui.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h2645data.c`: `libavcodec/h2645data.c`; the FFmpeg project (`h2645data.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/h2645data.h`: `libavcodec/h2645data.h`; the FFmpeg project (`h2645data.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264_cabac.c`: `libavcodec/h264_cabac.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_cavlc.c`: `libavcodec/h264_cavlc.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_direct.c`: `libavcodec/h264_direct.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_loopfilter.c`: `libavcodec/h264_loopfilter.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_mb.c`: `libavcodec/h264_mb.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_mb_template.c`: `libavcodec/h264_mb_template.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_mc_template.c`: `libavcodec/h264_mc_template.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_mvpred.h`: `libavcodec/h264_mvpred.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_parse.c`: `libavcodec/h264_parse.c`; the FFmpeg project (`h264_parse.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264_parse.h`: `libavcodec/h264_parse.h`; the FFmpeg project (`h264_parse.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264_picture.c`: `libavcodec/h264_picture.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_ps.c`: `libavcodec/h264_ps.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_ps.h`: `libavcodec/h264_ps.h`; the FFmpeg project (`h264_ps.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264_refs.c`: `libavcodec/h264_refs.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_sei.c`: `libavcodec/h264_sei.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264_sei.h`: `libavcodec/h264_sei.h`; the FFmpeg project (`h264_sei.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264_slice.c`: `libavcodec/h264_slice.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264addpx_template.c`: `libavcodec/h264addpx_template.c`; Copyright (c) 2003-2011 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264chroma.c`: `libavcodec/h264chroma.c`; the FFmpeg project (`h264chroma.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264chroma.h`: `libavcodec/h264chroma.h`; the FFmpeg project (`h264chroma.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264chroma_template.c`: `libavcodec/h264chroma_template.c`; Copyright (c) 2000, 2001 Fabrice Bellard, Copyright (c) 2002-2004 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264data.c`: `libavcodec/h264data.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264data.h`: `libavcodec/h264data.h`; the FFmpeg project (`h264data.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264dec.c`: `libavcodec/h264dec.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264dec.h`: `libavcodec/h264dec.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264dsp.c`: `libavcodec/h264dsp.c`; Copyright (c) 2003-2010 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264dsp.h`: `libavcodec/h264dsp.h`; Copyright (c) 2003-2010 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264dsp_template.c`: `libavcodec/h264dsp_template.c`; Copyright (c) 2003-2011 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264idct.c`: `libavcodec/h264idct.c`; Copyright (c) 2004 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264idct.h`: `libavcodec/h264idct.h`; the FFmpeg project (`h264idct.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/h264idct_template.c`: `libavcodec/h264idct_template.c`; Copyright (c) 2004-2011 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264pred.c`: `libavcodec/h264pred.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264pred.h`: `libavcodec/h264pred.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264pred_template.c`: `libavcodec/h264pred_template.c`; Copyright (c) 2003-2011 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264qpel.c`: `libavcodec/h264qpel.c`; Copyright (c) 2003-2010 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264qpel.h`: `libavcodec/h264qpel.h`; Copyright (c) 2003-2010 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/h264qpel_template.c`: `libavcodec/h264qpel_template.c`; Copyright (c) 2003-2010 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/hpel_template.c`: `libavcodec/hpel_template.c`; Copyright (c) 2000, 2001 Fabrice Bellard, Copyright (c) 2002-2004 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/mathops.h`: `libavcodec/mathops.h`; Copyright (c) 2001, 2002 Fabrice Bellard, Copyright (c) 2006 Michael Niedermayer et al; LGPL-2.1-or-later.
+- `src/h264/mathtables.c`: `libavcodec/mathtables.c`; Copyright (c) 2002-2004 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/mpegutils.h`: `libavcodec/mpegutils.h`; the FFmpeg project (`mpegutils.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/pel_template.c`: `libavcodec/pel_template.c`; the FFmpeg project (`pel_template.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/pixels.h`: `libavcodec/pixels.h`; the FFmpeg project (`pixels.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/rectangle.h`: `libavcodec/rectangle.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/rnd_avg.h`: `libavcodec/rnd_avg.h`; Copyright (c) 2001-2003 BERO, Copyright (c) 2011 Oskar Arvidsson; LGPL-2.1-or-later.
+- `src/h264/sei.h`: `libavcodec/sei.h`; the FFmpeg project (`sei.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/startcode.c`: `libavcodec/startcode.c`; Copyright (c) 2003-2010 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/startcode.h`: `libavcodec/startcode.h`; the FFmpeg project (`startcode.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/videodsp.c`: `libavcodec/videodsp.c`; Copyright (C) 2012 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/videodsp.h`: `libavcodec/videodsp.h`; Copyright (C) 2012 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/videodsp_template.c`: `libavcodec/videodsp_template.c`; Copyright (c) 2002-2012 Michael Niedermayer, Copyright (C) 2012 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/vlc.c`: `libavcodec/vlc.c`; Copyright (c) 2000, 2001 Fabrice Bellard, Copyright (c) 2002-2004 Michael Niedermayer, Copyright (c) 2010 Loren Merritt; LGPL-2.1-or-later.
+- `src/h264/vlc.h`: `libavcodec/vlc.h`; the FFmpeg project (`vlc.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/ffbase.h`, `src/h264/ffbase.c`: `libavutil/common.h`, `intreadwrite.h`, `intmath.h`, `mem.c`, `rational.c`, `buffer.c`, `frame.c`, `refstruct.c`, `pixdesc.c`, `imgutils.c`, `libavcodec/bytestream.h`, `decode.c`; copyright (c) 2006 Michael Niedermayer, Copyright (c) 2010 Mans Rullgard, Copyright (c) 2002 Fabrice Bellard, Copyright (c) 2003 Michael Niedermayer, Copyright (c) 2009 Michael Niedermayer, copyright (c) 2006 Baptiste Coudurier, Copyright (c) 2012 Aneesh Dogra (`buffer.c`, `frame.c`, `refstruct.c`, `imgutils.c`, `decode.c` name no holder); LGPL-2.1-or-later.
+- `src/h264/h264_ffamp.c`, `src/h264/h264_threads.h`: `libavcodec/pthread_frame.c`, `pthread_slice.c`, `decode.c`, `libavutil/frame.c` (frame threads, slice threads, frame buffers, cropping); the FFmpeg project (these files name no holder); LGPL-2.1-or-later.
+- `src/h264/x86/asm.h`: `libavutil/x86/asm.h`; copyright (c) 2006 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/x86/cabac.h`: `libavcodec/x86/cabac.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/x86/constants.c`: `libavcodec/x86/constants.c`; the FFmpeg project (`constants.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/constants.h`: `libavcodec/x86/constants.h`; the FFmpeg project (`constants.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/cpu.c`: `libavutil/x86/cpu.c`; (c)1997-99 by H. Dietz and R. Fisher; LGPL-2.1-or-later.
+- `src/h264/x86/cpu.h`: `libavutil/x86/cpu.h`; the FFmpeg project (`cpu.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/cpuid.asm`: `libavutil/x86/cpuid.asm`; Copyright (C) 2005-2010 x264 project (authors: Loren Merritt, Fiona Glaser); LGPL-2.1-or-later.
+- `src/h264/x86/fpel.asm`: `libavcodec/x86/fpel.asm`; Copyright (c) 2008 Loren Merritt, Copyright (c) 2003-2013 Michael Niedermayer, Copyright (c) 2013 Daniel Kang; LGPL-2.1-or-later.
+- `src/h264/x86/fpel.h`: `libavcodec/x86/fpel.h`; the FFmpeg project (`fpel.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/h264_cabac.c`: `libavcodec/x86/h264_cabac.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/x86/h264_chromamc.asm`: `libavcodec/x86/h264_chromamc.asm`; Copyright (c) 2005 Zoltan Hidvegi, 2005-2008 Loren Merritt; LGPL-2.1-or-later.
+- `src/h264/x86/h264_chromamc_10bit.asm`: `libavcodec/x86/h264_chromamc_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_deblock.asm`: `libavcodec/x86/h264_deblock.asm`; Copyright (C) 2005-2011 x264 project (authors: Loren Merritt, Fiona Glaser, Oskar Arvidsson); LGPL-2.1-or-later.
+- `src/h264/x86/h264_deblock_10bit.asm`: `libavcodec/x86/h264_deblock_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Oskar Arvidsson, Loren Merritt, Fiona Glaser); LGPL-2.1-or-later.
+- `src/h264/x86/h264_idct.asm`: `libavcodec/x86/h264_idct.asm`; Copyright (C) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (C) 2003-2008 x264 project (authors: Laurent Aimar, Loren Merritt, Holger Lubitz, Min Chen); LGPL-2.1-or-later.
+- `src/h264/x86/h264_idct_10bit.asm`: `libavcodec/x86/h264_idct_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_intrapred.asm`: `libavcodec/x86/h264_intrapred.asm`; Copyright (c) 2010 Fiona Glaser, Copyright (c) 2010 Holger Lubitz, Copyright (c) 2010 Loren Merritt, Copyright (c) 2010 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/x86/h264_intrapred_10bit.asm`: `libavcodec/x86/h264_intrapred_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_intrapred_init.c`: `libavcodec/x86/h264_intrapred_init.c`; Copyright (c) 2010 Fiona Glaser; LGPL-2.1-or-later.
+- `src/h264/x86/h264_qpel.c`: `libavcodec/x86/h264_qpel.c`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (c) 2011 Daniel Kang; LGPL-2.1-or-later.
+- `src/h264/x86/h264_qpel_10bit.asm`: `libavcodec/x86/h264_qpel_10bit.asm`; Copyright (C) 2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_qpel_8bit.asm`: `libavcodec/x86/h264_qpel_8bit.asm`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (C) 2012 Daniel Kang (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_weight.asm`: `libavcodec/x86/h264_weight.asm`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (C) 2010 Eli Friedman; LGPL-2.1-or-later.
+- `src/h264/x86/h264_weight_10bit.asm`: `libavcodec/x86/h264_weight_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264chroma_init.c`: `libavcodec/x86/h264chroma_init.c`; the FFmpeg project (`h264chroma_init.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/h264dsp_init.c`: `libavcodec/x86/h264dsp_init.c`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt; LGPL-2.1-or-later.
+- `src/h264/x86/mathops.h`: `libavcodec/x86/mathops.h`; Copyright (c) 2006 Michael Niedermayer et al; LGPL-2.1-or-later.
+- `src/h264/x86/qpel.asm`: `libavcodec/x86/qpel.asm`; Copyright (c) 2008 Loren Merritt, Copyright (c) 2003-2013 Michael Niedermayer, Copyright (c) 2013 Daniel Kang; LGPL-2.1-or-later.
+- `src/h264/x86/qpel.h`: `libavcodec/x86/qpel.h`; the FFmpeg project (`qpel.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/videodsp.asm`: `libavcodec/x86/videodsp.asm`; Copyright (c) 2012 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/x86/videodsp.h`: `libavcodec/x86/videodsp.h`; the FFmpeg project (`videodsp.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/videodsp_init.c`: `libavcodec/x86/videodsp_init.c`; Copyright (C) 2002-2012 Michael Niedermayer, Copyright (C) 2012 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/x86/x86inc.asm`: `libavutil/x86/x86inc.asm`; Copyright (C) 2005-2024 x264 project (authors: Loren Merritt, Henrik Gramner, Anton Mitrofanov, Fiona Glaser); ISC: permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies; THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+- `src/h264/x86/x86util.asm`: `libavutil/x86/x86util.asm`; Copyright (C) 2008-2010 x264 project (authors: Loren Merritt, Holger Lubitz); LGPL-2.1-or-later.
+- `src/h264/x86/config.asm`: the settings FFmpeg's configure writes to `config.asm` for x86-64; the FFmpeg project; LGPL-2.1-or-later.
+- `src/h264/aarch64/asm.S`: `libavutil/aarch64/asm.S`; Copyright (c) 2008 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/cabac.h`: `libavcodec/aarch64/cabac.h`; the FFmpeg project (`cabac.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/cpu.h`: `libavutil/aarch64/cpu.h`; the FFmpeg project (`cpu.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/h264chroma_init_aarch64.c`: `libavcodec/aarch64/h264chroma_init_aarch64.c`; Copyright (c) 2008 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264cmc_neon.S`: `libavcodec/aarch64/h264cmc_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264dsp_init_aarch64.c`: `libavcodec/aarch64/h264dsp_init_aarch64.c`; Copyright (c) 2010 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264dsp_neon.S`: `libavcodec/aarch64/h264dsp_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau, Copyright (c) 2014 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264idct_neon.S`: `libavcodec/aarch64/h264idct_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264pred_init.c`: `libavcodec/aarch64/h264pred_init.c`; Copyright (c) 2009 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264pred_neon.S`: `libavcodec/aarch64/h264pred_neon.S`; Copyright (c) 2009 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264qpel_init_aarch64.c`: `libavcodec/aarch64/h264qpel_init_aarch64.c`; Copyright (c) 2008 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264qpel_neon.S`: `libavcodec/aarch64/h264qpel_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/hpeldsp_neon.S`: `libavcodec/aarch64/hpeldsp_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/neon.S`: `libavcodec/aarch64/neon.S`; Copyright (c) 2023 J. Dekker; LGPL-2.1-or-later.
+- `src/h264/aarch64/videodsp.S`: `libavcodec/aarch64/videodsp.S`; the FFmpeg project (`videodsp.S` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/videodsp_init.c`: `libavcodec/aarch64/videodsp_init.c`; the FFmpeg project (`videodsp_init.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/config.h`: the settings FFmpeg's configure writes to `config.h` for the AArch64 assembler; the FFmpeg project; LGPL-2.1-or-later.
+- `src/h264/h274.c`, `src/h264/h274.h`: `libavcodec/h274.c`, `libavcodec/h274.h`, `libavutil/film_grain_params.h`, the film grain part of `libavcodec/h2645_sei.c`; Copyright (c) 2021 Niklas Haas (`h274.c`; the tables from SMPTE RDD 5-2006); LGPL-2.1-or-later.
 
 The Bessel function of the KBD window in `src/mdct.cpp` (by way of `libavutil/mathematics.c`) comes from the Boost project's
 `bessel_i0` (Copyright (c) 2006 Xiaogang Zhang), under this licence:

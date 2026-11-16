@@ -1,5 +1,6 @@
 #include "image.h"
 #include "../readers.h"
+#include "../nal.h"
 #include "absent/media.h"
 #include <algorithm>
 #include <atomic>
@@ -32,6 +33,7 @@ std::shared_ptr<Image> ImagePool::take() {
             std::lock_guard<std::mutex> hold(pool->lock);
             if (pool->spare.size() < 24) {
                 done->alpha.clear();
+                done->picture.keep.reset();
                 pool->spare.emplace_back(done);
                 return;
             }
@@ -169,6 +171,7 @@ struct VideoDecoder::Impl {
     std::vector<uint32_t> keys;
     int concealing = 0;
     std::vector<bool> lost;
+    uint32_t backKeys = 0;
 
     ~Impl() {
         if (worker.joinable()) {
@@ -294,7 +297,9 @@ struct VideoDecoder::Impl {
             if (!shape.color.known) shape.color = p.color;
         }
         if (!keep || p.stamp < floor) return;
-        auto image = pool->copy(p);
+        auto image = pool->take();
+        if (p.keep && !p.alpha) image->picture = p;
+        else fillImage(*image, p);
         {
             std::lock_guard<std::mutex> hold(lock);
             ready[p.stamp] = std::move(image);
@@ -365,7 +370,10 @@ struct VideoDecoder::Impl {
         auto it = std::upper_bound(keys.begin(), keys.end(), target);
         while (it != keys.begin()) {
             --it;
-            if (track->samples[*it].pts <= track->samples[target].pts) return *it;
+            if (track->samples[*it].pts <= track->samples[target].pts) {
+                for (uint32_t back = backKeys; back && it != keys.begin(); --back) --it;
+                return *it;
+            }
         }
         return keys.empty() || keys.front() > target ? 0 : keys.front();
     }
@@ -478,8 +486,10 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         if (!d.soft && error) *error = problem.empty() ? "MPEG-1 and MPEG-2 video are not decoded on this system yet" : problem;
     } else {
         std::string fallback;
-        if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft) d.soft = h264 ? openOpenH264(config, &fallback) : openDe265(config, &fallback);
+        const VideoInfo info = h264 ? videoInfo(track.configType, config) : VideoInfo();
+        const bool systemProfile = !h264 || (info.bitDepth == 8 && info.chroma == 1);
+        if (!software && systemProfile) d.soft = openPlatformVideo(track, config, d.shape, &problem);
+        if (!d.soft) d.soft = h264 ? openH264(config, &fallback) : openDe265(config, &fallback);
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
     }
     if (!d.soft) return nullptr;
@@ -536,6 +546,13 @@ Frame VideoDecoder::frame(uint32_t index) {
         d.take(std::min(pts, later));
     } else {
         image = d.take(pts);
+    }
+    if (!image && d.backKeys < 3 && !d.keys.empty() && d.keyFor(item.first) != d.keys.front()) {
+        const uint32_t saved = d.backKeys++;
+        d.next = kNone;
+        Frame retried = frame(index);
+        d.backKeys = saved;
+        return retried;
     }
     if (!image) {
         if (d.lost.size() < d.list.size()) d.lost.resize(d.list.size(), false);

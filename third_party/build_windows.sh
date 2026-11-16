@@ -102,14 +102,6 @@ with_cmake "-DINCLUDES=src" "-DDEFINES=ARCH_IS_GENERIC;ARCH_IS_64BIT;ARCH_IS_LIT
 cp src/xvid.h "$PREFIX/include/"
 fi
 
-if step openh264; then
-fetch https://github.com/cisco/openh264/archive/refs/tags/v2.7.0.tar.gz 5178775c8b440073e70920e97d195efff721c0e56d0a78cc82c919e95d54924d openh264 openh264-v2.7.0.tar.gz
-plain_library openh264 codec/common/src/*.cpp codec/decoder/core/src/*.cpp codec/decoder/plus/src/*.cpp
-with_cmake "-DINCLUDES=codec/api/wels;codec/common/inc;codec/decoder/core/inc;codec/decoder/plus/inc" "-DDEFINES=_CRT_SECURE_NO_WARNINGS"
-mkdir -p "$PREFIX/include/wels"
-cp codec/api/wels/*.h "$PREFIX/include/wels/"
-fi
-
 if step de265; then
 fetch https://github.com/strukturag/libde265/archive/refs/tags/v1.1.3.tar.gz 189baa08fd6d2dd34db099de411bd6b2e6bd5eb88e81236a3d0fa3826b9715c4 de265 libde265-v1.1.3.tar.gz
 with_cmake -DENABLE_SDL=OFF -DENABLE_DECODER=OFF -DENABLE_ENCODER=OFF

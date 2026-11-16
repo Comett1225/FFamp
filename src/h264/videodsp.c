@@ -1,0 +1,40 @@
+#include "ffbase.h"
+#include "videodsp.h"
+
+#define BIT_DEPTH 8
+#include "videodsp_template.c"
+#undef BIT_DEPTH
+
+#define BIT_DEPTH 16
+#include "videodsp_template.c"
+#undef BIT_DEPTH
+
+static void just_return(const uint8_t *buf, ptrdiff_t stride, int h)
+{
+}
+
+av_cold void ff_videodsp_init(VideoDSPContext *ctx, int bpc)
+{
+    ctx->prefetch = just_return;
+    if (bpc <= 8) {
+        ctx->emulated_edge_mc = emulated_edge_mc_8;
+    } else {
+        ctx->emulated_edge_mc = emulated_edge_mc_16;
+    }
+
+#if ARCH_AARCH64
+    ff_videodsp_init_aarch64(ctx, bpc);
+#elif ARCH_ARM
+    ff_videodsp_init_arm(ctx, bpc);
+#elif ARCH_PPC
+    ff_videodsp_init_ppc(ctx, bpc);
+#elif ARCH_RISCV
+    ff_videodsp_init_riscv(ctx, bpc);
+#elif ARCH_X86 && HAVE_X86ASM
+    ff_videodsp_init_x86(ctx, bpc);
+#elif ARCH_MIPS
+    ff_videodsp_init_mips(ctx, bpc);
+#elif ARCH_LOONGARCH64
+    ff_videodsp_init_loongarch(ctx, bpc);
+#endif
+}

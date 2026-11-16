@@ -49,7 +49,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 
 | Codec | Mac today | Windows | Linux | Licence of the added part |
 |---|---|---|---|---|
-| H.264 | VideoToolbox | Media Foundation (DXVA when the GPU has it, software MFT otherwise); OpenH264 when Media Foundation is missing or refuses | OpenH264 (software) | OpenH264: BSD-2-Clause |
+| H.264 | VideoToolbox | Media Foundation (DXVA when the GPU has it, software MFT otherwise); FFamp's own decoder (FFmpeg's, ported) when Media Foundation is missing or refuses, and for more than 8 bits or 4:2:2 and 4:4:4 | own decoder based on FFmpeg's, with its assembly and frame threads | own, LGPL-derived (NOTICE) |
 | HEVC | VideoToolbox | Media Foundation when the HEVC Video Extensions are installed (DXVA); libde265 otherwise | libde265 | LGPL-3.0-or-later |
 | VP8, VP9 | libvpx / system | libvpx | libvpx | BSD-3-Clause (already in FFamp) |
 | AV1 | dav1d / system | dav1d | dav1d | BSD-2-Clause (already in FFamp) |
@@ -85,7 +85,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 
 | Library | Linux `.a` (gcc, with assembly) | Windows `.lib` (MSVC, no assembly yet) | Needed by |
 |---|---|---|---|
-| OpenH264 decoder | 1.8 MB | 1.1 MB | Linux H.264, Windows fallback |
+| FFamp's H.264 decoder (`src/h264`, part of FFamp) | 1.4 MB of code and tables, with the assembly | about the same (clang-cl, with the assembly) | Linux H.264, Windows fallback |
 | libde265 | 1.3 MB | 3.2 MB | Linux HEVC, Windows fallback |
 | vo-aacenc | 0.2 MB | 0.3 MB | AAC encode where Media Foundation cannot |
 | opencore-amr (decoders) | 0.4 MB | 0.4 MB | AMR-NB and AMR-WB decode on both systems |
@@ -102,7 +102,7 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 
 | Missing part | Effect |
 |---|---|
-| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: OpenH264, libde265, FFamp's own AAC decoder, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. |
+| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: FFamp's H.264 decoder, libde265, FFamp's own AAC decoder, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. |
 | HEVC Video Extensions not installed | HEVC decodes with libde265; HEVC export uses the GPU driver's encoder MFT when there is one, else x265 |
 | No GPU video decoder (old GPU, remote desktop, virtual machine) | Media Foundation's software H.264 decoder; HEVC through libde265 |
 | GPU encoder MFT refuses the size or is busy | Microsoft's software H.264 MFT, then x264 (the encoder trial picks it as the app does today) |
@@ -119,18 +119,15 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 
 ## Decisions for the owner
 
-1. **Patent-pooled codecs built from source** (H.264 through OpenH264 and x264, HEVC through libde265 and x265, AAC through FFamp's
-   own decoder and vo-aacenc, AMR through opencore-amr). Built into FFamp they carry the same patent exposure the app already has by
-   bundling FFmpeg, which contains all of them. Alternative for H.264 decode only: download Cisco's OpenH264 binary on first use (Cisco pays the royalties), at the cost of a
-   download and of the "nothing extra" goal. Default in this plan: build from source, as FFmpeg was.
+1. **Patent-pooled codecs built from source** (H.264 through FFamp's own decoder and x264, HEVC through libde265 and x265, AAC through
+   FFamp's own decoder and vo-aacenc, AMR through opencore-amr). Built into FFamp they carry the same patent exposure the app already has
+   by bundling FFmpeg, which contains all of them. (An alternative once considered for H.264 decode only: download Cisco's OpenH264
+   binary on first use, at the cost of a download and of the "nothing extra" goal.) Default in this plan: build from source, as FFmpeg was.
 2. **AAC encoder.** vo-aacenc (LC only) is the software AAC encoder here; FFmpeg's own AAC encoder (what the Linux app uses today) can
    be ported instead if the owner prefers parity over size. Round 1 measures vo-aacenc against FFmpeg.
-3. **H.264 on Linux.** OpenH264 cannot decode interlaced (AVCHD 1080i), High 10 or 4:2:2 H.264, which FFmpeg decodes, and round 1
-   found that it is not bit-exact on some B-frames of x264 files: a few samples per frame are off by 1 or 2 next to 8x8 edges (its
-   B-slice deblocking), 59 to 100 dB against FFmpeg, never a wrong picture. Options: (a) accept OpenH264 as it is, (b) VA-API on GPUs
-   that have it (bit-exact, still needs a software path), (c) port FFmpeg's H.264 decoder into FFamp (bit-exact everywhere, several
-   rounds, like the Windows Media work). Default for now: (a), with (b) next. On Windows Media Foundation decodes all of it
-   bit-exact, interlaced included; High 10 and 4:2:2 fail there too.
+3. **H.264 on Linux.** Decided 2026-11-16: FFamp's own decoder, FFmpeg's H.264 decoder ported to `src/h264` with its x86-64 and
+   AArch64 assembly and its frame and slice threads. It replaced OpenH264 (single-threaded, a few values off on some B-frames, no
+   interlaced, 8-bit 4:2:0 only); bit-exact with FFmpeg, faster than FFmpeg's own decode with threads (`docs/RESULTS.md`).
 4. **HEVC software export** costs x265 (4 to 8 MB). Alternative: offer HEVC export only where a hardware encoder exists. Default:
    ship x265, as the BtbN FFmpeg build does.
 5. **HE-AAC v2 (parametric stereo) on Linux.** Decided (2026-11-15): FFmpeg's AAC decoder is ported (LC, HE-AAC, HE-AAC v2), FAAD2

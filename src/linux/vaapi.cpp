@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <unistd.h>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 namespace absent {
@@ -32,7 +33,10 @@ const Va* start() {
     decltype(&::vaSetInfoCallback) info = nullptr;
     decltype(&::vaSetErrorCallback) errors = nullptr;
     decltype(&::vaSetDriverName) driver = nullptr;
+    decltype(&::vaQueryVendorString) vendor = nullptr;
     symbol(core, "vaSetDriverName", driver);
+    symbol(core, "vaQueryVendorString", vendor);
+    symbol(core, "vaSyncSurface2", va.vaSyncSurface2);
     const bool found = symbol(drm, "vaGetDisplayDRM", display) && symbol(core, "vaInitialize", initialize) && symbol(core, "vaTerminate", terminate) &&
         symbol(core, "vaSetInfoCallback", info) && symbol(core, "vaSetErrorCallback", errors) &&
         symbol(core, "vaQueryConfigEntrypoints", va.vaQueryConfigEntrypoints) && symbol(core, "vaCreateConfig", va.vaCreateConfig) &&
@@ -42,7 +46,7 @@ const Va* start() {
         symbol(core, "vaDestroyBuffer", va.vaDestroyBuffer) && symbol(core, "vaMapBuffer", va.vaMapBuffer) && symbol(core, "vaUnmapBuffer", va.vaUnmapBuffer) &&
         symbol(core, "vaBeginPicture", va.vaBeginPicture) && symbol(core, "vaRenderPicture", va.vaRenderPicture) &&
         symbol(core, "vaEndPicture", va.vaEndPicture) && symbol(core, "vaSyncSurface", va.vaSyncSurface) && symbol(core, "vaCreateImage", va.vaCreateImage) &&
-        symbol(core, "vaDestroyImage", va.vaDestroyImage) && symbol(core, "vaGetImage", va.vaGetImage) && symbol(core, "vaDeriveImage", va.vaDeriveImage);
+        symbol(core, "vaDestroyImage", va.vaDestroyImage) && symbol(core, "vaGetImage", va.vaGetImage);
     if (!found) return nullptr;
     const bool wsl = access("/dev/dxg", F_OK) == 0 && !std::getenv("LIBVA_DRIVER_NAME");
     if (wsl) setenv("GALLIUM_DRIVER", "d3d12", 0);
@@ -60,6 +64,8 @@ const Va* start() {
             int major = 0, minor = 0;
             if (initialize(shown, &major, &minor) == VA_STATUS_SUCCESS) {
                 va.display = shown;
+                const char* name = vendor ? vendor(shown) : nullptr;
+                va.d3d12 = name && strstr(name, "D3D12");
                 return &va;
             }
             terminate(shown);
@@ -91,6 +97,7 @@ bool VaSession::open(VAProfile profile, int width, int height, bool tenBit, int 
     va = vaapi();
     if (!va || width <= 0 || height <= 0) return false;
     deep = tenBit;
+    failed = false;
     VAConfigAttrib format{VAConfigAttribRTFormat, uint32_t(deep ? VA_RT_FORMAT_YUV420_10 : VA_RT_FORMAT_YUV420)};
     if (va->vaCreateConfig(va->display, profile, VAEntrypointVLD, &format, 1, &config) != VA_STATUS_SUCCESS) {
         config = VA_INVALID_ID;
@@ -164,18 +171,22 @@ bool VaSession::slice(const void* data, size_t size, const uint8_t* bytes, size_
 }
 
 bool VaSession::submit(VASurfaceID target) {
-    bool ok = !slices.empty() && va->vaBeginPicture(va->display, context, target) == VA_STATUS_SUCCESS;
+    bool ok = !failed && !slices.empty() && va->vaBeginPicture(va->display, context, target) == VA_STATUS_SUCCESS;
     if (ok) {
         ok = va->vaRenderPicture(va->display, context, params.data(), int(params.size())) == VA_STATUS_SUCCESS &&
             va->vaRenderPicture(va->display, context, slices.data(), int(slices.size())) == VA_STATUS_SUCCESS;
         ok = va->vaEndPicture(va->display, context) == VA_STATUS_SUCCESS && ok;
+        failed = !ok;
     }
     drop();
     return ok;
 }
 
-bool VaSession::hand(VASurfaceID surface, int width, int height, int64_t stamp, const Color& color, const PictureSink& sink) {
-    if (va->vaSyncSurface(va->display, surface) != VA_STATUS_SUCCESS) return false;
+bool VaSession::hand(VASurfaceID surface, int width, int height, int64_t stamp, const Color& color, const PictureSink& sink, int left, int top) {
+    if (failed || left < 0 || top < 0 || left >= frameWidth || top >= frameHeight) return false;
+    VAStatus synced = va->vaSyncSurface2 ? va->vaSyncSurface2(va->display, surface, 2000000000ull) : VA_STATUS_ERROR_UNIMPLEMENTED;
+    if (synced == VA_STATUS_ERROR_UNIMPLEMENTED) synced = va->vaSyncSurface(va->display, surface);
+    if ((failed = synced != VA_STATUS_SUCCESS)) return false;
     if (!imaged) {
         VAImageFormat format{};
         format.fourcc = deep ? VA_FOURCC_P010 : VA_FOURCC_NV12;
@@ -184,20 +195,24 @@ bool VaSession::hand(VASurfaceID surface, int width, int height, int64_t stamp, 
         if (va->vaCreateImage(va->display, &format, frameWidth, frameHeight, &image) != VA_STATUS_SUCCESS) return false;
         imaged = true;
     }
-    if (va->vaGetImage(va->display, surface, 0, 0, unsigned(frameWidth), unsigned(frameHeight), image.image_id) != VA_STATUS_SUCCESS) return false;
     void* mapped = nullptr;
-    if (va->vaMapBuffer(va->display, image.buf, &mapped) != VA_STATUS_SUCCESS || !mapped) return false;
+    if (va->vaGetImage(va->display, surface, 0, 0, unsigned(frameWidth), unsigned(frameHeight), image.image_id) != VA_STATUS_SUCCESS ||
+        va->vaMapBuffer(va->display, image.buf, &mapped) != VA_STATUS_SUCCESS || !mapped) {
+        failed = true;
+        return false;
+    }
     const uint8_t* bytes = static_cast<const uint8_t*>(mapped);
+    const size_t unit = deep ? 2 : 1;
     Picture p;
-    p.width = std::min(width, frameWidth);
-    p.height = std::min(height, frameHeight);
+    p.width = std::min(width, frameWidth - left);
+    p.height = std::min(height, frameHeight - top);
     p.chromaWidth = (p.width + 1) / 2;
     p.chromaHeight = (p.height + 1) / 2;
     p.interleaved = true;
     p.bits = deep ? 10 : 8;
     p.shift = deep ? 6 : 0;
-    p.plane[0] = bytes + image.offsets[0];
-    p.plane[1] = bytes + image.offsets[1];
+    p.plane[0] = bytes + image.offsets[0] + size_t(top) * image.pitches[0] + size_t(left) * unit;
+    p.plane[1] = bytes + image.offsets[1] + size_t(top / 2) * image.pitches[1] + size_t(left & ~1) * unit;
     p.stride[0] = image.pitches[0];
     p.stride[1] = image.pitches[1];
     p.stamp = stamp;

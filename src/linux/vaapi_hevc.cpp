@@ -994,18 +994,7 @@ struct HevcDecoder : SoftDecoder {
         const Sps& s = *sps;
         const int left = s.crop[0], top = s.crop[2];
         const int w = s.width - left - s.crop[1], h = s.height - top - s.crop[3];
-        if (!left && !top) return session.hand(target, w, h, stamp, color, sink);
-        const size_t bytes = session.tenBit() ? 2 : 1;
-        return session.hand(target, left + w, top + h, stamp, color, [&](const Picture& p) {
-            Picture q = p;
-            q.plane[0] += size_t(top) * q.stride[0] + size_t(left) * bytes;
-            q.plane[1] += size_t(top / 2) * q.stride[1] + size_t(left) * bytes;
-            q.width = w;
-            q.height = h;
-            q.chromaWidth = (w + 1) / 2;
-            q.chromaHeight = (h + 1) / 2;
-            sink(q);
-        });
+        return session.hand(target, w, h, stamp, color, sink, left, top);
     }
 
     bool finish(int64_t stamp, const PictureSink& sink) {

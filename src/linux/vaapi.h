@@ -26,7 +26,8 @@ struct Va {
     decltype(&::vaCreateImage) vaCreateImage = nullptr;
     decltype(&::vaDestroyImage) vaDestroyImage = nullptr;
     decltype(&::vaGetImage) vaGetImage = nullptr;
-    decltype(&::vaDeriveImage) vaDeriveImage = nullptr;
+    decltype(&::vaSyncSurface2) vaSyncSurface2 = nullptr;
+    bool d3d12 = false;
 };
 
 const Va* vaapi();
@@ -45,7 +46,7 @@ public:
     bool param(VABufferType type, const void* data, size_t size);
     bool slice(const void* params, size_t size, const uint8_t* data, size_t length);
     bool submit(VASurfaceID target);
-    bool hand(VASurfaceID surface, int width, int height, int64_t stamp, const Color& color, const PictureSink& sink);
+    bool hand(VASurfaceID surface, int width, int height, int64_t stamp, const Color& color, const PictureSink& sink, int left = 0, int top = 0);
 
 private:
     void drop();
@@ -57,6 +58,7 @@ private:
     std::vector<VABufferID> slices;
     VAImage image{};
     bool imaged = false;
+    bool failed = false;
     bool deep = false;
     int frameWidth = 0;
     int frameHeight = 0;

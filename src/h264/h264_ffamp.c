@@ -188,6 +188,18 @@ static void pool_release(void *opaque, uint8_t *data)
     pool_unref(pool);
 }
 
+static int fill_value(void)
+{
+    static atomic_int fill = -2;
+    int v = atomic_load_explicit(&fill, memory_order_relaxed);
+    if (v == -2) {
+        const char *env = getenv("FFAMP_H264_FILL");
+        v = env ? (atoi(env) & 255) : -1;
+        atomic_store_explicit(&fill, v, memory_order_relaxed);
+    }
+    return v;
+}
+
 int ff_get_buffer(AVCodecContext *avctx, AVFrame *frame, int flags)
 {
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(avctx->pix_fmt);
@@ -243,6 +255,8 @@ int ff_get_buffer(AVCodecContext *avctx, AVFrame *frame, int flags)
     frame->data[0] = mem + 64;
     frame->data[1] = frame->data[0] + luma;
     frame->data[2] = frame->data[1] + chroma;
+    if (fill_value() >= 0)
+        memset(mem + 64, fill_value(), total);
     frame->pts = avctx->internal->pkt_pts;
     frame->color_range = avctx->color_range;
     frame->color_primaries = avctx->color_primaries;

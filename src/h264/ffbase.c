@@ -5,6 +5,27 @@
 #include <malloc.h>
 #endif
 
+static atomic_int cpu_flags = -1;
+
+int av_get_cpu_flags(void)
+{
+    int flags = atomic_load_explicit(&cpu_flags, memory_order_relaxed);
+    if (flags != -1)
+        return flags;
+#if ARCH_X86
+    flags = ff_get_cpu_flags_x86();
+#elif ARCH_AARCH64
+    flags = AV_CPU_FLAG_ARMV8 | AV_CPU_FLAG_NEON;
+#else
+    flags = 0;
+#endif
+    const char *env = getenv("FFAMP_H264_CPU");
+    if (env)
+        flags &= (int)strtol(env, NULL, 0);
+    atomic_store_explicit(&cpu_flags, flags, memory_order_relaxed);
+    return flags;
+}
+
 static int log_level = -1;
 
 void av_log(void *avcl, int level, const char *fmt, ...)

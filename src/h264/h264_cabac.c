@@ -11,7 +11,7 @@
 #include "mpegutils.h"
 
 #if ARCH_X86
-#elif ARCH_LOONGARCH64
+#include "x86/h264_cabac.c"
 #endif
 
 static const int8_t cabac_context_init_I[1024][2] =

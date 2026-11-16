@@ -112,3 +112,38 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `src/h264/vlc.h`: `libavcodec/vlc.h`; the FFmpeg project (`vlc.h` names no holder); LGPL-2.1-or-later.
 - `src/h264/ffbase.h`, `src/h264/ffbase.c`: `libavutil/common.h`, `intreadwrite.h`, `intmath.h`, `mem.c`, `rational.c`, `buffer.c`, `frame.c`, `refstruct.c`, `pixdesc.c`, `imgutils.c`, `libavcodec/bytestream.h`, `decode.c`; copyright (c) 2006 Michael Niedermayer, Copyright (c) 2010 Mans Rullgard, Copyright (c) 2002 Fabrice Bellard, Copyright (c) 2003 Michael Niedermayer, Copyright (c) 2009 Michael Niedermayer, copyright (c) 2006 Baptiste Coudurier, Copyright (c) 2012 Aneesh Dogra (`buffer.c`, `frame.c`, `refstruct.c`, `imgutils.c`, `decode.c` name no holder); LGPL-2.1-or-later.
 - `src/h264/h264_ffamp.c`, `src/h264/h264_threads.h`: `libavcodec/pthread_frame.c`, `pthread_slice.c`, `decode.c`, `libavutil/frame.c` (frame threads, slice threads, frame buffers, cropping); the FFmpeg project (these files name no holder); LGPL-2.1-or-later.
+- `src/h264/x86/asm.h`: `libavutil/x86/asm.h`; copyright (c) 2006 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/x86/cabac.h`: `libavcodec/x86/cabac.h`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/x86/constants.c`: `libavcodec/x86/constants.c`; the FFmpeg project (`constants.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/constants.h`: `libavcodec/x86/constants.h`; the FFmpeg project (`constants.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/cpu.c`: `libavutil/x86/cpu.c`; (c)1997-99 by H. Dietz and R. Fisher; LGPL-2.1-or-later.
+- `src/h264/x86/cpu.h`: `libavutil/x86/cpu.h`; the FFmpeg project (`cpu.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/cpuid.asm`: `libavutil/x86/cpuid.asm`; Copyright (C) 2005-2010 x264 project (authors: Loren Merritt, Fiona Glaser); LGPL-2.1-or-later.
+- `src/h264/x86/fpel.asm`: `libavcodec/x86/fpel.asm`; Copyright (c) 2008 Loren Merritt, Copyright (c) 2003-2013 Michael Niedermayer, Copyright (c) 2013 Daniel Kang; LGPL-2.1-or-later.
+- `src/h264/x86/fpel.h`: `libavcodec/x86/fpel.h`; the FFmpeg project (`fpel.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/h264_cabac.c`: `libavcodec/x86/h264_cabac.c`; Copyright (c) 2003 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/h264/x86/h264_chromamc.asm`: `libavcodec/x86/h264_chromamc.asm`; Copyright (c) 2005 Zoltan Hidvegi, 2005-2008 Loren Merritt; LGPL-2.1-or-later.
+- `src/h264/x86/h264_chromamc_10bit.asm`: `libavcodec/x86/h264_chromamc_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_deblock.asm`: `libavcodec/x86/h264_deblock.asm`; Copyright (C) 2005-2011 x264 project (authors: Loren Merritt, Fiona Glaser, Oskar Arvidsson); LGPL-2.1-or-later.
+- `src/h264/x86/h264_deblock_10bit.asm`: `libavcodec/x86/h264_deblock_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Oskar Arvidsson, Loren Merritt, Fiona Glaser); LGPL-2.1-or-later.
+- `src/h264/x86/h264_idct.asm`: `libavcodec/x86/h264_idct.asm`; Copyright (C) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (C) 2003-2008 x264 project (authors: Laurent Aimar, Loren Merritt, Holger Lubitz, Min Chen); LGPL-2.1-or-later.
+- `src/h264/x86/h264_idct_10bit.asm`: `libavcodec/x86/h264_idct_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_intrapred.asm`: `libavcodec/x86/h264_intrapred.asm`; Copyright (c) 2010 Fiona Glaser, Copyright (c) 2010 Holger Lubitz, Copyright (c) 2010 Loren Merritt, Copyright (c) 2010 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/x86/h264_intrapred_10bit.asm`: `libavcodec/x86/h264_intrapred_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_intrapred_init.c`: `libavcodec/x86/h264_intrapred_init.c`; Copyright (c) 2010 Fiona Glaser; LGPL-2.1-or-later.
+- `src/h264/x86/h264_qpel.c`: `libavcodec/x86/h264_qpel.c`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (c) 2011 Daniel Kang; LGPL-2.1-or-later.
+- `src/h264/x86/h264_qpel_10bit.asm`: `libavcodec/x86/h264_qpel_10bit.asm`; Copyright (C) 2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_qpel_8bit.asm`: `libavcodec/x86/h264_qpel_8bit.asm`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (C) 2012 Daniel Kang (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264_weight.asm`: `libavcodec/x86/h264_weight.asm`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt, Copyright (C) 2010 Eli Friedman; LGPL-2.1-or-later.
+- `src/h264/x86/h264_weight_10bit.asm`: `libavcodec/x86/h264_weight_10bit.asm`; Copyright (C) 2005-2011 x264 project (authors: Daniel Kang); LGPL-2.1-or-later.
+- `src/h264/x86/h264chroma_init.c`: `libavcodec/x86/h264chroma_init.c`; the FFmpeg project (`h264chroma_init.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/h264dsp_init.c`: `libavcodec/x86/h264dsp_init.c`; Copyright (c) 2004-2005 Michael Niedermayer, Loren Merritt; LGPL-2.1-or-later.
+- `src/h264/x86/mathops.h`: `libavcodec/x86/mathops.h`; Copyright (c) 2006 Michael Niedermayer et al; LGPL-2.1-or-later.
+- `src/h264/x86/qpel.asm`: `libavcodec/x86/qpel.asm`; Copyright (c) 2008 Loren Merritt, Copyright (c) 2003-2013 Michael Niedermayer, Copyright (c) 2013 Daniel Kang; LGPL-2.1-or-later.
+- `src/h264/x86/qpel.h`: `libavcodec/x86/qpel.h`; the FFmpeg project (`qpel.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/videodsp.asm`: `libavcodec/x86/videodsp.asm`; Copyright (c) 2012 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/x86/videodsp.h`: `libavcodec/x86/videodsp.h`; the FFmpeg project (`videodsp.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/x86/videodsp_init.c`: `libavcodec/x86/videodsp_init.c`; Copyright (C) 2002-2012 Michael Niedermayer, Copyright (C) 2012 Ronald S. Bultje; LGPL-2.1-or-later.
+- `src/h264/x86/x86inc.asm`: `libavutil/x86/x86inc.asm`; Copyright (C) 2005-2024 x264 project (authors: Loren Merritt, Henrik Gramner, Anton Mitrofanov, Fiona Glaser); ISC: permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies; THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+- `src/h264/x86/x86util.asm`: `libavutil/x86/x86util.asm`; Copyright (C) 2008-2010 x264 project (authors: Loren Merritt, Holger Lubitz); LGPL-2.1-or-later.
+- `src/h264/x86/config.asm`: the settings FFmpeg's configure writes to `config.asm` for x86-64; the FFmpeg project; LGPL-2.1-or-later.

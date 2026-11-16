@@ -42,12 +42,63 @@
 #define HAVE_X86ASM ARCH_X86
 #define HAVE_MMX ARCH_X86
 #define HAVE_MMXEXT ARCH_X86
+#define HAVE_SSE ARCH_X86
 #define HAVE_SSE2 ARCH_X86
+#define HAVE_SSE3 ARCH_X86
 #define HAVE_SSSE3 ARCH_X86
+#define HAVE_SSE4 ARCH_X86
+#define HAVE_SSE42 ARCH_X86
 #define HAVE_AVX ARCH_X86
 #define HAVE_AVX2 ARCH_X86
+#define HAVE_AVX512 ARCH_X86
+#define HAVE_AVX512ICL ARCH_X86
+#define HAVE_FMA3 ARCH_X86
+#define HAVE_FMA4 ARCH_X86
+#define HAVE_XOP ARCH_X86
+#define HAVE_MMX_EXTERNAL ARCH_X86
+#define HAVE_MMXEXT_EXTERNAL ARCH_X86
+#define HAVE_SSE_EXTERNAL ARCH_X86
+#define HAVE_SSE2_EXTERNAL ARCH_X86
+#define HAVE_SSE3_EXTERNAL ARCH_X86
+#define HAVE_SSSE3_EXTERNAL ARCH_X86
+#define HAVE_SSE4_EXTERNAL ARCH_X86
+#define HAVE_SSE42_EXTERNAL ARCH_X86
+#define HAVE_AVX_EXTERNAL ARCH_X86
+#define HAVE_AVX2_EXTERNAL ARCH_X86
+#define HAVE_AVX512_EXTERNAL ARCH_X86
+#define HAVE_AVX512ICL_EXTERNAL ARCH_X86
+#define HAVE_FMA3_EXTERNAL ARCH_X86
+#define HAVE_FMA4_EXTERNAL ARCH_X86
+#define HAVE_XOP_EXTERNAL ARCH_X86
+#define HAVE_AESNI_EXTERNAL 0
+#define HAVE_CLMUL_EXTERNAL 0
+#define HAVE_MMX_INLINE ARCH_X86
+#define HAVE_MMXEXT_INLINE ARCH_X86
+#define HAVE_SSE_INLINE ARCH_X86
+#define HAVE_SSE2_INLINE ARCH_X86
+#define HAVE_ALIGNED_STACK 1
+#define HAVE_FAST_CMOV ARCH_X86
+#define HAVE_I686 ARCH_X86
+#define HAVE_EBP_AVAILABLE ARCH_X86
+#define HAVE_EBX_AVAILABLE ARCH_X86
+#define HAVE_XMM_CLOBBERS ARCH_X86
+#define HAVE_INLINE_ASM_DIRECT_SYMBOL_REFS 0
+#define HAVE_INLINE_ASM_LABELS 1
+#define HAVE_INLINE_ASM_NONLOCAL_LABELS 1
 #define HAVE_NEON ARCH_AARCH64
+#define HAVE_NEON_EXTERNAL ARCH_AARCH64
+#define HAVE_ARMV8 ARCH_AARCH64
+#define HAVE_ARMV8_EXTERNAL ARCH_AARCH64
+#define HAVE_DOTPROD_EXTERNAL 0
+#define HAVE_I8MM_EXTERNAL 0
+#if (ARCH_X86 || ARCH_AARCH64) && (defined(__GNUC__) || defined(__clang__))
+#define HAVE_INLINE_ASM 1
+#else
 #define HAVE_INLINE_ASM 0
+#endif
+#if ARCH_X86 && !defined(PIC)
+#define PIC 1
+#endif
 #define HAVE_THREADS 1
 #define HAVE_BIGENDIAN 0
 #define HAVE_FAST_UNALIGNED 1
@@ -225,12 +276,15 @@ static av_always_inline void ff_wn64(void *p, uint64_t v) { memcpy(p, &v, 8); }
 #define AV_WN16(p, v) ff_wn16(p, (uint16_t)(v))
 #define AV_WN32(p, v) ff_wn32(p, (uint32_t)(v))
 #define AV_WN64(p, v) ff_wn64(p, (uint64_t)(v))
-#define AV_RN16A(p) (*(const uint16_t *)(const void *)(p))
-#define AV_RN32A(p) (*(const uint32_t *)(const void *)(p))
-#define AV_RN64A(p) (*(const uint64_t *)(const void *)(p))
-#define AV_WN16A(p, v) (*(uint16_t *)(void *)(p) = (uint16_t)(v))
-#define AV_WN32A(p, v) (*(uint32_t *)(void *)(p) = (uint32_t)(v))
-#define AV_WN64A(p, v) (*(uint64_t *)(void *)(p) = (uint64_t)(v))
+typedef union { uint64_t u64; uint32_t u32[2]; uint16_t u16[4]; uint8_t u8[8]; double f64; float f32[2]; } __attribute__((may_alias)) av_alias64;
+typedef union { uint32_t u32; uint16_t u16[2]; uint8_t u8[4]; float f32; } __attribute__((may_alias)) av_alias32;
+typedef union { uint16_t u16; uint8_t u8[2]; } __attribute__((may_alias)) av_alias16;
+#define AV_RN16A(p) (((const av_alias16 *)(p))->u16)
+#define AV_RN32A(p) (((const av_alias32 *)(p))->u32)
+#define AV_RN64A(p) (((const av_alias64 *)(p))->u64)
+#define AV_WN16A(p, v) (((av_alias16 *)(p))->u16 = (uint16_t)(v))
+#define AV_WN32A(p, v) (((av_alias32 *)(p))->u32 = (uint32_t)(v))
+#define AV_WN64A(p, v) (((av_alias64 *)(p))->u64 = (uint64_t)(v))
 #define AV_RB16(p) av_bswap16(ff_rn16(p))
 #define AV_RB32(p) av_bswap32(ff_rn32(p))
 #define AV_RB64(p) av_bswap64(ff_rn64(p))
@@ -569,7 +623,58 @@ typedef struct AVOnce { atomic_int state; } AVOnce;
 #define AV_ONCE_INIT { 0 }
 int ff_thread_once(AVOnce *once, void (*init)(void));
 
+#define AV_CPU_FLAG_MMX 0x0001
+#define AV_CPU_FLAG_MMXEXT 0x0002
+#define AV_CPU_FLAG_MMX2 0x0002
+#define AV_CPU_FLAG_3DNOW 0x0004
+#define AV_CPU_FLAG_SSE 0x0008
+#define AV_CPU_FLAG_SSE2 0x0010
+#define AV_CPU_FLAG_SSE2SLOW 0x40000000
+#define AV_CPU_FLAG_3DNOWEXT 0x0020
+#define AV_CPU_FLAG_SSE3 0x0040
+#define AV_CPU_FLAG_SSE3SLOW 0x20000000
+#define AV_CPU_FLAG_SSSE3 0x0080
+#define AV_CPU_FLAG_SSSE3SLOW 0x4000000
+#define AV_CPU_FLAG_ATOM 0x10000000
+#define AV_CPU_FLAG_SSE4 0x0100
+#define AV_CPU_FLAG_SSE42 0x0200
+#define AV_CPU_FLAG_AESNI 0x80000
+#define AV_CPU_FLAG_CLMUL 0x400000
+#define AV_CPU_FLAG_AVX 0x4000
+#define AV_CPU_FLAG_AVXSLOW 0x8000000
+#define AV_CPU_FLAG_XOP 0x0400
+#define AV_CPU_FLAG_FMA4 0x0800
+#define AV_CPU_FLAG_CMOV 0x1000
+#define AV_CPU_FLAG_AVX2 0x8000
+#define AV_CPU_FLAG_FMA3 0x10000
+#define AV_CPU_FLAG_BMI1 0x20000
+#define AV_CPU_FLAG_BMI2 0x40000
+#define AV_CPU_FLAG_AVX512 0x100000
+#define AV_CPU_FLAG_AVX512ICL 0x200000
+#define AV_CPU_FLAG_SLOW_GATHER 0x2000000
+#define AV_CPU_FLAG_ARMV8 (1 << 6)
+#define AV_CPU_FLAG_NEON (1 << 5)
+#define AV_CPU_FLAG_VFP (1 << 3)
+#define AV_CPU_FLAG_VFPV3 (1 << 4)
+#define AV_CPU_FLAG_DOTPROD (1 << 8)
+#define AV_CPU_FLAG_I8MM (1 << 9)
+#define CPUEXT_SUFFIX(flags, suffix, cpuext) (HAVE_ ## cpuext ## suffix && ((flags) & AV_CPU_FLAG_ ## cpuext))
+#define CPUEXT_SUFFIX_FAST2(flags, suffix, cpuext, slow_cpuext) (HAVE_ ## cpuext ## suffix && ((flags) & AV_CPU_FLAG_ ## cpuext) && !((flags) & AV_CPU_FLAG_ ## slow_cpuext ## SLOW))
+#define CPUEXT_SUFFIX_SLOW(flags, suffix, cpuext) (HAVE_ ## cpuext ## suffix && ((flags) & (AV_CPU_FLAG_ ## cpuext | AV_CPU_FLAG_ ## cpuext ## SLOW)))
+#define CPUEXT_SUFFIX_SLOW2(flags, suffix, cpuext, slow_cpuext) (HAVE_ ## cpuext ## suffix && ((flags) & AV_CPU_FLAG_ ## cpuext) && ((flags) & (AV_CPU_FLAG_ ## slow_cpuext | AV_CPU_FLAG_ ## slow_cpuext ## SLOW)))
+#define CPUEXT_SUFFIX_FAST(flags, suffix, cpuext) CPUEXT_SUFFIX_FAST2(flags, suffix, cpuext, cpuext)
+#define CPUEXT(flags, cpuext) CPUEXT_SUFFIX(flags, , cpuext)
+#define CPUEXT_FAST(flags, cpuext) CPUEXT_SUFFIX_FAST(flags, , cpuext)
+#define CPUEXT_SLOW(flags, cpuext) CPUEXT_SUFFIX_SLOW(flags, , cpuext)
+int av_get_cpu_flags(void);
+int ff_get_cpu_flags_x86(void);
+
+#if ARCH_X86
+#include <mmintrin.h>
+static inline void emms_c(void) { _mm_empty(); }
+#else
 static inline void emms_c(void) { }
+#endif
 
 typedef struct GetByteContext {
     const uint8_t *buffer, *buffer_end, *buffer_start;

@@ -11,11 +11,13 @@
 #define UNCHECKED_BITSTREAM_READER !CONFIG_SAFE_BITSTREAM_READER
 #endif
 
-#if ARCH_AARCH64
+#if ARCH_AARCH64 && HAVE_INLINE_ASM
+#   include "aarch64/cabac.h"
 #endif
 #if ARCH_ARM
 #endif
 #if ARCH_X86
+#   include "x86/cabac.h"
 #endif
 #if ARCH_MIPS
 #endif

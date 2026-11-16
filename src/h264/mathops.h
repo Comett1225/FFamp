@@ -20,6 +20,7 @@ extern const uint8_t ff_zigzag_scan[16+1];
 #elif ARCH_PPC
 #elif ARCH_RISCV
 #elif ARCH_X86
+#   include "x86/mathops.h"
 #endif
 
 #ifndef MUL64

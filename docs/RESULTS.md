@@ -1236,3 +1236,36 @@ machine here).
 
 The pictures go to the `VideoDecoder` without a copy: `Picture.keep` holds the decoder's frame and the `Image` points at its planes.
 Copying each 1080p picture cost about a fifth of the decode time.
+
+# Windows and Linux, round 2 merged: audio, video and the own H.264 decoder together
+
+The three round 2 branches (`wl-audio`, `wl-h264`, `wl-video`) merged into `winlinux`. Every H.264 software fallback goes to FFamp's
+own decoder: VA-API refusals on Linux (more than 8 bits, not 4:2:0, the d3d12 driver's scaling-matrix guard) and Media Foundation
+refusals on Windows. OpenH264 and FAAD2 are out of the build scripts, the notices and the plan. Media Foundation stays the first H.264
+decoder on Windows and VA-API the first on Linux. Same PC and judge as before (FFmpeg 9.0.2, BtbN builds); the libraries were built
+again from the merged build scripts (Windows with NASM).
+
+## Suites
+
+Full runs of `tests/run.sh` (pass / fail / skip):
+
+| System | Merged | `wl-audio` | `wl-video` | `wl-h264` | Round 1 |
+|---|---|---|---|---|---|
+| Windows (clang-cl, libraries with NASM) | 3,087 / 6 / 223 | 2,789 / 42 / 206 | 2,644 / 51 / 209 | 2,463 / 85 / 196 | 2,392 / 109 / 184 |
+| Linux (WSL, gcc 13, VA-API through d3d12) | 3,248 / 8 / 202 | 2,729 / 131 / 200 | 2,804 / 53 / 189 | 2,469 / 109 / 189 | 2,345 / 175 / 188 |
+
+The audio and H.264 branch runs stopped at the stand-in suite on both systems (as round 1's Linux run did; `wl-video` fixed that), so
+the fixes, speed check and speed suites only ran on `wl-video` and here. Nothing the merge touched fails:
+
+| Check | System | Why |
+|---|---|---|
+| `rd_vorbis.ogg` trims to the length ffmpeg decodes | both | FFmpeg's x86 build writes the test file without an end trim (round 1) |
+| WMA 2 600 s speed (2 checks), `wv_speed_v3.avi` speed | Windows; `wv_speed_v3.avi` on both | FFmpeg's x86 SIMD for these codecs (round 1) |
+| `fixes: channel-order` | both | FFamp's own ALAC and AAC decoders give 6.1 in FFmpeg's order (FL FR FC LFE SL SR BC), the convention of the Mac decoders and this check is FL FR FC LFE BC SL SR. `54_aac`'s 6.1 check asks for FFmpeg's order, so the two checks disagree; failed on `wl-video` too |
+| `fixes: FFmpeg decodes 100 frames from the 100-frame AAC file` | Linux | vo-aacenc's 1,600 frames of priming put the whole 100-frame edit inside the shortened last packet; FFmpeg's MP4 reader marks both packets discarded and decodes nothing. Media Foundation (1,024 frames of priming) and AudioToolbox pass; failed on `wl-video` too |
+| Speed check: 1080p RGBA frames (2 checks), 10-bit HEVC over 800 fps | Linux | VA-API copy-out through WSL's d3d12 driver: 118 to 128 fps (`wl-video`: 120 to 124) |
+| Speed check: AV1 software decode over 400 fps | Linux | dav1d 357 fps in WSL (`wl-video`: 366) |
+| Speed check: 10-bit HEVC over 800 fps as a whole program | Windows | 429 fps; a Mac limit that the program start alone exceeds (`wl-video`) |
+
+What the merge changed in the results: the d3d12 scaling-matrix clip of `61_vaapi` now decodes on FFamp's own decoder, every frame
+bit-exact (OpenH264 gave 71.9 dB); `54_h264`, `53_ac3`, `54_aac`, `53_h263`, `60_videox` and `61_vaapi` pass whole on both systems.

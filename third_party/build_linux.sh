@@ -97,9 +97,15 @@ make install >/dev/null
 fetch https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz 40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210 x265 x265_4.2.tar.gz
 SOURCE=source with_cmake -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_PIC=ON -DHIGH_BIT_DEPTH=OFF -DENABLE_LIBNUMA=OFF -DENABLE_HDR10_PLUS=OFF
 
+fetch https://github.com/intel/libva/releases/download/2.22.0/libva-2.22.0.tar.bz2 e3da2250654c8d52b3f59f8cb3f3d8e7fb1a2ee64378dbc400fbc5663de7edb8 libva libva-2.22.0.tar.bz2
+mkdir -p "$PREFIX/include/va"
+cp va/*.h va/drm/va_drm.h "$PREFIX/include/va/"
+sed -e 's/@VA_API_MAJOR_VERSION@/1/' -e 's/@VA_API_MINOR_VERSION@/22/' -e 's/@VA_API_MICRO_VERSION@/0/' -e 's/@VA_API_VERSION@/1.22.0/' va/va_version.h.in > "$PREFIX/include/va/va_version.h"
+
 for lib in opus ogg vorbis mp3lame mpg123 oapv vpx dav1d SvtAv1Enc xvidcore openh264 de265 faad vo-aacenc x264 x265; do
     file="$PREFIX/lib/lib$lib.a"
     [ -f "$file" ] || { echo "missing $file" >&2; exit 1; }
     printf '%s %s bytes\n' "lib$lib.a" "$(stat -c %s "$file")"
 done
+[ -f "$PREFIX/include/va/va.h" ] || { echo "missing $PREFIX/include/va/va.h" >&2; exit 1; }
 find "$PREFIX/lib" -name '*.so*' -delete

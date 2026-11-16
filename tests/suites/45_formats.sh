@@ -10,7 +10,7 @@ for f in $(cut -d' ' -f3 $FX/packets.md5); do
     check "packets of $f match the checked table" listed packets $f $A packets $FX/$f
     check "probe of $f matches the checked output" listed probe $f $A probe --json $FX/$f
 done
-for f in $FA_AUDIO; do case $f in *aac*|*opus*|*mp3*|*mp2*) judge=float_check ;; *) judge=check ;; esac; $judge "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
+for f in $FA_AUDIO; do case $f in *aac*|*opus*|*mp3*|*mp2*|*ac3*) judge=float_check ;; *) judge=check ;; esac; $judge "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
 for f in $FA_VIDEO; do
     table=pictures
     case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; esac

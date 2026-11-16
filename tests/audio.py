@@ -89,8 +89,8 @@ def snr(got, want):
 
 
 def worst_lag(got, want):
-    lags = [lag(got[:, c], want[:, c]) for c in range(got.shape[1]) if not (got.shape[1] == 6 and c == 3)]
-    return max(lags, key=abs)
+    lags = [lag(got[:, c], want[:, c]) for c in range(got.shape[1]) if not (got.shape[1] == 6 and c == 3) and numpy.any(want[:, c])]
+    return max(lags, key=abs) if lags else 0
 
 
 def describe(name, got, want, edge=0):
@@ -116,11 +116,11 @@ def truth(path, rate, channels, seconds, least, slack, extra):
     return len(got) == len(want) and abs(shift) <= slack and ratio >= least
 
 
-def against(path, least, tail, late, exact, decoder):
+def against(path, least, tail, late, exact, decoder, remix=False):
     got, rate, channels = ours(["adecode", path])
     if got is None:
         return False
-    want = judge(path, decoder + ["-i", path, "-map", "0:a:0"], channels)
+    want = judge(path, decoder + ["-i", path, "-map", "0:a:0"] + (["-ac", str(channels)] if remix else []), channels)
     total = len(want)
     name = os.path.basename(path) + " against the judge" + (" with its own decoder delay of %d frames taken off" % late if late else "")
     shift, ratio, same = describe(name, got[:len(got) - late], want[late:])
@@ -205,9 +205,9 @@ def alias(source, target):
     return level < -100
 
 
-def fuzz(folder, rounds, seed):
+def fuzz(folder, rounds, seed, kinds=(".m4a", ".mp4", ".mov")):
     rng = random.Random(seed)
-    names = sorted(n for n in os.listdir(folder) if n.endswith((".m4a", ".mp4", ".mov")))
+    names = sorted(n for n in os.listdir(folder) if n.endswith(kinds))
     scratch = os.path.join(HERE, "out", f"fuzz_{os.getpid()}.bin")
     crashed = hung = accepted = 0
     for name in names:
@@ -284,7 +284,7 @@ if __name__ == "__main__":
     elif kind == "truth":
         ok = truth(a[0], int(a[1]), int(a[2]), float(a[3]), float(a[4]), int(a[5]), a[6:])
     elif kind == "against":
-        ok = against(a[0], float(a[1]), int(a[2]), int(a[3]), "exact" in a[4:], ["-c:a", "libopus"] if "libopus" in a[4:] else [])
+        ok = against(a[0], float(a[1]), int(a[2]), int(a[3]), "exact" in a[4:], ["-c:a", "libopus"] if "libopus" in a[4:] else [], "remix" in a[4:])
     elif kind == "checksum":
         ok = checksum(a[0], a[1])
     elif kind == "chunks":
@@ -296,7 +296,7 @@ if __name__ == "__main__":
     elif kind == "alias":
         ok = alias(int(a[0]), int(a[1]))
     elif kind == "fuzz":
-        ok = fuzz(a[0], int(a[1]), int(a[2]))
+        ok = fuzz(a[0], int(a[1]), int(a[2]), tuple(a[3].split(",")) if len(a) > 3 else (".m4a", ".mp4", ".mov"))
     elif kind == "mixing":
         ok = mixing(a[0], 0, int(a[1]))
     elif kind == "reader":

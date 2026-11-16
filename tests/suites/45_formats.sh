@@ -19,6 +19,7 @@ done
 
 echo "== formats: known signals, random access, the same stream in different wrappings (no FFmpeg)"
 while read f rate channels seconds least; do
+    if ! on_mac && [ $f = caf_he_aac.caf ]; then skip "$f: no offset from its source signal (FFmpeg's and this system's HE-AAC decoders keep a 962-frame delay; judged against ffmpeg in 54_aac)"; continue; fi
     check "$f: rate, channels, length to the sample, no offset from its source signal" python3 audio.py truth $FX/$f $rate $channels $seconds $least 0
 done <<TABLE
 ac3_mono.mka 44100 1 1.5 25
@@ -95,6 +96,7 @@ have_ffmpeg || { skip "formats against ffmpeg and ffprobe"; return 0; }
 
 echo "== formats: sound against ffmpeg's own decode"
 while read f least; do
+    if own_aac && [ $f = caf_aac.caf ]; then least=135; fi
     check "$f against ffmpeg" python3 audio.py against $FX/$f $least 0 0
 done <<TABLE
 ac3_51.ac3 50

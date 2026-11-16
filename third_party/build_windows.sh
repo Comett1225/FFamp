@@ -115,11 +115,6 @@ fetch https://github.com/strukturag/libde265/archive/refs/tags/v1.1.3.tar.gz 189
 with_cmake -DENABLE_SDL=OFF -DENABLE_DECODER=OFF -DENABLE_ENCODER=OFF
 fi
 
-if step faad2; then
-fetch https://github.com/knik0/faad2/archive/refs/tags/2.11.4.tar.gz ee479ccbae4a8387ab696e6f21a481bd83fe3881471cafa81b4ae59d7d3aed43 faad2 faad2-2.11.4.tar.gz
-with_cmake -DFAAD_BUILD_CLI=OFF
-fi
-
 if step voaac; then
 fetch https://downloads.sourceforge.net/project/opencore-amr/vo-aacenc/vo-aacenc-0.1.3.tar.gz e51a7477a359f18df7c4f82d195dab4e14e7414cbd48cf79cc195fc446850f36 voaac vo-aacenc-0.1.3.tar.gz
 plain_library vo-aacenc common/cmnMemory.c aacenc/basic_op/*.c aacenc/src/*.c

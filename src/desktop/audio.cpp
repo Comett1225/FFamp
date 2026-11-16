@@ -24,8 +24,7 @@ std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::ve
     }
     std::string problem;
     if (auto system = openPlatformAudio(track, firstPacket, &problem)) return system;
-    auto decoder = aac ? openFaadAudio(track, error) : openMpg123Audio(track, firstPacket, error);
-    return decoder;
+    return aac ? openAacAudio(track, firstPacket, error) : openMpg123Audio(track, firstPacket, error);
 }
 
 struct AacEncoder::Impl {

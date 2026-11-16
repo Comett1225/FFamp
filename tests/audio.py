@@ -116,13 +116,20 @@ def truth(path, rate, channels, seconds, least, slack, extra):
     return len(got) == len(want) and abs(shift) <= slack and ratio >= least
 
 
-def against(path, least, tail, late, exact, decoder, remix=False):
+def against(path, least, tail, late, exact, decoder, remix=False, peer=False):
     got, rate, channels = ours(["adecode", path])
     if got is None:
         return False
-    want = judge(path, decoder + ["-i", path, "-map", "0:a:0"] + (["-ac", str(channels)] if remix else []), channels)
+    extra = decoder + ["-i", path, "-map", "0:a:0"] + (["-ac", str(channels)] if remix else [])
+    want = judge(path, extra, channels)
     total = len(want)
     name = os.path.basename(path) + " against the judge" + (" with its own decoder delay of %d frames taken off" % late if late else "")
+    if peer:
+        plain = judge(path, ["-cpuflags", "0"] + extra, channels)
+        n = min(len(plain), len(want))
+        floor = snr(plain[:n], want[:n])
+        print(f"{os.path.basename(path)}: ffmpeg's own C code against its SIMD code: SNR {floor:.1f} dB")
+        least = min(least, floor - 1)
     shift, ratio, same = describe(name, got[:len(got) - late], want[late:])
     return total - len(got) == tail and shift == 0 and ratio >= least and (same or not exact)
 
@@ -284,7 +291,7 @@ if __name__ == "__main__":
     elif kind == "truth":
         ok = truth(a[0], int(a[1]), int(a[2]), float(a[3]), float(a[4]), int(a[5]), a[6:])
     elif kind == "against":
-        ok = against(a[0], float(a[1]), int(a[2]), int(a[3]), "exact" in a[4:], ["-c:a", "libopus"] if "libopus" in a[4:] else [], "remix" in a[4:])
+        ok = against(a[0], float(a[1]), int(a[2]), int(a[3]), "exact" in a[4:], ["-c:a", "libopus"] if "libopus" in a[4:] else [], "remix" in a[4:], "peer" in a[4:])
     elif kind == "checksum":
         ok = checksum(a[0], a[1])
     elif kind == "chunks":

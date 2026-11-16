@@ -416,9 +416,10 @@ list; `Sample.offset` is then free for the reader's use.
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
   out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
   `openStillDecoder` (WIC on Windows; Linux has no JPEG decoder yet). Linux returns nothing from the hooks yet.
-- Software paths: OpenH264, libde265, FFamp's own AAC decoder (`src/aac_*.cpp`: LC, HE-AAC, HE-AAC v2), mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder places its
-  sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore, libopus,
-  libvorbis, LAME. `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
+- Software paths: OpenH264, libde265, FFamp's own AAC decoder (`src/aac_*.cpp`: LC, HE-AAC, HE-AAC v2) and AC-3/E-AC-3 decoder,
+  opencore-amr (AMR-NB, AMR-WB), mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder places its sound 624
+  frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore, libopus, libvorbis,
+  LAME. `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
 - Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media
   Foundation after a flush, OpenH264) need no drain inside a stream. `SoftDecoder::drainKeepsState` is false for decoders whose drain

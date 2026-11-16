@@ -898,3 +898,100 @@ What the numbers say:
   interface and FFamp through the vendor's Media Foundation MFT.
 
 Commands: `tests/speed.py <folder with the suite's clips>`, best of two to five runs; FFmpeg is the BtbN 9.0.2 build the app bundles.
+
+# Windows and Linux, round 2: audio (`docs/PLAN_WINLINUX.md`)
+
+Same PC and judge as round 1: Windows 11 and Ubuntu 24.04 under WSL, FFmpeg 9.0.2 (the BtbN build the app bundles) on each system.
+
+What this round added on both systems:
+
+- **AAC: FFamp's own decoder**, based on FFmpeg's float decoder (`src/aac_decode.cpp`, `src/aac_sbr.cpp`, `src/aac_tables.cpp`,
+  `src/aac.h`): AAC-LC, HE-AAC (SBR) and HE-AAC v2 (parametric stereo), every channel layout up to eight channels (the default
+  configurations and PCEs), explicit and implicit SBR and PS signalling (HE-AAC mono comes out as stereo, as in FFmpeg), in MP4, M4A,
+  MOV, ADTS, Matroska, MPEG-TS and CAF. It runs on Linux always and on Windows where Media Foundation is missing or refuses the
+  stream; Media Foundation stays first on Windows. FAAD2 is gone from the build, the notices and the plan.
+- **AC-3 and E-AC-3: FFamp's own decoder**, based on FFmpeg's (`src/ac3_decode.cpp`, `src/ac3_tables.cpp`), on both systems and every
+  Windows edition.
+- **AMR-NB and AMR-WB through opencore-amr** 0.1.6 (Apache-2.0, decoders only, static from the pinned tarball;
+  `src/opt/amr_decode.cpp`, `third_party/NOTICE_opencore-amr.md`).
+
+## Against FFmpeg
+
+| Codec | What was checked | Against ffmpeg's default decoder |
+|---|---|---|
+| AAC-LC | 16 layouts (mono to 7.1 and 7.1(wide), PCE layouts included), 8 to 96 kHz, 24 to 384 kbit/s, PNS, intensity stereo, M/S, TNS, both coders of FFmpeg's encoder; MP4, M4A, MOV, Matroska, TS, ADTS, CAF; the Apple-made fixture | 138.5 to 139.9 dB, length and timing to the sample |
+| HE-AAC | Apple-made files: mono, stereo at 22.05, 32, 44.1 and 48 kHz, 5.1; in M4A, ADTS, CAF and remuxed into Matroska, TS and MOV | 132.1 to 135.0 dB; 104.1 dB at 22.05 kHz |
+| HE-AAC v2 | Apple-made files at 32, 44.1 and 48 kHz in M4A and ADTS, remuxed into Matroska, TS and MOV | 134.3 to 135.4 dB |
+| AC-3, E-AC-3 | every fixture, every acmode with and without LFE at 32, 44.1 and 48 kHz, low and high rates, raw, MP4, MOV, Matroska, TS, AVI and WAV, and the syntax FFmpeg's encoders never write (suite `53_ac3`) | 138.2 dB or more on every file of the suite, length and timing to the sample |
+| AMR-NB | the fixtures in AMR, 3GP and CAF, every mode from 4.75 to 12.2 kbit/s with and without DTX | bit-exact against `libopencore_amrnb`; 32.7 dB against FFmpeg's own float `amrnb` |
+| AMR-WB | the fixtures in AMR and 3GP (FFmpeg has no AMR-WB encoder to make more) | bit-exact against `libopencore_amrwb`; 34.7 dB against FFmpeg's own float `amrwb` |
+
+HE-AAC is as close to FFmpeg as FFmpeg is to itself. The same FFmpeg build run with `-cpuflags 0` (its C code instead of its
+SSE/AVX2/FMA3 code) differs from its normal output by the same amount on every file:
+
+| File | FFmpeg C against FFmpeg SIMD | FFamp against FFmpeg SIMD |
+|---|---|---|
+| HE-AAC stereo 32 kHz / 44.1 kHz (ADTS) / 48 kHz | 135.1 / 135.1 / 133.5 dB | 135.0 / 135.0 / 133.7 dB |
+| HE-AAC mono (out as stereo) 44.1 kHz | 134.8 dB | 134.8 dB |
+| HE-AAC 5.1 48 kHz | 132.3 dB | 132.1 dB |
+| HE-AAC stereo 22.05 kHz | 104.3 dB | 104.1 dB |
+| HE-AAC v2 32 / 44.1 (ADTS) / 48 kHz | 134.6 / 134.3 / 135.7 dB | 134.3 / 134.3 / 135.4 dB |
+| AAC-LC stereo 44.1 kHz (ADTS) | 140.3 dB | 138.9 dB |
+
+FAAD2, which this decoder replaces, was 17.6 and 9.5 dB from FFmpeg on HE-AAC v2. The decoder follows FFmpeg's float code and, where
+FFmpeg's x86 code orders or fuses the arithmetic differently from its C code (the SBR sums, autocorrelation and high-frequency
+generator, the PS hybrid filters, the QMF synthesis window with FMA3, the PNS energy), FFamp computes in that order, with FMA where the
+CPU has FMA3 as FFmpeg does. What remains is the MDCT: FFmpeg's is AVX2 assembly with FMA3, FFamp's runs in double precision. The
+22.05 kHz file sits at 104 dB for both comparisons because SBR's inverse filtering is ill-conditioned there (FFmpeg's own comment
+calls it numerically unstable). The suite therefore asks 135 dB of AAC-LC and, for HE-AAC, no more than 1 dB below what FFmpeg's C
+code reaches against FFmpeg (`audio.py against ... peer`).
+
+Random reads over long HE-AAC and HE-AAC v2 files equal one straight read to the bit across the 20-second restart points: the decoder
+saves its SBR and PS state at each restart point (about 260 KB for each channel element that uses SBR).
+
+On Windows the suite runs FFamp's AAC decoder with `FFAMP_NO_SYSTEM_AUDIO=1`; with Media Foundation in front, every AAC check of
+round 1 still passes.
+
+## Decoding speed against FFmpeg
+
+120 seconds of sound, whole-program wall time, best of five, one thread on both sides (`ffmpeg -threads 1 ... -f f32le -` against
+`ffamp adecode`). The Linux FFmpeg takes about 0.18 s to start, which flattens its short runs.
+
+| Codec | Windows: FFamp / FFmpeg | Linux: FFamp / FFmpeg |
+|---|---|---|
+| AAC-LC 5.1 384 kbit/s | 0.224 / 0.141 s (0.63x) | 0.213 / 0.255 s (1.19x) |
+| AAC-LC stereo 128 kbit/s | 0.086 / 0.093 s (1.08x) | 0.071 / 0.196 s (2.75x) |
+| HE-AAC stereo 48 kbit/s | 0.221 / 0.138 s (0.62x) | 0.189 / 0.185 s (0.98x) |
+| HE-AAC v2 32 kbit/s | 0.213 / 0.150 s (0.71x) | 0.184 / 0.205 s (1.11x) |
+| AC-3 5.1 448 kbit/s | 0.154 / 0.143 s (0.93x) | 0.150 / 0.231 s (1.54x) |
+| E-AC-3 5.1 448 kbit/s | 0.157 / 0.142 s (0.91x) | 0.150 / 0.230 s (1.53x) |
+| AMR-NB 12.2 kbit/s | 0.092 / 0.108 s (1.17x) | 0.077 / 0.234 s (3.06x) |
+| AMR-WB 23.85 kbit/s | 0.204 / 0.132 s (0.65x; FFmpeg's `libopencore_amrwb` 0.208 s) | 0.173 / 0.246 s (1.42x) |
+
+The factor is FFmpeg's time over FFamp's (above 1: FFamp is faster). On Windows the AAC decoder spends most of its time in the MDCT,
+which FFmpeg runs in AVX2 assembly. Media Foundation, which decodes AAC there first, takes 0.267 s for the 5.1 file, 0.106 s for the
+stereo one, 0.176 s for HE-AAC and 0.191 s for HE-AAC v2. AMR-WB is opencore's reference decoder: as fast as FFmpeg's
+`libopencore_amrwb`, slower than FFmpeg's own float decoder.
+
+Command: `tests/speed_audio.py <work folder>` from `tests/` with `FFMPEG` and `AMEDIA` set; the AAC suite also checks long files
+against ffmpeg's time (2x for 5.1 AAC-LC, 1.5x for HE-AAC).
+
+## Suites
+
+Full runs at the end of the round (`tests/run.sh`):
+
+- **Linux (WSL): 2,729 pass, 131 fail, 200 skip** (round 1: 2,345 / 175 / 188). The audio suites pass whole: `20_audio`
+  163 / 0, `52_sound`, `53_ac3`, `54_aac` 85 / 0, and every AAC, AC-3 and AMR check of `45_formats`. What fails is video (OpenH264's
+  B-frame rounding and interlace, MPEG-1/2, Motion JPEG, DV, ProRes, H.263, which the video rounds handle) and `rd_vorbis.ogg trims to
+  the length ffmpeg decodes`, which failed in round 1 as well.
+- **Windows: 2,789 pass, 42 fail, 206 skip** (round 1: 2,392 / 109 / 184). Again every audio check except two that failed in round 1
+  too: the WMA 2 speed limit (1.97x and 2.26x FFmpeg's time against a limit of 1.5x; round 1 measured 1.81x and 2.18x) and
+  `rd_vorbis.ogg`. The rest is video: Motion JPEG, MPEG-1/2, DV, H.263, ProRes, VP8/VP9 alpha, `bad_sample.mp4` and one remux check.
+
+## Left after this round
+
+- AAC Main and LTP profiles, the ER, LD, ELD and USAC object types, 960-sample frames and coupling channel elements are refused with a
+  message; FFmpeg decodes them. None was met in the app's files; Media Foundation still covers AAC Main on Windows.
+- AAC files that carry libfaac's version string have their first 1,024 samples dropped by FFmpeg and not by FFamp.
+- AAC-LC takes 1.6 times FFmpeg's time on Windows (the MDCT, see above); a faster double-precision FFT would close most of it.
+- The SBR and PS state saved at restart points costs about 260 KB per SBR channel element for every 20 seconds read.

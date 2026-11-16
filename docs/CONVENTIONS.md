@@ -421,14 +421,35 @@ list; `Sample.offset` is then free for the reader's use.
 ## Windows and Linux (`src/desktop`, `src/windows`, `src/linux`, `docs/PLAN_WINLINUX.md`)
 
 - One desktop layer for both systems: `VideoDecoder`, `VideoEncoder`, `AacEncoder`, `Scaler`, the GIF reader and the capture session
-  (test devices only so far). Frames live in memory: `Frame.native` is an `Image` (planar, or two-plane with `interleaved`, 8 or 16-bit
-  samples with the decoder's `shift`), recycled through a small pool; `withPixelBuffer` hands out its `Picture`. Every decoder is a
-  `SoftDecoder` and every encoder a `SoftEncoder`, so the jump, read-ahead, concealment and field-pair logic is the Mac's soft path.
+  (test devices only so far). Frames live in memory: `Frame.native` is an `Image` (always planar, 8 or 16-bit samples with the decoder's
+  `shift`; two-plane pictures from the GPU are split while they are copied in, rows spread over the pixel crew), recycled through a small
+  pool; `withPixelBuffer` hands out its `Picture`. Every decoder is a `SoftDecoder` and every encoder a `SoftEncoder`, so the jump,
+  read-ahead, concealment and field-pair logic is the Mac's soft path.
+- `SoftDecoder::wanted(stamp)` is set by `VideoDecoder`: false for pictures it will not keep (before the asked frame after a jump, or
+  everything in `run()`). Media Foundation and VA-API then skip the copy from the GPU and hand a picture with only its stamp and colour
+  (no planes), which `store` counts and drops; software decoders ignore it.
 - Platform hooks, picked at run time with the software libraries behind them: `openPlatformVideo` (Media Foundation H.264 and HEVC, through
   the GPU when the MFT takes a D3D11 device manager: backend `mediafoundation-gpu`, else `mediafoundation`), `openPlatformEncoder` (the
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
   out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
-  `openStillDecoder` (WIC on Windows, libjpeg-turbo on Linux). Linux returns nothing from the other hooks yet.
+  `openStillDecoder` (WIC on Windows, libjpeg-turbo on Linux). On Linux `openPlatformVideo` is VA-API (below); the other hooks return
+  nothing there yet.
+- Media Foundation on the GPU: each picture's texture is copied into one of three staging textures of FFamp's own and mapped two
+  pictures later, so the copy never waits for the GPU (pictures leave the decoder up to two samples later; the drain hands out the
+  rest, a reset drops them). One D3D11 device and DXGI device manager serve every Media Foundation decoder of a process (made again
+  after a device removal). Microsoft's H.264 and MPEG-2 decoders are created by their class IDs, without the MFT enumeration. Their
+  DLL (`msmpeg2vdec.dll`) calls `SetThreadAffinityMask` when a stream begins, and on the Windows test PC (with WSL 2 running) that
+  call waited 0 to 1.4 s at the first stream of every process, also without the GPU; FFamp points that DLL's import of the function at one that leaves
+  the affinity alone (`skipAffinityCalls`), and the first stream starts in about 1 ms.
+- VA-API on Linux (`src/linux/vaapi*.cpp`, backend `vaapi`): libva and libva-drm are loaded with `dlopen` at the first video open, the
+  first render node that initialises is used (Mesa's d3d12 driver under WSL, picked through `GALLIUM_DRIVER`), and any failure falls
+  back to the software decoders; `FFAMP_NO_VAAPI` turns it off. The libva 2.22.0 headers come from `build_linux.sh` (`ABSENT_VAAPI`);
+  nothing is linked. H.264 (8-bit 4:2:0, progressive, MBAFF and field pairs woven into one frame), HEVC Main and Main 10, VP9 profiles
+  0 and 2 and AV1 Main (8 and 10-bit) are parsed by FFamp and sent as VA-API picture and slice buffers; pictures are copied out as
+  NV12 or P010 after `vaSyncSurface2` (2 s at most), and a failed submit or copy-out stops the GPU path for that decoder. Under the
+  d3d12 driver three cases stay on the software decoders because the driver gets them wrong: H.264 with non-flat scaling matrices
+  (it ignores them), 10-bit VP9 and AV1 whose height % 16 is 2 to 9 (wrong chroma and inter pictures), and AV1 film grain. NVIDIA's
+  driver has no VA-API; see `docs/PLAN_WINLINUX.md` for what NVDEC would take.
 - Software paths: OpenH264, libde265, FAAD2, mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder places its
   sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore, libopus,
   libvorbis, LAME, libmpeg2 (MPEG-1/2 when no system decoder takes the stream: always on Linux), libjpeg-turbo (Linux).
@@ -461,7 +482,8 @@ list; `Sample.offset` is then free for the reader's use.
   libmpeg2's SIMD path); Windows skips them (Media Foundation and WIC), and every system judges the same files against ffmpeg within
   the suite's floor.
 - Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
-  vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built
-  from source for x264 and libvpx; no assembly yet). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so
+  vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, GNU make built from source for x264 and libvpx; NASM from the
+  portable zip of nasm.us on PATH, so x264, x265, dav1d, SVT-AV1, OpenH264 and libvpx (x86-64 Windows target) build their assembly;
+  NASM is a build tool only and never ships). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so
   the CLI's import library cannot overwrite it; clang's builtins library is linked for 128-bit division). Paths given to FFamp are UTF-8
   on every system (`openFile`, `removeFile`, `fileBytes` in `src/portable.h`).

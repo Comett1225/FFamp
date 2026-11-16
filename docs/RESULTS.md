@@ -929,3 +929,143 @@ What the numbers say:
   interface and FFamp through the vendor's Media Foundation MFT.
 
 Commands: `tests/speed.py <folder with the suite's clips>`, best of two to five runs; FFmpeg is the BtbN 9.0.2 build the app bundles.
+
+# Windows and Linux, round 2: video
+
+Same PC and judge as round 1 (FFmpeg 9.0.2, BtbN GPL builds). New in this round: NASM builds of the Windows libraries, faster
+Windows decoding, VA-API on Linux, MPEG-1/2 and Motion JPEG on Linux, and own ProRes, DV and H.263 decoders on both systems.
+
+## Accuracy of the new decoders
+
+| Decoder | Systems | Against ffmpeg |
+|---|---|---|
+| ProRes (own, from FFmpeg's) | Windows, Linux | bit-exact: every profile from proxy to 4444 XQ, alpha at 16 and 8 bits, interlaced both field orders, odd sizes, two encoders; random frames and damaged copies (videox suite) |
+| DV (own, from FFmpeg's) | Windows, Linux | bit-exact: PAL, NTSC, 2-4-8 fields, DV50, DVCPRO HD 1080i60/1080i50/720p60/720p50, in MOV and AVI |
+| H.263 and H.263+ (own, on the H.263 core) | Windows, Linux | bit-exact on 20 encodes (3GP, MOV, AVI, Matroska; custom sizes, GOBs, slices, 4MV, OBMC, AIC, deblocking, UMV, alternative inter VLC, modified quantisation), seeks and damaged copies (`53_h263`, 49 checks) |
+| MPEG-1/2 (libmpeg2) | Linux | 60 to 65 dB (libmpeg2's SIMD IDCT rounds differently; the libmpeg2 section above) |
+| Motion JPEG and JPEG (libjpeg-turbo) | Linux | 64 to 68 dB (the same section) |
+| VA-API H.264, HEVC, VP9, AV1 | Linux | bit-exact (below) |
+| Media Foundation H.264 and HEVC with FFamp's own copy-back | Windows | bit-exact, unchanged (every frame of the 720p and 1080p clips, 50 random jumps per clip) |
+
+## VA-API on Linux: what was tested, and what could not be
+
+Tested in WSL (Ubuntu 24.04) with Mesa 25.2.8's d3d12 VA-API driver on the PC's integrated GPU, against ffmpeg frame by frame:
+
+- `61_vaapi` (new suite, encoded by the judge at test time): H.264 with B-frames, weighted prediction, MBAFF, four slices and an
+  odd size; HEVC Main and Main 10; VP9 profiles 0 and 2; AV1 8 and 10-bit. Every frame bit-exact, 12 random frames per file equal
+  to the straight decode, `FFAMP_NO_VAAPI` falls back, and the three d3d12 fallbacks below stay on software and decode right.
+- The VA-API helpers' clip sets, rerun on the merged branch: 83 files (15 H.264 from x264
+  with every frame type and reference case, about 40 HEVC from x265 and kvazaar plus crafted long-term, RPS, scaling-list, tile and
+  weighted streams, 24 AV1 from aom, SVT-AV1 and rav1e with tiles, superres, intra block copy, loop restoration, film grain and 10-bit).
+  80 are bit-exact (77 on the GPU, 3 sent to dav1d by the fallbacks). The other three: the H.264 file with scaling matrices goes to
+  OpenH264 (its B-frame rounding, 71.9 dB); x265 with 16x16 CTUs is 85 dB from ffmpeg, and libde265 gives exactly the same pictures
+  as the GPU, so FFmpeg is the odd one there; a crafted HEVC file that ffmpeg itself reports broken ("No ref lists in the SPS")
+  differs in one frame. (22 raw `.hevc` streams of the set were not run: FFamp has no raw HEVC reader; their MP4 copies are above.)
+- The fixtures and 1080p clips of the video, readers, formats and frame-reader suites now decode H.264 and HEVC on the GPU: the
+  H.264 B-frame and interlaced failures of round 1 (OpenH264) are gone where VA-API runs.
+
+Found and handled (the d3d12 driver, not FFamp): it ignores H.264 scaling matrices (24.7 dB in either list order), it decodes
+10-bit VP9 and AV1 wrongly when the height % 16 is 2 to 9 (1080 lines included; found by the new suite for VP9), and AV1 film grain
+is left to dav1d; those streams stay on the software decoders.
+
+Not tested: a native Linux install with Intel's iHD or AMD's radeonsi VA-API drivers (no such machine here; the code path is the
+same, only the d3d12 workarounds are skipped there), NVIDIA (no VA-API in its driver; NVDEC is described in the plan), H.264 High 10 and
+4:2:2 (the VA-API path takes 8-bit 4:2:0 only; the rest goes to software), HEVC range extensions,
+VP9 profiles 1 and 3, AV1 High/Professional (software), and VA-API encoding (not part of this round).
+
+## Windows decode speed
+
+What cost the time, measured in the program (`ffamp bench`, 1080p H.264 clip): Media Foundation's own copy-back (`Lock2D` on the
+GPU buffer) waited for each picture, 466 fps with copies against 1,160 fps without; then FFamp copied the two-plane picture and split
+it on one thread. And at the first stream of every process, Microsoft's H.264 decoder sat 0 to 1.4 s in `SetThreadAffinityMask`
+(stack samples during `MFT_MESSAGE_NOTIFY_BEGIN_STREAMING`; a second decoder in the same process started in 1 ms), which made
+program starts slow and uneven.
+
+Now: FFamp copies each GPU picture into a ring of three staging textures and maps it two pictures later, skips the copy for
+pictures it will not keep (the run-up to a jump target), splits the planes on the pixel crew while copying in, shares one D3D11
+device per process, creates Microsoft's decoders by class ID and keeps their DLL away from `SetThreadAffinityMask`. In the program
+the copies now cost 2 % (1,140 fps with copies, 1,160 without), which is the GPU's own limit for this clip: two decodes at once take
+twice as long, in FFamp and in FFmpeg alike.
+
+Whole programs on the idle PC, best of two or three runs, `tests/speed.py` (the other rows of the round 1 table moved by a few
+milliseconds only). "Before" is round 1's table; the merged branch measured again the same day before this work gave 4.5 s and 5.9 s
+for decoding and 10.9 s and 6.4 s for the thumbnails (the affinity stall was worse that day).
+
+| Task (1080p, 60 s, 1,800 frames) | FFamp before | FFamp now | FFmpeg software | FFmpeg `-hwaccel d3d11va` | Now against FFmpeg |
+|---|---|---|---|---|---|
+| decode to memory, H.264 | 4.1 s | 1.72 s | 1.45 s | 2.60 s | 0.85x software, 1.51x GPU |
+| decode to memory, HEVC | 5.8 s | 2.01 s | 2.68 s | 2.63 s | 1.34x software, 1.31x GPU |
+| 12 thumbnails, H.264 (a program start each) | 3.0 s | 2.22 s | 1.88 s | | 0.85x |
+| 12 thumbnails, HEVC | 6.3 s | 3.70 s | 3.58 s | | 0.97x |
+| open + probe, H.264 / HEVC | 10 / 11 ms | 13 / 14 ms | 71 / 33 ms | | 5.3x / 2.4x |
+| export MP4, 300 frames H.264 + AAC | 981 ms | 1,050 ms | 834 ms (the GPU vendor's encoder) | | 0.79x |
+
+H.264 decode to memory stays behind FFmpeg's software decoder (1.45 s): the GPU itself decodes this clip at about 1,150 frames per
+second, two decoders at once share that rate, and Microsoft's software decoder reaches 700 fps (152 in the low-latency mode FFamp
+uses). Beating FFmpeg there needs a fast bit-exact software H.264 decoder next to the GPU (the owner's own port, separate branch).
+HEVC and every GPU comparison are ahead. Seeking in the program (`10_video`, 50 random frames): H.264 1080p 66 to 30 ms, HEVC 1080p
+406 to 141 ms (FFmpeg's program 140 and 287 ms per jump).
+
+In the app FFamp runs inside its own process, so a thumbnail costs only the jump (30 ms for H.264 1080p, 141 ms for HEVC above, the
+device and decoder start once per process); the program-start rows above are what the CLI pays each time.
+
+## NASM on Windows: the libraries with and without assembly
+
+NASM 3.02, the portable `nasm-3.02-win64.zip` from nasm.us (641,314 bytes, SHA-256
+`161d0bfaff53c2f9e9f3e69fd0672323ebabafd1268976a5cec11be92a19aee7`; nasm.us publishes no checksum file), unpacked next to the build,
+never shipped. `tests/speed.py --libraries` with Media Foundation turned off, the same FFamp source linked once against the libraries
+built without assembly and once with:
+
+| Library task (1080p) | Without assembly | With NASM | Gain | FFmpeg |
+|---|---|---|---|---|
+| VP9 decode to memory, 60 s (libvpx) | 12.7 s | 2.60 s | 4.9x | 2.23 s |
+| AV1 decode to memory, 60 s (dav1d) | 4.51 s | 1.86 s | 2.4x | 2.10 s |
+| H.264 decode, 60 s (OpenH264, the fallback without Media Foundation) | 29.7 s | 26.2 s | 1.13x | 1.44 s |
+| HEVC decode, 60 s (libde265, the fallback) | 12.9 s | 13.0 s | none (libde265 has no NASM code) | 2.67 s |
+| H.264 encode, 300 frames (x264) | 1.64 s | 0.73 s | 2.2x | 0.75 s |
+| HEVC encode, 300 frames (x265) | 23.3 s | 4.05 s | 5.8x | 3.68 s |
+| AV1 encode, 300 frames (SVT-AV1) | 6.55 s | 1.10 s | 6.0x | 1.09 s |
+| VP9 encode, 300 frames (libvpx) | 3.29 s | 1.38 s | 2.4x | 1.38 s |
+
+With assembly the encoders are level with FFmpeg's, dav1d is ahead, libvpx 14 % behind (FFmpeg uses its own VP9 decoder with
+frame threads). The software H.264 and HEVC fallbacks stay slow on one thread; Media Foundation covers both on Windows.
+
+## Linux speed with VA-API (WSL)
+
+`tests/speed.py` in WSL, VA-API on (now) and with `FFAMP_NO_VAAPI=1` (the software libraries, as in round 1):
+
+| Task (1080p, 60 s) | Round 1 (software) | VA-API now | Software now | FFmpeg |
+|---|---|---|---|---|
+| decode to memory, H.264 | 17.3 s | 8.84 s | 18.0 s (OpenH264) | 1.54 s |
+| decode to memory, HEVC | 11.2 s | 9.93 s | 10.8 s (libde265) | 2.93 s |
+| 12 thumbnails, H.264 | 4.1 s | 3.93 s | 4.35 s | 2.17 s |
+| 12 thumbnails, HEVC | 9.4 s | 5.21 s | 9.45 s | 4.03 s |
+
+The GPU decodes these clips at 1,110 (H.264) and 985 (HEVC) frames per second inside WSL when nothing is copied out, as fast as Media
+Foundation on the same GPU, but each picture copied out through the d3d12 driver (`vaGetImage`, through WSL's GPU
+paravirtualisation) costs about 4.5 ms: 199 and 181 fps with copies. `vaDeriveImage` was tried (234 and 207 fps) and not kept, since
+on native drivers it maps tiled video memory directly. A native Linux machine with Intel or AMD drivers was not available to
+measure. Skipping the copies for pictures that are not kept made jumps on the GPU 3 to 4 times faster here (`10_video`, 50 random
+frames: H.264 1080p 148 to 43 ms, HEVC 1080p 655 to 147 ms).
+
+## Suites at the end of round 2
+
+| System | Pass | Fail | Skip |
+|---|---|---|---|
+| Windows (Git Bash, clang-cl, libraries with NASM) | 2,644 | 51 | 209 |
+| Linux (WSL, gcc 13, VA-API through d3d12) | 2,804 | 53 | 189 |
+
+Round 1 had 2,392 / 109 / 184 on Windows and 2,345 / 175 / 188 on Linux (that Linux run stopped at the stand-in suite, so the fixes,
+speed check and speed suites were not counted). The two full runs ran at the same time on the one PC; the formats suite was run again
+alone after its desktop checksums were added (the VP8 and VP9 alpha BGRA tables and the damaged-sample file, which Windows and Linux
+now decode identically; the Mac tables are VideoToolbox's). What still fails:
+
+| Checks | Why |
+|---|---|
+| AC-3, E-AC-3, AMR, HE-AAC in CAF and the AAC channel-order fixes (45 on Windows, 46 on Linux) | audio decoders of the audio branch, not in this one |
+| HE-AAC v2 against ffmpeg (Linux) | FAAD2's parametric stereo (round 1, plan decision 5) |
+| Vorbis trim (both) | FFmpeg's x86 build writes the test file without an end trim (round 1) |
+| WMV7/8 and WMA 2 speed against FFmpeg on one thread (1 on Linux, 3 on Windows) | FFmpeg's x86 SIMD for these codecs (round 1) |
+| Speed check, 10-bit HEVC 150 frames over 800 fps as a whole program (Windows: 417 fps) | a Mac threshold: the program start alone (D3D11 device, about 0.2 s) exceeds it |
+| Speed check: RGBA frames, 10-bit HEVC and AV1 software rates (4 on Linux) | WSL's slow VA-API copy-out above (120 to 124 fps for RGBA frames), dav1d 366 fps against 400 |
+| `h264_aac.ts` decodes like `h264.mp4` (Windows, once) | failed once in the full run while WSL was using the GPU; 90 reruns, also with the GPU busy, all exact |

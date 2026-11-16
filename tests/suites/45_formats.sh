@@ -76,13 +76,15 @@ echo "== formats: alpha, one undecodable sample, unknown codecs (no FFmpeg)"
 for f in alpha_prores.mov alpha_vp9.webm alpha_vp8.webm; do
     check "$f decodes with its alpha plane, at full and at half size" $FC veil $FX/$f 160 120
     table=veiled
-    case $f in *prores*) on_mac || table=veiled_desktop ;; esac
+    on_mac || table=veiled_desktop
     check "$f as BGRA decodes to the checked checksum" listed $table $f $A decode $FX/$f --bgra
     check "random frames of $f equal the straight decode" python3 comparex.py selfseek $FX/$f 10 5
 done
 check "probe names the alpha pixel formats" [ "$($A probe --json $FX/alpha_prores.mov | grep -c yuva444p12le)$($A probe --json $FX/alpha_vp9.webm | grep -c yuva420p)$($A probe --json $FX/alpha_vp8.webm | grep -c yuva420p)" = 111 ]
 check "a file with one undecodable sample still gives every frame, the lost ones as the frame before" $FC concealed $FX/bad_sample.mp4 160 120 115 117 119
-check "bad_sample.mp4 decodes to the checked checksum" listed pictures bad_sample.mp4 $A decode $FX/bad_sample.mp4
+table=pictures
+on_mac || table=pictures_desktop
+check "bad_sample.mp4 decodes to the checked checksum" listed $table bad_sample.mp4 $A decode $FX/bad_sample.mp4
 names_unknown() { $A probe --json $FX/unknown_codec.mkv | grep -q '"codec_name":"ffv1".*"start_time":"0.000000".*"duration":"0.400000"'; }
 check "a video codec nothing here decodes is still named and timed by probe" names_unknown
 check "and its decoder says it is not supported" refuses_with $FX/unknown_codec.mkv "video codec not supported"

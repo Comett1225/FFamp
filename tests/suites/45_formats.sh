@@ -13,7 +13,8 @@ done
 for f in $FA_AUDIO; do case $f in *aac*|*opus*|*mp3*|*mp2*) judge=float_check ;; *) judge=check ;; esac; $judge "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
 for f in $FA_VIDEO; do
     table=pictures
-    case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; dv_*|avi_dv_*|h263*) on_mac || table=pictures_desktop ;; esac
+    case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; dv_*|avi_dv_*|h263*) on_mac || table=pictures_desktop ;; mpeg[12]*|mjpeg*|avi_mpeg[12]_*|avi_mjpeg*) on_mac || table=pictures_linux ;; esac
+    if [ $table = pictures_linux ] && [ "$SYSTEM" = Windows ]; then skip "$f pictures checksum (Media Foundation and WIC decode it here; judged against ffmpeg below)"; continue; fi
     check "$f pictures decode to the checked checksum" listed $table $f $A decode $FX/$f
 done
 
@@ -146,7 +147,7 @@ avi_mpeg1_pcm.avi 48
 avi_dv_pcm.avi 33
 TABLE
 check "decode avi_h264_mp3.avi (B-frames put in order) frame-exact" python3 comparex.py decode $FX/avi_h264_mp3.avi
-for f in mjpeg422.mov mjpeg444.mkv avi_mjpeg422_pcm.avi; do check "decode $f through ImageIO (as BGRA; the judge fills in 4:2:2 colour with another filter)" $FC bgra $FX/$f 30; done
+for f in mjpeg422.mov mjpeg444.mkv avi_mjpeg422_pcm.avi; do check "decode $f as BGRA (the judge fills in 4:2:2 colour with another filter)" $FC bgra $FX/$f 30; done
 
 check "alpha_prores.mov alpha against ffmpeg" $FC veil $FX/alpha_prores.mov 160 120 -an
 check "alpha_vp9.webm alpha against ffmpeg with libvpx" $FC veil $FX/alpha_vp9.webm 160 120 -c:v libvpx-vp9

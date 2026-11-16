@@ -52,6 +52,7 @@ def decode(path, floor, extra):
     ours = subprocess.Popen([AMEDIA, "decode", path] + extra, stdout=subprocess.PIPE)
     total = same = 0
     worst = 99.0
+    summed = 0.0
     extra_frames = False
     while True:
         a = read(ref.stdout, size)
@@ -62,11 +63,14 @@ def decode(path, floor, extra):
         total += 1
         if a == b:
             same += 1
+            summed += 99.0
         else:
-            worst = min(worst, psnr(a, b, shape["depth"]))
+            value = psnr(a, b, shape["depth"])
+            worst = min(worst, value)
+            summed += value
     ref.kill()
     ours.kill()
-    print(f"decode {os.path.basename(path)} [{shape['backend']}, {shape['pix_fmt']}]: frames {total}, identical {same}, lowest PSNR {worst:.2f} dB, count mismatch {extra_frames}")
+    print(f"decode {os.path.basename(path)} [{shape['backend']}, {shape['pix_fmt']}]: frames {total}, identical {same}, lowest PSNR {worst:.2f} dB, mean {summed / max(total, 1):.2f} dB, count mismatch {extra_frames}")
     if floor > 0:
         return total > 0 and worst >= floor and not extra_frames
     return total > 0 and same == total and not extra_frames

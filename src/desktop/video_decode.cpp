@@ -170,6 +170,7 @@ struct VideoDecoder::Impl {
     std::vector<uint32_t> keys;
     int concealing = 0;
     std::vector<bool> lost;
+    uint32_t backKeys = 0;
 
     ~Impl() {
         if (worker.joinable()) {
@@ -368,7 +369,10 @@ struct VideoDecoder::Impl {
         auto it = std::upper_bound(keys.begin(), keys.end(), target);
         while (it != keys.begin()) {
             --it;
-            if (track->samples[*it].pts <= track->samples[target].pts) return *it;
+            if (track->samples[*it].pts <= track->samples[target].pts) {
+                for (uint32_t back = backKeys; back && it != keys.begin(); --back) --it;
+                return *it;
+            }
         }
         return keys.empty() || keys.front() > target ? 0 : keys.front();
     }
@@ -539,6 +543,13 @@ Frame VideoDecoder::frame(uint32_t index) {
         d.take(std::min(pts, later));
     } else {
         image = d.take(pts);
+    }
+    if (!image && d.backKeys < 3 && !d.keys.empty() && d.keyFor(item.first) != d.keys.front()) {
+        const uint32_t saved = d.backKeys++;
+        d.next = kNone;
+        Frame retried = frame(index);
+        d.backKeys = saved;
+        return retried;
     }
     if (!image) {
         if (d.lost.size() < d.list.size()) d.lost.resize(d.list.size(), false);

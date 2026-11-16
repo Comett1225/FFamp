@@ -647,7 +647,7 @@ static void deliver(AVFrame *f, FFampH264Sink sink, void *opaque)
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(f->format);
     FFampH264Frame out;
     size_t offsets[3];
-    int bytes, min_align = INT_MAX, crop_align;
+    int bytes;
     size_t left = f->crop_left, right = f->crop_right, top = f->crop_top, bottom = f->crop_bottom;
 
     if (!desc)
@@ -655,22 +655,9 @@ static void deliver(AVFrame *f, FFampH264Sink sink, void *opaque)
     if (left >= INT_MAX - right || top >= INT_MAX - bottom || left + right >= (size_t)f->width || top + bottom >= (size_t)f->height)
         left = right = top = bottom = 0;
     bytes = desc->comp[0].depth > 8 ? 2 : 1;
-    for (int pass = 0; pass < 2; pass++) {
-        for (int i = 0; i < 3; i++) {
-            int sx = i ? desc->log2_chroma_w : 0, sy = i ? desc->log2_chroma_h : 0;
-            offsets[i] = (top >> sy) * f->linesize[i] + (left >> sx) * bytes;
-        }
-        if (pass)
-            break;
-        crop_align = left ? ff_ctz((int)left) : INT_MAX;
-        for (int i = 0; i < 3; i++)
-            min_align = FFMIN(min_align, offsets[i] ? ff_ctzll((long long)offsets[i]) : INT_MAX);
-        if (crop_align < min_align)
-            return;
-        if (min_align < 5 && crop_align != INT_MAX)
-            left &= ~(((size_t)1 << (5 + crop_align - min_align)) - 1);
-        else
-            break;
+    for (int i = 0; i < 3; i++) {
+        int sx = i ? desc->log2_chroma_w : 0, sy = i ? desc->log2_chroma_h : 0;
+        offsets[i] = (top >> sy) * f->linesize[i] + (left >> sx) * bytes;
     }
     memset(&out, 0, sizeof(out));
     for (int i = 0; i < 3; i++) {

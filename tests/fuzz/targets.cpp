@@ -3,6 +3,7 @@
 #include "absent/probe.h"
 #include "audio_codec.h"
 #include "soft_video.h"
+#include "h264/h264_ffamp.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -217,6 +218,30 @@ void msmpeg4(const uint8_t* data, size_t size) {
         start += 2 + length;
         if ((stamp & 15) == 9) decoder->reset();
     }
+}
+
+void h264(const uint8_t* data, size_t size) {
+    if (size < 2) return;
+    const int threads = 1 + (data[0] & 3);
+    const int type = (data[0] & 4) ? FFAMP_H264_SLICE_THREADS : FFAMP_H264_FRAME_THREADS;
+    FFampH264* decoder = ffamp_h264_open(nullptr, 0, threads, type);
+    if (!decoder) return;
+    auto look = [](void*, const FFampH264Frame* f) {
+        for (int i = 0; i < 3; ++i) {
+            const int rows = i ? -((-f->height) >> f->chroma_shift_y) : f->height;
+            const int columns = (i ? -((-f->width) >> f->chroma_shift_x) : f->width) * (f->bits > 8 ? 2 : 1);
+            picturesSeen += f->data[i][0] + f->data[i][size_t(rows - 1) * size_t(f->linesize[i]) + size_t(columns - 1)];
+        }
+    };
+    int64_t stamp = 0;
+    for (size_t start = 1; start + 2 <= size;) {
+        const size_t length = std::min<size_t>(size - start - 2, size_t(data[start]) << 8 | data[start + 1]);
+        if (length) ffamp_h264_decode(decoder, data + start + 2, int(length), stamp++, look, nullptr);
+        start += 2 + length;
+        if ((stamp & 31) == 23) ffamp_h264_flush(decoder);
+    }
+    ffamp_h264_drain(decoder, look, nullptr);
+    ffamp_h264_close(decoder);
 }
 
 void wma(const uint8_t* data, size_t size) {

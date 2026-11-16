@@ -85,7 +85,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 
 | Library | Linux `.a` (gcc, with assembly) | Windows `.lib` (MSVC, no assembly yet) | Needed by |
 |---|---|---|---|
-| FFamp's H.264 decoder (`src/h264`, part of FFamp) | about 1.2 MB of objects with the assembly | about 1.1 MB | Linux H.264, Windows fallback |
+| FFamp's H.264 decoder (`src/h264`, part of FFamp) | 1.4 MB of code and tables, with the assembly | about the same (clang-cl, with the assembly) | Linux H.264, Windows fallback |
 | libde265 | 1.3 MB | 3.2 MB | Linux HEVC, Windows fallback |
 | FAAD2 | 0.6 MB | 0.6 MB | Linux AAC, Windows fallback |
 | vo-aacenc | 0.2 MB | 0.3 MB | AAC encode where Media Foundation cannot |

@@ -2,6 +2,7 @@
 #include "error_resilience.h"
 #include "h264dec.h"
 #include "mpegutils.h"
+#include "h274.h"
 
 void ff_h264_unref_picture(H264Picture *pic)
 {
@@ -12,6 +13,8 @@ void ff_h264_unref_picture(H264Picture *pic)
         return;
 
     ff_thread_release_ext_buffer(&pic->tf);
+    av_frame_unref(pic->f_grain);
+    av_refstruct_unref(&pic->fg);
 
     av_refstruct_unref(&pic->qscale_table_base);
     av_refstruct_unref(&pic->mb_type_base);
@@ -27,6 +30,7 @@ void ff_h264_unref_picture(H264Picture *pic)
 
 static void h264_copy_picture_params(H264Picture *dst, const H264Picture *src)
 {
+    av_refstruct_replace(&dst->fg, src->fg);
     av_refstruct_replace(&dst->qscale_table_base, src->qscale_table_base);
     av_refstruct_replace(&dst->mb_type_base,      src->mb_type_base);
     av_refstruct_replace(&dst->pps, src->pps);
@@ -80,6 +84,12 @@ int ff_h264_ref_picture(H264Picture *dst, const H264Picture *src)
     if (ret < 0)
         goto fail;
 
+    if (src->needs_fg) {
+        ret = av_frame_ref(dst->f_grain, src->f_grain);
+        if (ret < 0)
+            goto fail;
+    }
+
     h264_copy_picture_params(dst, src);
 
     return 0;
@@ -103,6 +113,13 @@ int ff_h264_replace_picture(H264Picture *dst, const H264Picture *src)
     ret = ff_thread_replace_frame(&dst->tf, &src->tf);
     if (ret < 0)
         goto fail;
+
+    if (src->needs_fg) {
+        av_frame_unref(dst->f_grain);
+        ret = av_frame_ref(dst->f_grain, src->f_grain);
+        if (ret < 0)
+            goto fail;
+    }
 
     h264_copy_picture_params(dst, src);
 
@@ -150,6 +167,16 @@ int ff_h264_field_end(H264Context *h, H264SliceContext *sl, int in_setup)
         }
         h->poc.prev_frame_num_offset = h->poc.frame_num_offset;
         h->poc.prev_frame_num        = h->poc.frame_num;
+    }
+
+    if (!in_setup && cur->needs_fg && (!FIELD_PICTURE(h) || !h->first_field)) {
+        err = AVERROR_INVALIDDATA;
+        if (cur->fg)
+            err = ff_h274_apply_film_grain(cur->f_grain, cur->f, cur->fg);
+        if (err < 0) {
+            cur->needs_fg = 0;
+            err = 0;
+        }
     }
 
     if (!in_setup && !h->droppable)

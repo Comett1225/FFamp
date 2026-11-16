@@ -12,6 +12,7 @@
 #include "mathops.h"
 #include "mpegutils.h"
 #include "rectangle.h"
+#include "h274.h"
 
 static const uint8_t field_scan[16+1] = {
     0 + 0 * 4, 0 + 1 * 4, 1 + 0 * 4, 0 + 2 * 4,
@@ -157,6 +158,12 @@ static int alloc_picture(H264Context *h, H264Picture *pic)
                                    pic->reference ? AV_GET_BUFFER_FLAG_REF : 0);
     if (ret < 0)
         goto fail;
+
+    if (pic->needs_fg) {
+        ret = ff_get_buffer(h->avctx, pic->f_grain, 0);
+        if (ret < 0)
+            goto fail;
+    }
 
     if (h->decode_error_flags_pool) {
         pic->decode_error_flags = av_refstruct_pool_get(h->decode_error_flags_pool);
@@ -455,7 +462,10 @@ static int h264_frame_start(H264Context *h)
     pic->f->crop_top    = h->crop_top;
     pic->f->crop_bottom = h->crop_bottom;
 
-    pic->needs_fg = 0;
+    pic->needs_fg =
+        h->sei.common.film_grain_characteristics &&
+        h->sei.common.film_grain_characteristics->present &&
+        h->avctx->pix_fmt == AV_PIX_FMT_YUV420P;
 
     if ((ret = alloc_picture(h, pic)) < 0)
         return ret;
@@ -1158,6 +1168,18 @@ static int h264_export_frame_props(H264Context *h)
 
     out->flags |= (AV_FRAME_FLAG_INTERLACED * interlaced_frame) |
                   (AV_FRAME_FLAG_TOP_FIELD_FIRST * top_field_first);
+
+    {
+        AVFilmGrainParams fgp;
+        if (ff_h2645_sei_film_grain(&h->sei.common, &fgp, &sps->vui, sps->bit_depth_luma, sps->bit_depth_chroma,
+                                    out->width, out->height, cur->poc + (unsigned)(h->poc_offset << 5))) {
+            av_refstruct_unref(&cur->fg);
+            cur->fg = av_refstruct_alloc_ext(sizeof(fgp), AV_REFSTRUCT_FLAG_NO_ZEROING, NULL, NULL);
+            if (!cur->fg)
+                return AVERROR(ENOMEM);
+            memcpy(cur->fg, &fgp, sizeof(fgp));
+        }
+    }
 
     h->sei.picture_timing.timecode_cnt = 0;
 

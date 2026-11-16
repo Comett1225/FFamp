@@ -435,7 +435,7 @@ list; `Sample.offset` is then free for the reader's use.
   (`h264_ffamp.c`, API in `h264_ffamp.h`), FFmpeg's x86-64 assembly (NASM, `x86/`, built when CMake finds NASM; `ABSENT_H264_ASM=OFF` turns
   it off) and AArch64 NEON (`aarch64/`). `h264_soft.cpp` is the `SoftDecoder` (backend `h264`). Every profile FFmpeg decodes (Baseline to
   High 4:4:4 with lossless, 8 to 14 bits, PAFF and MBAFF, monochrome, RGB as G, B and R planes labelled matrix 0), FFmpeg's error
-  concealment, exact cropping as the ffmpeg command line applies it. Pictures that are not recovered (before the first IDR or
+  concealment, H.274 film grain applied as FFmpeg applies it (model 0, 8-bit 4:2:0), exact cropping as the ffmpeg command line applies it. Pictures that are not recovered (before the first IDR or
   recovery point) are held back, as in FFmpeg. Test switches: `FFAMP_H264_THREADS` (0 is FFmpeg's choice, the CPU count plus one up
   to 16), `FFAMP_H264_SLICES` (slice threads instead of frame threads), `FFAMP_H264_CPU` (a mask on the CPU features; 0 runs the plain
   C), `FFAMP_H264_FILL` (fills new frame buffers with a byte, to find output that depends on unwritten memory). `ffamp h264 <file>`

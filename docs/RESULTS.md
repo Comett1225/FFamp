@@ -898,3 +898,34 @@ What the numbers say:
   interface and FFamp through the vendor's Media Foundation MFT.
 
 Commands: `tests/speed.py <folder with the suite's clips>`, best of two to five runs; FFmpeg is the BtbN 9.0.2 build the app bundles.
+
+# Windows and Linux, round 3: FFamp's own H.264 decoder (`src/h264`)
+
+FFmpeg 9.0.2's H.264 decoder ported to FFamp in plain C, kept file for file close to FFmpeg's (`h264dec.c`, `h264_slice.c`,
+`h264_cabac.c` and the rest, comments taken out) over a small libavutil layer (`ffbase.h`, `ffbase.c`: memory, reference counting,
+frames, pixel formats). FFmpeg's frame threads and slice threads are rewritten in `h264_ffamp.c` with the same rules
+(`update_thread_context`, setup and row progress, round-robin output); FFmpeg's x86-64 assembly (NASM, SSE2 to AVX2, 8 and 10-bit
+IDCT, deblocking, intra prediction, quarter-pel, chroma MC, weights, edge emulation) and AArch64 NEON are built in, with FFmpeg's inline
+CABAC on both. Error concealment is FFmpeg's (`error_resilience.c`). H.274 film grain is synthesised as FFmpeg does by
+default (`h274.c`). It replaces OpenH264 on Linux and behind Media Foundation on Windows. Not ported: the export of side data
+(captions, HDR metadata, stereo and display matrices; the T.35 user data SEI is skipped), hardware acceleration.
+
+## Bit-exactness
+
+Judge: the BtbN FFmpeg 9.0.2 the app bundles (Windows, WSL), Homebrew FFmpeg 9.0.2 on the Mac for the NEON build; frame against frame
+with `-fps_mode passthrough` in the decoder's own pixel format.
+
+| Material | Result |
+|---|---|
+| 36 x264 encodes made by suite 54_h264: Baseline, Main, High, High 10, High 4:2:2 (8 and 10-bit), High 4:4:4 (8 and 10-bit, CAVLC and CABAC), lossless 4:4:4 and 4:2:0, RGB (`libx264rgb`, G, B and R planes), monochrome, MBAFF (top and bottom field first, CABAC and CAVLC, 4:2:0, 4:2:2, 10-bit), B-pyramids, temporal and spatial direct, weighted prediction, 16 references, open GOP, intra refresh, constrained intra, slices by count and by size, odd sizes, left and right cropping, 720p | every frame bit-exact with one thread, frame threads and slice threads, on Windows (clang-cl, assembly), Linux (gcc, assembly) and the Mac (arm64 NEON); also with the assembly turned off (`FFAMP_H264_CPU=0`) |
+| H.274 film grain SEI written into an x264 stream, on every picture and once with a repetition period | every frame bit-exact (FFmpeg applies the grain; with `-export_side_data film_grain` its pictures differ, so the grain is really there) |
+| Fixtures (H.264 in MP4 and AVI, MBAFF, PAFF field pairs) | every frame bit-exact; random frames through the VideoDecoder equal ffmpeg's (50 per clip, 5 clips) |
+| Damaged copies (bits flipped and runs zeroed inside `mdat`), 36 per run in three layouts | all decode with one thread and with frame threads; with one thread bit-exact against ffmpeg on one thread except where FFmpeg's own output depends on unwritten frame memory (a macroblock whose reference is invalid keeps whatever the buffer held): there FFmpeg's result changes with its own command line (adding `-vf null` changes it), and FFamp's with `FFAMP_H264_FILL`. With frame threads FFmpeg is not deterministic on damaged streams (four runs, four results), FFamp neither |
+| Public conformance bitstreams (JVT suite) | not run: fetching them needs the owner's go; `H264_CONFORMANCE=<folder> tests/run.sh` runs them |
+
+The damaged-stream comparison also shows why the assembly matters for parity: FFmpeg's SIMD IDCT treats out-of-range coefficients
+differently from its C code, and its arm64 CABAC checks the end of the slice where the C and x86 code do not; with the assembly ported,
+FFamp follows the FFmpeg of the same system.
+
+Fuzz target `fuzz_h264` (packets with two-byte lengths, 1 to 4 frame threads or slice threads, flushes in between): 300,000 runs
+blind on the Mac without a crash or a hang; five kept inputs.

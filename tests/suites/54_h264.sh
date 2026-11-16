@@ -83,6 +83,8 @@ if ! on_mac; then
     done
 fi
 
+check "H.274 film grain SEI written into an x264 stream (on every picture, and once with a repetition period): every frame bit-exact against ffmpeg, which applies the grain" python3 h264_check.py grain $O
+
 echo "== H.264 damaged copies: decode with one thread and with frame threads, bit-exact against ffmpeg on one thread wherever FFmpeg's own output is defined"
 $F -f lavfi -i "testsrc2=size=640x360:rate=25,noise=alls=10:allf=t" -frames:v 60 -c:v libx264 -bf 3 -g 30 -slices 4 $O/h4_damage_slices.mp4
 $F -f lavfi -i "testsrc2=size=352x288:rate=25,noise=alls=10:allf=t" -frames:v 40 -c:v libx264 -flags +ildct -x264opts tff=1:bframes=2 $O/h4_damage_mbaff.mp4

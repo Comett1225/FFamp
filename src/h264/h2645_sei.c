@@ -3,6 +3,7 @@
 #include "get_bits.h"
 #include "golomb.h"
 #include "h2645_sei.h"
+#include "h274.h"
 
 #define IS_H264(codec_id) 1
 
@@ -100,39 +101,45 @@ static int decode_film_grain_characteristics(H2645SEIFilmGrainCharacteristics *h
                                              enum AVCodecID codec_id, GetBitContext *gb)
 {
     h->present = !get_bits1(gb);
+
     if (h->present) {
-        int separate, comp[3];
-        get_bits(gb, 2);
-        separate = get_bits1(gb);
-        if (separate) {
-            get_bits(gb, 3);
-            get_bits(gb, 3);
-            get_bits1(gb);
-            get_bits(gb, 8);
-            get_bits(gb, 8);
-            get_bits(gb, 8);
+        memset(h, 0, sizeof(*h));
+        h->model_id = get_bits(gb, 2);
+        h->separate_colour_description_present_flag = get_bits1(gb);
+        if (h->separate_colour_description_present_flag) {
+            h->bit_depth_luma   = get_bits(gb, 3) + 8;
+            h->bit_depth_chroma = get_bits(gb, 3) + 8;
+            h->full_range       = get_bits1(gb);
+            h->color_primaries  = get_bits(gb, 8);
+            h->transfer_characteristics = get_bits(gb, 8);
+            h->matrix_coeffs    = get_bits(gb, 8);
         }
-        get_bits(gb, 2);
-        get_bits(gb, 4);
+        h->blending_mode_id  = get_bits(gb, 2);
+        h->log2_scale_factor = get_bits(gb, 4);
         for (int c = 0; c < 3; c++)
-            comp[c] = get_bits1(gb);
+            h->comp_model_present_flag[c] = get_bits1(gb);
         for (int c = 0; c < 3; c++) {
-            if (comp[c]) {
-                int intervals = get_bits(gb, 8) + 1;
-                int values = get_bits(gb, 3) + 1;
-                if (values > 6)
+            if (h->comp_model_present_flag[c]) {
+                h->num_intensity_intervals[c] = get_bits(gb, 8) + 1;
+                h->num_model_values[c] = get_bits(gb, 3) + 1;
+                if (h->num_model_values[c] > 6)
                     return AVERROR_INVALIDDATA;
-                for (int i = 0; i < intervals; i++) {
-                    get_bits(gb, 8);
-                    get_bits(gb, 8);
-                    for (int j = 0; j < values; j++)
-                        get_se_golomb_long(gb);
+                for (int i = 0; i < h->num_intensity_intervals[c]; i++) {
+                    h->intensity_interval_lower_bound[c][i] = get_bits(gb, 8);
+                    h->intensity_interval_upper_bound[c][i] = get_bits(gb, 8);
+                    for (int j = 0; j < h->num_model_values[c]; j++)
+                        h->comp_model_value[c][i][j] = get_se_golomb_long(gb);
                 }
             }
         }
-        get_ue_golomb_long(gb);
+        if (!IS_H264(codec_id))
+            h->persistence_flag = get_bits1(gb);
+        else
+            h->repetition_period = get_ue_golomb_long(gb);
+
         h->present = 1;
     }
+
     return 0;
 }
 
@@ -203,4 +210,62 @@ int ff_h2645_sei_ctx_replace(H2645SEI *dst, const H2645SEI *src)
 void ff_h2645_sei_reset(H2645SEI *s)
 {
     av_refstruct_unref(&s->film_grain_characteristics);
+}
+
+int ff_h2645_sei_film_grain(H2645SEI *sei, AVFilmGrainParams *fgp, const H2645VUI *vui,
+                            unsigned bit_depth_luma, unsigned bit_depth_chroma, int width, int height, int seed)
+{
+    if (sei->film_grain_characteristics && sei->film_grain_characteristics->present) {
+        H2645SEIFilmGrainCharacteristics *fgc = sei->film_grain_characteristics;
+        AVFilmGrainH274Params *h274;
+
+        memset(fgp, 0, sizeof(*fgp));
+        h274      = &fgp->codec.h274;
+
+        fgp->seed = seed;
+        fgp->width = width;
+        fgp->height = height;
+
+        fgp->subsampling_x = fgp->subsampling_y = 0;
+
+        h274->model_id = fgc->model_id;
+        if (fgc->separate_colour_description_present_flag) {
+            fgp->bit_depth_luma   = fgc->bit_depth_luma;
+            fgp->bit_depth_chroma = fgc->bit_depth_chroma;
+            fgp->color_range      = fgc->full_range + 1;
+            fgp->color_primaries  = fgc->color_primaries;
+            fgp->color_trc        = fgc->transfer_characteristics;
+            fgp->color_space      = fgc->matrix_coeffs;
+        } else {
+            fgp->bit_depth_luma   = bit_depth_luma;
+            fgp->bit_depth_chroma = bit_depth_chroma;
+            if (vui->video_signal_type_present_flag)
+                fgp->color_range = vui->video_full_range_flag + 1;
+            if (vui->colour_description_present_flag) {
+                fgp->color_primaries = vui->colour_primaries;
+                fgp->color_trc       = vui->transfer_characteristics;
+                fgp->color_space     = vui->matrix_coeffs;
+            }
+        }
+        h274->blending_mode_id  = fgc->blending_mode_id;
+        h274->log2_scale_factor = fgc->log2_scale_factor;
+
+        memcpy(&h274->component_model_present, &fgc->comp_model_present_flag,
+               sizeof(h274->component_model_present));
+        memcpy(&h274->num_intensity_intervals, &fgc->num_intensity_intervals,
+               sizeof(h274->num_intensity_intervals));
+        memcpy(&h274->num_model_values, &fgc->num_model_values,
+               sizeof(h274->num_model_values));
+        memcpy(&h274->intensity_interval_lower_bound, &fgc->intensity_interval_lower_bound,
+               sizeof(h274->intensity_interval_lower_bound));
+        memcpy(&h274->intensity_interval_upper_bound, &fgc->intensity_interval_upper_bound,
+               sizeof(h274->intensity_interval_upper_bound));
+        memcpy(&h274->comp_model_value, &fgc->comp_model_value,
+               sizeof(h274->comp_model_value));
+
+        fgc->present = !!fgc->repetition_period;
+        return 1;
+    }
+
+    return 0;
 }

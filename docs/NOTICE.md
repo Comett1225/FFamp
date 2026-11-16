@@ -164,3 +164,4 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `src/h264/aarch64/videodsp.S`: `libavcodec/aarch64/videodsp.S`; the FFmpeg project (`videodsp.S` names no holder); LGPL-2.1-or-later.
 - `src/h264/aarch64/videodsp_init.c`: `libavcodec/aarch64/videodsp_init.c`; the FFmpeg project (`videodsp_init.c` names no holder); LGPL-2.1-or-later.
 - `src/h264/aarch64/config.h`: the settings FFmpeg's configure writes to `config.h` for the AArch64 assembler; the FFmpeg project; LGPL-2.1-or-later.
+- `src/h264/h274.c`, `src/h264/h274.h`: `libavcodec/h274.c`, `libavcodec/h274.h`, `libavutil/film_grain_params.h`, the film grain part of `libavcodec/h2645_sei.c`; Copyright (c) 2021 Niklas Haas (`h274.c`; the tables from SMPTE RDD 5-2006); LGPL-2.1-or-later.

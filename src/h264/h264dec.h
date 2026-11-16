@@ -75,7 +75,8 @@ typedef struct H264Picture {
     AVFrame *f;
     ThreadFrame tf;
 
-    void *f_grain;
+    AVFrame *f_grain;
+    struct AVFilmGrainParams *fg;
 
     int8_t *qscale_table_base;
     int8_t *qscale_table;

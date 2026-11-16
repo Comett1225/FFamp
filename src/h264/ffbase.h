@@ -531,6 +531,7 @@ int av_frame_ref(AVFrame *dst, const AVFrame *src);
 void av_frame_unref(AVFrame *frame);
 void av_frame_move_ref(AVFrame *dst, AVFrame *src);
 int av_frame_replace(AVFrame *dst, const AVFrame *src);
+int av_frame_copy_props(AVFrame *dst, const AVFrame *src);
 
 #define AV_REFSTRUCT_FLAG_NO_ZEROING (1 << 0)
 #define AV_REFSTRUCT_POOL_FLAG_ZERO_EVERY_TIME (1 << 4)

@@ -187,6 +187,10 @@ static int h264_init_pic(H264Picture *pic)
     if (!pic->f)
         return AVERROR(ENOMEM);
 
+    pic->f_grain = av_frame_alloc();
+    if (!pic->f_grain)
+        return AVERROR(ENOMEM);
+
     return 0;
 }
 
@@ -249,6 +253,7 @@ static void h264_free_pic(H264Context *h, H264Picture *pic)
 {
     ff_h264_unref_picture(pic);
     av_frame_free(&pic->f);
+    av_frame_free(&pic->f_grain);
 }
 
 av_cold int ff_h264_decode_end(AVCodecContext *avctx)
@@ -658,9 +663,12 @@ static int output_frame(H264Context *h, AVFrame *dst, H264Picture *srcp)
 {
     int ret;
 
-    ret = av_frame_ref(dst, srcp->f);
+    ret = av_frame_ref(dst, srcp->needs_fg ? srcp->f_grain : srcp->f);
     if (ret < 0)
         return ret;
+
+    if (srcp->needs_fg)
+        av_frame_copy_props(dst, srcp->f);
 
     if (srcp->decode_error_flags) {
         atomic_int *decode_error = srcp->decode_error_flags;

@@ -135,12 +135,75 @@ def conformance(folder, work):
     return failed == 0 and passed > 0
 
 
+def film_grain_sei(period):
+    bits = []
+
+    def put(count, value):
+        bits.extend((value >> i) & 1 for i in range(count - 1, -1, -1))
+
+    def ue(value):
+        value += 1
+        put(value.bit_length() - 1, 0)
+        put(value.bit_length(), value)
+
+    put(1, 0)
+    put(2, 0)
+    put(1, 0)
+    put(2, 0)
+    put(4, 3)
+    for _ in range(3):
+        put(1, 1)
+    models = [[(0, 127, (90, 8, 8)), (128, 255, (60, 10, 6))], [(0, 127, (40, 6, 6)), (128, 255, (30, 9, 9))],
+              [(0, 127, (50, 7, 5)), (128, 255, (20, 12, 12))]]
+    for intervals in models:
+        put(8, len(intervals) - 1)
+        put(3, 2)
+        for low, high, values in intervals:
+            put(8, low)
+            put(8, high)
+            for v in values:
+                ue(2 * v - 1 if v > 0 else -2 * v)
+    ue(period)
+    while len(bits) % 8:
+        bits.append(0)
+    payload = bytes(int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8))
+    body, escaped, zeros = bytes([19, len(payload)]) + payload + b"\x80", bytearray(), 0
+    for byte in body:
+        if zeros >= 2 and byte <= 3:
+            escaped.append(3)
+            zeros = 0
+        escaped.append(byte)
+        zeros = zeros + 1 if byte == 0 else 0
+    return b"\x00\x00\x00\x01\x06" + bytes(escaped)
+
+
+def grain(folder):
+    raw = subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25,noise=alls=8:allf=t", "-frames:v", "30",
+                          "-c:v", "libx264", "-bf", "0", "-x264opts", "aud=1", "-f", "h264", "-"], capture_output=True, check=True).stdout
+    marker = b"\x00\x00\x00\x01\x09"
+    units = [marker + part for part in raw.split(marker) if part]
+    ok = True
+    for name, period, every in (("every_picture", 0, True), ("persisting", 1, False)):
+        sei = film_grain_sei(period)
+        stream = b"".join(unit[:6] + (sei if every or n == 0 else b"") + unit[6:] for n, unit in enumerate(units))
+        source, wrapped = os.path.join(folder, "h264_grain.264"), os.path.join(folder, f"h264_grain_{name}.mkv")
+        open(source, "wb").write(stream)
+        subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-y", "-fflags", "+genpts", "-r", "25", "-i", source, "-c", "copy", wrapped], check=True)
+        plain = theirs(wrapped, "yuv420p", ["-threads", "1"])
+        ok &= exact(wrapped) and plain != theirs(os.path.join(folder, "h264_grain.264"), "yuv420p", ["-threads", "1", "-export_side_data", "film_grain"])
+        os.remove(source)
+        os.remove(wrapped)
+    return ok
+
+
 if __name__ == "__main__":
     kind, rest = sys.argv[1], sys.argv[2:]
     if kind == "exact":
         good = all([exact(p) for p in rest])
     elif kind == "damaged":
         good = damaged(rest[0], int(rest[1]), int(rest[2]), rest[3])
+    elif kind == "grain":
+        good = grain(rest[0])
     elif kind == "conformance":
         good = conformance(rest[0], rest[1])
     else:

@@ -534,6 +534,24 @@ int av_frame_replace(AVFrame *dst, const AVFrame *src)
     return 0;
 }
 
+int av_frame_copy_props(AVFrame *dst, const AVFrame *src)
+{
+    dst->flags = src->flags;
+    dst->pict_type = src->pict_type;
+    dst->decode_error_flags = src->decode_error_flags;
+    dst->repeat_pict = src->repeat_pict;
+    dst->pts = src->pts;
+    dst->crop_top = src->crop_top;
+    dst->crop_bottom = src->crop_bottom;
+    dst->crop_left = src->crop_left;
+    dst->crop_right = src->crop_right;
+    dst->color_range = src->color_range;
+    dst->color_primaries = src->color_primaries;
+    dst->color_trc = src->color_trc;
+    dst->colorspace = src->colorspace;
+    return 0;
+}
+
 void av_frame_move_ref(AVFrame *dst, AVFrame *src)
 {
     *dst = *src;

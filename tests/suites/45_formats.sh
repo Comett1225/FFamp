@@ -13,7 +13,7 @@ done
 for f in $FA_AUDIO; do case $f in *aac*|*opus*|*mp3*|*mp2*) judge=float_check ;; *) judge=check ;; esac; $judge "$f sound decodes to the checked checksum" listed sound $f $A adecode $FX/$f; done
 for f in $FA_VIDEO; do
     table=pictures
-    case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; esac
+    case $f in mpeg4*|avi_mpeg4*) table=${FX_XVID}pictures ;; dv_*|avi_dv_*) on_mac || table=pictures_desktop ;; esac
     check "$f pictures decode to the checked checksum" listed $table $f $A decode $FX/$f
 done
 
@@ -74,7 +74,9 @@ done
 echo "== formats: alpha, one undecodable sample, unknown codecs (no FFmpeg)"
 for f in alpha_prores.mov alpha_vp9.webm alpha_vp8.webm; do
     check "$f decodes with its alpha plane, at full and at half size" $FC veil $FX/$f 160 120
-    check "$f as BGRA decodes to the checked checksum" listed veiled $f $A decode $FX/$f --bgra
+    table=veiled
+    case $f in *prores*) on_mac || table=veiled_desktop ;; esac
+    check "$f as BGRA decodes to the checked checksum" listed $table $f $A decode $FX/$f --bgra
     check "random frames of $f equal the straight decode" python3 comparex.py selfseek $FX/$f 10 5
 done
 check "probe names the alpha pixel formats" [ "$($A probe --json $FX/alpha_prores.mov | grep -c yuva444p12le)$($A probe --json $FX/alpha_vp9.webm | grep -c yuva420p)$($A probe --json $FX/alpha_vp8.webm | grep -c yuva420p)" = 111 ]
@@ -123,6 +125,7 @@ check "AC-3 2.1 comes out as 5.1 with every channel in its place" $FC layout $FX
 
 echo "== formats: pictures against ffmpeg's own decode"
 while read f floor; do
+    case $f in dv_*|avi_dv_*) on_mac || floor=0 ;; esac
     check "decode $f" python3 comparex.py decode $FX/$f $floor
 done <<TABLE
 mpeg4.mp4 45
@@ -148,7 +151,7 @@ for f in mjpeg422.mov mjpeg444.mkv avi_mjpeg422_pcm.avi; do check "decode $f thr
 check "alpha_prores.mov alpha against ffmpeg" $FC veil $FX/alpha_prores.mov 160 120 -an
 check "alpha_vp9.webm alpha against ffmpeg with libvpx" $FC veil $FX/alpha_vp9.webm 160 120 -c:v libvpx-vp9
 check "alpha_vp8.webm alpha against ffmpeg with libvpx" $FC veil $FX/alpha_vp8.webm 160 120 -c:v libvpx
-check "decode alpha_prores.mov colour" python3 comparex.py decode $FX/alpha_prores.mov 50
+check "decode alpha_prores.mov colour" python3 comparex.py decode $FX/alpha_prores.mov $(on_mac && echo 50)
 check "decode alpha_vp9.webm colour" python3 comparex.py decode $FX/alpha_vp9.webm
 check "decode alpha_vp8.webm colour" python3 comparex.py decode $FX/alpha_vp8.webm
 check "fields of unknown_codec.mkv" python3 probe_check.py compare $FX/unknown_codec.mkv stream0.pix_fmt stream0.color_range stream0.bit_rate

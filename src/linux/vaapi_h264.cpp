@@ -1151,6 +1151,14 @@ std::unique_ptr<SoftDecoder> openVaapiH264(const std::vector<uint8_t>& config, s
     for (const Sps& s : decoder->sps) if (s.valid && !first) first = &s;
     if (!first) return fail("the H.264 configuration has no readable SPS");
     if (first->chroma != 1 || first->depth != 8 || first->depthChroma != 8) return fail("only 8-bit 4:2:0 H.264 is decoded on the GPU");
+    if (vaapi() && vaapi()->d3d12) {
+        for (const auto& raw : decoder->ppsRaw) {
+            Pps p;
+            if (raw.empty() || !parsePps(raw, decoder->sps, p)) continue;
+            const uint8_t* m = &p.matrix.four[0][0];
+            if (std::any_of(m, m + sizeof(p.matrix), [](uint8_t v) { return v != 16; })) return fail("the d3d12 driver ignores H.264 scaling matrices");
+        }
+    }
     const VideoInfo info = videoInfo(fourcc("avcC"), config);
     if (info.colorKnown || info.rangeKnown) {
         decoder->color.known = info.colorKnown;

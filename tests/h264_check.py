@@ -1,3 +1,4 @@
+import hashlib
 import os
 import random
 import struct
@@ -120,19 +121,44 @@ def damaged(source, count, seed, folder):
     return ok
 
 
-def conformance(folder, work):
-    names = sorted(n for n in os.listdir(folder) if os.path.splitext(n)[1].lower() in (".264", ".h264", ".jsv", ".jvt", ".26l", ".avc", ".bit", ".bits"))
-    passed = failed = 0
-    for name in names:
-        wrapped = os.path.join(work, "conformance.mkv")
-        subprocess.run([FFMPEG, "-nostdin", "-v", "quiet", "-y", "-i", os.path.join(folder, name), "-map", "0:v:0", "-c", "copy", wrapped])
-        if exact(wrapped):
+def md5s(data, size):
+    return [hashlib.md5(data[i:i + size]).hexdigest() for i in range(0, len(data) // size * size, size)]
+
+
+def fate(folder, work, group):
+    rows = [line.strip().split("|") for line in open(os.path.join(HERE, "h264_fate.txt")) if line.strip()]
+    passed, failed = 0, []
+    for _, name, test in [r for r in rows if r[0] == group]:
+        source = os.path.join(folder, *name.split("/"))
+        if not os.path.isfile(source):
+            failed.append(test)
+            print(f"{test}: {name} is missing")
+            continue
+        wrapped = os.path.join(work, "h264_fate.mkv")
+        subprocess.run([FFMPEG, "-nostdin", "-v", "quiet", "-y", "-i", source, "-map", "0:v:0", "-c", "copy", "-bsf:v", "setts=pts=N/(25*TB):dts=N/(25*TB)", wrapped])
+        good, results = True, []
+        for extra in (["--threads", "1"], [], ["--threads", "4", "--slice"]):
+            code, data, shape = ours(wrapped, extra)
+            if not shape:
+                good = False
+                results.append(f"{' '.join(extra) or 'frame threads'}: no picture (exit {code})")
+                break
+            judge = subprocess.run([FFMPEG, "-nostdin", "-v", "quiet", "-threads", "1", "-i", source, "-map", "0:v:0", "-fps_mode", "passthrough",
+                                    "-pix_fmt", shape[0], "-f", "framemd5", "-"], capture_output=True).stdout.decode().splitlines()
+            theirs_md5 = [line.split(",")[-1].strip() for line in judge if line and not line.startswith("#")]
+            mine = md5s(data, frame_size(shape))
+            bad = [i for i in range(min(len(mine), len(theirs_md5))) if mine[i] != theirs_md5[i]]
+            ok = code == 0 and len(mine) == len(theirs_md5) and mine and not bad
+            good &= bool(ok)
+            results.append(f"{' '.join(extra) or 'frame threads'} {len(mine)}/{len(theirs_md5)}" + ("" if ok else f" differing {bad[:6]}"))
+        print(f"{test} [{shape[0] if shape else '?'}]: {'pass' if good else 'FAIL'}; " + "; ".join(results))
+        if good:
             passed += 1
         else:
-            failed += 1
-            print(f"conformance {name}: FAIL")
-    print(f"conformance: {passed} pass, {failed} fail of {len(names)}")
-    return failed == 0 and passed > 0
+            failed.append(test)
+        os.remove(wrapped)
+    print(f"FATE h264 conformance, {group}: {passed} pass, {len(failed)} fail" + (f" ({' '.join(failed)})" if failed else ""))
+    return passed > 0 and not failed
 
 
 def film_grain_sei(period):
@@ -204,8 +230,8 @@ if __name__ == "__main__":
         good = damaged(rest[0], int(rest[1]), int(rest[2]), rest[3])
     elif kind == "grain":
         good = grain(rest[0])
-    elif kind == "conformance":
-        good = conformance(rest[0], rest[1])
+    elif kind == "fate":
+        good = fate(rest[0], rest[1], rest[2])
     else:
         good = False
     sys.exit(0 if good else 1)

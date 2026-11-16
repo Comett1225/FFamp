@@ -14,6 +14,11 @@ if [ -x ../build/fuzz_h264 ]; then
 else
     skip "h264 fuzz target (the fuzz targets are not built on this system)"
 fi
+h4_default() { [ "$(env ${2:+FFAMP_SYSTEM_H264=1} $A videoinfo "$1" | sed -n 's/.*backend \([^ ]*\).*/\1/p')" = "$3" ]; }
+if [ "$SYSTEM" = Windows ]; then
+    check "H.264 decodes with FFamp's own decoder first on Windows" h4_default $HV/h264_270p.mp4 "" h264
+    check "FFAMP_SYSTEM_H264 puts Media Foundation first again" h4_default $HV/h264_270p.mp4 1 mediafoundation-gpu
+fi
 if ! on_mac; then
     check "H.264 fixtures decode with FFamp's own decoder when the system decoder is not used" h4_backend $HV/h264_270p.mp4
     for f in $HV/h264_270p.mp4 $HV/h264_mbaff_272p.mp4 $HV/h264_paff_64p.mp4 fixtures/formats/avi_h264_mp3.avi; do
@@ -93,9 +98,20 @@ for f in slices mbaff base; do
     check "damaged copies of h4_damage_$f.mp4 against ffmpeg" python3 h264_check.py damaged $O/h4_damage_$f.mp4 $H4_FUZZ 3 $O
 done
 
-if [ -n "${H264_CONFORMANCE:-}" ] && [ -d "$H264_CONFORMANCE" ]; then
-    check "H.264 conformance bitstreams in $H264_CONFORMANCE: every frame bit-exact against ffmpeg" python3 h264_check.py conformance "$H264_CONFORMANCE" $O
+H4_FATE="${H264_CONFORMANCE:-${FATE_SAMPLES:+$FATE_SAMPLES/h264-conformance}}"
+if [ -n "$H4_FATE" ] && [ -d "$H4_FATE" ]; then
+    while read group what; do
+        check "FATE h264 conformance, $what: every frame's framemd5 equals ffmpeg's (one thread, frame threads, slice threads)" python3 h264_check.py fate "$H4_FATE" $O $group
+    done <<TABLE
+baseline Baseline and Extended profile
+cavlc Main profile CAVLC, progressive
+cabac Main profile CABAC, progressive
+field interlaced (field pictures, PAFF, MBAFF)
+mref multiple reference frames and MMCO
+frext8 FRExt High profile, 8 bits
+frext10 FRExt High 10 and High 4:2:2
+TABLE
 else
-    skip "H.264 conformance bitstreams (set H264_CONFORMANCE to a folder of them)"
+    skip "FATE h264 conformance bitstreams (set H264_CONFORMANCE to FFmpeg's fate-suite/h264-conformance folder, or FATE_SAMPLES to the fate-suite)"
 fi
 rm -f $O/h4_*

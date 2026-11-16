@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -529,8 +530,20 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         std::string fallback;
         const VideoInfo info = h264 ? videoInfo(track.configType, config) : VideoInfo();
         const bool systemProfile = !h264 || (info.bitDepth == 8 && info.chroma == 1);
-        if (!software && systemProfile) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft) d.soft = mpeg ? openMpeg2(config, &fallback) : h264 ? openH264(config, &fallback) : openDe265(config, &fallback);
+#ifdef _WIN32
+        const bool ownFirst = h264 && !std::getenv("FFAMP_SYSTEM_H264");
+#else
+        const bool ownFirst = false;
+#endif
+        uint32_t led = 0;
+        auto lead = [&](std::vector<uint8_t>& bytes) {
+            if (led >= track.samples.size()) return false;
+            bytes.resize(track.samples[led].size);
+            return file.read(track, led++, bytes.data());
+        };
+        if (ownFirst) d.soft = openH264(config, &fallback, lead);
+        if (!d.soft && !software && systemProfile) d.soft = openPlatformVideo(track, config, d.shape, &problem);
+        if (!d.soft && !ownFirst) d.soft = mpeg ? openMpeg2(config, &fallback) : h264 ? openH264(config, &fallback, lead) : openDe265(config, &fallback);
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
     }
     if (!d.soft) return nullptr;

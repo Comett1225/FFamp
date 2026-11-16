@@ -56,9 +56,23 @@ struct OwnH264Decoder : SoftDecoder {
     void reset() override { ffamp_h264_flush(decoder); }
 };
 
+struct LeadState {
+    const std::function<bool(std::vector<uint8_t>&)>* lead = nullptr;
+    std::vector<uint8_t> bytes;
+    int left = 250;
+};
+
+int nextLead(void* opaque, const uint8_t** data, int* size) {
+    LeadState& s = *static_cast<LeadState*>(opaque);
+    if (s.left-- <= 0 || !(*s.lead)(s.bytes) || s.bytes.size() > size_t(INT32_MAX)) return 0;
+    *data = s.bytes.data();
+    *size = int(s.bytes.size());
+    return 1;
 }
 
-std::unique_ptr<SoftDecoder> openH264(const std::vector<uint8_t>& config, std::string* error) {
+}
+
+std::unique_ptr<SoftDecoder> openH264(const std::vector<uint8_t>& config, std::string* error, const std::function<bool(std::vector<uint8_t>&)>& lead) {
     if (config.size() > size_t(INT32_MAX)) {
         if (error) *error = "the H.264 configuration is too large";
         return nullptr;
@@ -71,6 +85,10 @@ std::unique_ptr<SoftDecoder> openH264(const std::vector<uint8_t>& config, std::s
     if (!decoder->decoder) {
         if (error) *error = "the H.264 decoder did not start";
         return nullptr;
+    }
+    if (lead) {
+        LeadState state{&lead};
+        ffamp_h264_guess_delay(decoder->decoder, nextLead, &state);
     }
     return decoder;
 }

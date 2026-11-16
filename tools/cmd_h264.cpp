@@ -36,6 +36,20 @@ void writeFrame(void* opaque, const FFampH264Frame* f) {
     }
 }
 
+struct Lead {
+    const std::vector<std::vector<uint8_t>>* packets = nullptr;
+    size_t at = 0;
+};
+
+int nextPacket(void* opaque, const uint8_t** data, int* size) {
+    Lead& lead = *static_cast<Lead*>(opaque);
+    if (lead.at >= lead.packets->size() || lead.at >= 250) return 0;
+    const std::vector<uint8_t>& packet = (*lead.packets)[lead.at++];
+    *data = packet.data();
+    *size = int(packet.size());
+    return 1;
+}
+
 int h264(const Args& args) {
     if (args.plain.empty()) return fail("h264 needs a file [--threads n] [--slice] [--null] [--repeat n]");
     std::string error;
@@ -57,6 +71,8 @@ int h264(const Args& args) {
     for (long r = 0; r < repeat; ++r) {
         FFampH264* decoder = ffamp_h264_open(track->config.data(), int(track->config.size()), threads, type);
         if (!decoder) return fail("the H.264 decoder did not open");
+        Lead lead{&packets};
+        ffamp_h264_guess_delay(decoder, nextPacket, &lead);
         out.quiet = r > 0;
         if (r > 0) out.frames = 0;
         for (size_t i = 0; i < packets.size(); ++i) {

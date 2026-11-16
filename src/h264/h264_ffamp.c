@@ -835,6 +835,52 @@ int ffamp_h264_drain(FFampH264 *dec, FFampH264Sink sink, void *opaque)
     return last;
 }
 
+static void count_frame(void *opaque, const FFampH264Frame *frame)
+{
+    ++*(int *)opaque;
+}
+
+static int delay_guessed(AVCodecContext *avctx, int decoded)
+{
+    const H264Context *h = avctx->priv_data;
+    if (avctx->has_b_frames && h->ps.sps && h->ps.sps->num_reorder_frames == avctx->has_b_frames)
+        return 1;
+    return decoded >= (avctx->has_b_frames < 3 ? 7 : avctx->has_b_frames < 4 ? 18 : 20);
+}
+
+int ffamp_h264_guess_delay(FFampH264 *dec, FFampH264Packet next, void *opaque)
+{
+    AVCodecContext *avctx = dec->single ? dec->single : dec->workers[0].avctx;
+    const H264Context *h = avctx->priv_data;
+    const uint8_t *data;
+    int size, decoded = 0, restricted = 0, delay;
+    FFampH264 *probe;
+    for (int i = 0; i < MAX_SPS_COUNT; i++) {
+        if (!h->ps.sps_list[i])
+            continue;
+        if (!h->ps.sps_list[i]->bitstream_restriction_flag) {
+            restricted = 0;
+            break;
+        }
+        restricted = 1;
+    }
+    if (restricted)
+        return avctx->has_b_frames;
+    probe = ffamp_h264_open(dec->extradata, avctx->extradata_size, 1, FFAMP_H264_FRAME_THREADS);
+    if (!probe)
+        return avctx->has_b_frames;
+    while (!delay_guessed(probe->single, decoded) && next(opaque, &data, &size))
+        if (size > 0)
+            single_decode(probe, data, size, AV_NOPTS_VALUE, count_frame, &decoded);
+    delay = probe->single->has_b_frames;
+    ffamp_h264_close(probe);
+    if (dec->single)
+        dec->single->has_b_frames = delay;
+    for (int i = 0; dec->workers && i < dec->count; i++)
+        dec->workers[i].avctx->has_b_frames = delay;
+    return delay;
+}
+
 void ffamp_h264_flush(FFampH264 *dec)
 {
     if (!dec)

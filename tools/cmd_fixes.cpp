@@ -3,6 +3,7 @@
 #include "../src/nal.h"
 #include "../src/tools_common.h"
 #include "absent/audio.h"
+#include "absent/encoders.h"
 #include "cli.h"
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
@@ -265,6 +266,30 @@ bool channelOrder() {
         right = std::max(right, std::fabs(mixed[2 * i + 1]));
     }
     return std::fabs(left - 0.9864f) < 0.01f && std::fabs(right - 1.1571f) < 0.01f;
+}
+
+bool encoderNames() {
+#if defined(__APPLE__)
+    const std::vector<std::string> wanted = {"h264_videotoolbox", "hevc_videotoolbox", "aac_at"};
+#elif defined(_WIN32)
+    const std::vector<std::string> wanted = {"h264_mf", "hevc_mf", "aac_mf", "aac"};
+#else
+    const std::vector<std::string> wanted = {"libx264", "libx265", "aac"};
+#endif
+    const std::vector<EncoderInfo> list = encoders();
+    for (const std::string& name : wanted)
+        if (std::none_of(list.begin(), list.end(), [&](const EncoderInfo& e) { return e.name == name; })) return false;
+    for (const EncoderInfo& e : list) {
+        if (e.kind != Kind::Video) continue;
+        EncodeSpec spec;
+        spec.width = 320;
+        spec.height = 240;
+        spec.timescale = 30;
+        spec.codec = e.codec;
+        spec.hevc = e.codec == fourcc("hvc1");
+        if (!encoderWorks(spec)) return false;
+    }
+    return true;
 }
 
 bool emptyFile(const std::string& name, AudioFormat format) {
@@ -999,7 +1024,7 @@ bool wmaBlockAlign() {
 
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre},
-    {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
+    {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"encoder-names", encoderNames}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
     {"aac-rate", aacRate}, {"rf64-size", rf64Size}, {"aifc-flip", aifcFlip}, {"trun-offset", trunOffset}, {"decode-time-limit", decodeTimeLimit},
     {"flac-rate", flacRate}, {"lace-bounds", laceBounds}, {"vorbis-modes", vorbisModes}, {"sps-limits", spsLimits}, {"tag-flags", tagFlags},
     {"pcm-checked", pcmChecked}, {"after-finish", afterFinish}, {"pcm-trim", pcmTrim}, {"long-file", longFile}, {"stream-flags", streamFlags},

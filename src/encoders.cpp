@@ -9,6 +9,20 @@ std::vector<EncoderInfo> encoders() {
     list.push_back({"h264_videotoolbox", fourcc("avc1"), Kind::Video, true});
     list.push_back({"hevc_videotoolbox", fourcc("hvc1"), Kind::Video, true});
     list.push_back({"aac_at", fourcc("mp4a"), Kind::Audio, false});
+#elif defined(_WIN32)
+    list.push_back({"h264_mf", fourcc("avc1"), Kind::Video, true});
+    list.push_back({"hevc_mf", fourcc("hvc1"), Kind::Video, true});
+    list.push_back({"aac_mf", fourcc("mp4a"), Kind::Audio, false});
+#elif !defined(__ANDROID__)
+#ifdef ABSENT_X264
+    list.push_back({"libx264", fourcc("avc1"), Kind::Video, false});
+#endif
+#ifdef ABSENT_X265
+    list.push_back({"libx265", fourcc("hvc1"), Kind::Video, false});
+#endif
+#endif
+#if !defined(__APPLE__) && !defined(__ANDROID__) && defined(ABSENT_VOAAC)
+    list.push_back({"aac", fourcc("mp4a"), Kind::Audio, false});
 #endif
 #ifdef ABSENT_SVTAV1
     list.push_back({"libsvtav1", fourcc("av01"), Kind::Video, false});

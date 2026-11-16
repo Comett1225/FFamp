@@ -1,5 +1,6 @@
 #include "image.h"
 #include "../readers.h"
+#include "../nal.h"
 #include "absent/media.h"
 #include <algorithm>
 #include <atomic>
@@ -485,7 +486,9 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         if (!d.soft && error) *error = problem.empty() ? "MPEG-1 and MPEG-2 video are not decoded on this system yet" : problem;
     } else {
         std::string fallback;
-        if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
+        const VideoInfo info = h264 ? videoInfo(track.configType, config) : VideoInfo();
+        const bool systemProfile = !h264 || (info.bitDepth == 8 && info.chroma == 1);
+        if (!software && systemProfile) d.soft = openPlatformVideo(track, config, d.shape, &problem);
         if (!d.soft) d.soft = h264 ? openH264(config, &fallback) : openDe265(config, &fallback);
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
     }

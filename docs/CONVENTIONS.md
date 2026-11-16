@@ -415,17 +415,31 @@ list; `Sample.offset` is then free for the reader's use.
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
   out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
   `openStillDecoder` (WIC on Windows; Linux has no JPEG decoder yet). Linux returns nothing from the hooks yet.
-- Software paths: OpenH264, libde265, FAAD2, mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder places its
+- Software paths: FFamp's own H.264 decoder (below), libde265, FAAD2, mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder places its
   sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore, libopus,
   libvorbis, LAME. `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
 - Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media
-  Foundation after a flush, OpenH264) need no drain inside a stream. `SoftDecoder::drainKeepsState` is false for decoders whose drain
-  ends the stream (OpenH264, Media Foundation): after such a drain the next jump starts again at a key frame.
-  `SoftDecoder::weavesFields` is true for Media Foundation, which returns one frame for an H.264 field pair.
+  Foundation after a flush, the H.264 decoder's frame threads) need no drain inside a stream. `SoftDecoder::drainKeepsState` is false for
+  decoders whose drain ends the stream (the H.264 decoder, Media Foundation): after such a drain the next jump starts again at a key frame.
+  `SoftDecoder::weavesFields` is true for Media Foundation and the H.264 decoder, which return one frame for an H.264 field pair. When a
+  picture never arrives after a jump (a recovery point that is not an IDR, such as x264's intra refresh, whose pictures the H.264 decoder
+  holds back until the refresh is complete, as FFmpeg does), the decoder starts again up to three key frames earlier before concealing.
+  A `Picture` may carry `keep`, the decoder's own frame: the `Image` then points at the decoder's planes instead of copying them.
 - A frame the stream leaves without colour labels is labelled as VideoToolbox labels it: BT.601 with SMPTE C primaries below 720
   lines, BT.709 from 720 lines. Media Foundation is not used for pictures under 64 pixels wide or high (its decoder returns nothing)
-  nor for encoding frames under 320 x 240 (the GPU encoders undershoot the bitrate and smear such frames); x264 and OpenH264 take them.
+  nor for encoding frames under 320 x 240 (the GPU encoders undershoot the bitrate and smear such frames); x264 and the H.264 decoder take them.
+  H.264 with more than 8 bits or other than 4:2:0 goes straight to the H.264 decoder (Media Foundation does not decode it).
+- H.264 (`src/h264`): FFmpeg 9.0.2's H.264 decoder ported in plain C (the library's only C, kept close to FFmpeg's files so its assembly
+  and later fixes carry over) over a small libavutil layer (`ffbase.h`, `ffbase.c`), with FFmpeg's frame threads and slice threads
+  (`h264_ffamp.c`, API in `h264_ffamp.h`), FFmpeg's x86-64 assembly (NASM, `x86/`, built when CMake finds NASM; `ABSENT_H264_ASM=OFF` turns
+  it off) and AArch64 NEON (`aarch64/`). `h264_soft.cpp` is the `SoftDecoder` (backend `h264`). Every profile FFmpeg decodes (Baseline to
+  High 4:4:4 with lossless, 8 to 14 bits, PAFF and MBAFF, monochrome, RGB as G, B and R planes labelled matrix 0), FFmpeg's error
+  concealment, exact cropping as the ffmpeg command line applies it. Pictures that are not recovered (before the first IDR or
+  recovery point) are held back, as in FFmpeg. Test switches: `FFAMP_H264_THREADS` (0 is FFmpeg's choice, the CPU count plus one up
+  to 16), `FFAMP_H264_SLICES` (slice threads instead of frame threads), `FFAMP_H264_CPU` (a mask on the CPU features; 0 runs the plain
+  C), `FFAMP_H264_FILL` (fills new frame buffers with a byte, to find output that depends on unwritten memory). `ffamp h264 <file>`
+  decodes a file's H.264 track with it on every system, the Mac included, and writes the raw planes.
 - FLAC (written from RFC 9639) and ALAC (based on FFmpeg's) are FFamp's own decoders on Windows and Linux, bit-exact with ffmpeg.
 - Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
   vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built

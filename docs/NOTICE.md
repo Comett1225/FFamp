@@ -147,3 +147,20 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `src/h264/x86/x86inc.asm`: `libavutil/x86/x86inc.asm`; Copyright (C) 2005-2024 x264 project (authors: Loren Merritt, Henrik Gramner, Anton Mitrofanov, Fiona Glaser); ISC: permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies; THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - `src/h264/x86/x86util.asm`: `libavutil/x86/x86util.asm`; Copyright (C) 2008-2010 x264 project (authors: Loren Merritt, Holger Lubitz); LGPL-2.1-or-later.
 - `src/h264/x86/config.asm`: the settings FFmpeg's configure writes to `config.asm` for x86-64; the FFmpeg project; LGPL-2.1-or-later.
+- `src/h264/aarch64/asm.S`: `libavutil/aarch64/asm.S`; Copyright (c) 2008 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/cabac.h`: `libavcodec/aarch64/cabac.h`; the FFmpeg project (`cabac.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/cpu.h`: `libavutil/aarch64/cpu.h`; the FFmpeg project (`cpu.h` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/h264chroma_init_aarch64.c`: `libavcodec/aarch64/h264chroma_init_aarch64.c`; Copyright (c) 2008 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264cmc_neon.S`: `libavcodec/aarch64/h264cmc_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264dsp_init_aarch64.c`: `libavcodec/aarch64/h264dsp_init_aarch64.c`; Copyright (c) 2010 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264dsp_neon.S`: `libavcodec/aarch64/h264dsp_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau, Copyright (c) 2014 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264idct_neon.S`: `libavcodec/aarch64/h264idct_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264pred_init.c`: `libavcodec/aarch64/h264pred_init.c`; Copyright (c) 2009 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264pred_neon.S`: `libavcodec/aarch64/h264pred_neon.S`; Copyright (c) 2009 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264qpel_init_aarch64.c`: `libavcodec/aarch64/h264qpel_init_aarch64.c`; Copyright (c) 2008 Mans Rullgard; LGPL-2.1-or-later.
+- `src/h264/aarch64/h264qpel_neon.S`: `libavcodec/aarch64/h264qpel_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/hpeldsp_neon.S`: `libavcodec/aarch64/hpeldsp_neon.S`; Copyright (c) 2008 Mans Rullgard, Copyright (c) 2013 Janne Grunau; LGPL-2.1-or-later.
+- `src/h264/aarch64/neon.S`: `libavcodec/aarch64/neon.S`; Copyright (c) 2023 J. Dekker; LGPL-2.1-or-later.
+- `src/h264/aarch64/videodsp.S`: `libavcodec/aarch64/videodsp.S`; the FFmpeg project (`videodsp.S` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/videodsp_init.c`: `libavcodec/aarch64/videodsp_init.c`; the FFmpeg project (`videodsp_init.c` names no holder); LGPL-2.1-or-later.
+- `src/h264/aarch64/config.h`: the settings FFmpeg's configure writes to `config.h` for the AArch64 assembler; the FFmpeg project; LGPL-2.1-or-later.

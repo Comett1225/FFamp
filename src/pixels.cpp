@@ -196,8 +196,12 @@ void pictureToI420(const Picture& p, std::vector<uint8_t>& out) {
             const uint8_t* a = source + size_t(std::min(y * stepY, p.chromaHeight - 1)) * size_t(p.chromaWidth);
             const uint8_t* b = source + size_t(std::min(y * stepY + stepY - 1, p.chromaHeight - 1)) * size_t(p.chromaWidth);
             for (int x = 0; x < cw; ++x) {
-                const int x0 = p.chromaWidth < cw ? x * p.chromaWidth / cw : std::min(x * stepX, p.chromaWidth - 1);
-                const int x1 = p.chromaWidth < cw ? x0 : std::min(x * stepX + stepX - 1, p.chromaWidth - 1);
+                if (p.chromaWidth < cw) {
+                    const int c = std::min(x / 2, p.chromaWidth - 1), side = x % 2 ? std::min(c + 1, p.chromaWidth - 1) : std::max(c - 1, 0);
+                    to[size_t(y) * size_t(cw) + size_t(x)] = uint8_t((3 * (a[c] + b[c]) + a[side] + b[side] + 4) >> 3);
+                    continue;
+                }
+                const int x0 = std::min(x * stepX, p.chromaWidth - 1), x1 = std::min(x * stepX + stepX - 1, p.chromaWidth - 1);
                 to[size_t(y) * size_t(cw) + size_t(x)] = uint8_t((a[x0] + a[x1] + b[x0] + b[x1] + 2) >> 2);
             }
         }

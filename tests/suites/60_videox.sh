@@ -57,7 +57,7 @@ for f in hevc10_270p.mp4 hdr_pq_270p.mp4 hdr_hlg_270p.mp4 h264_mbaff_272p.mp4 h2
     check "decode $f" python3 comparex.py decode $VX/$f
 done
 for f in vp9_270p.mp4 vp9_10bit_270p.mp4 av1_270p.mp4 av1_10bit_270p.mp4; do check "software decode $f" python3 comparex.py decode $VX/$f --software; done
-check "ProRes within 60 dB of ffmpeg" python3 comparex.py decode $VX/prores_180p.mov 60
+check "ProRes against ffmpeg (VideoToolbox within 60 dB, the own decoder bit-exact)" python3 comparex.py decode $VX/prores_180p.mov $(on_mac && echo 60)
 check "HDR PQ preview against the app's formula on ffmpeg pixels" python3 comparex.py hdr $VX/hdr_pq_270p.mp4 0.5 0.98
 check "HDR HLG preview against the app's formula on ffmpeg pixels" python3 comparex.py hdr $VX/hdr_hlg_270p.mp4 0.5 0.98
 check "SDR preview against the app's scaler settings" python3 comparex.py sdr $VX/h264_270p.mp4 0.1 0.999
@@ -81,7 +81,63 @@ for f in vx_vp9_720.mp4 vx_av1_720.mp4 vx_av1_10bit_720.mp4; do
     check "software seek $f" python3 comparex.py seek $O/$f 40 7 --software
 done
 check "interlaced colour bars stay above 25 dB (known limit of the system's software H.264 decoder)" python3 comparex.py decode $O/vx_mbaff_bars_720.mp4 25
-check "ProRes 422 at 720p within 60 dB of ffmpeg" python3 comparex.py decode $O/vx_prores_720.mov 60
+check "ProRes 422 at 720p against ffmpeg (VideoToolbox within 60 dB, the own decoder bit-exact)" python3 comparex.py decode $O/vx_prores_720.mov $(on_mac && echo 60)
+
+echo "== videox: own ProRes and DV decoders, every profile against ffmpeg"
+if on_mac; then
+    skip "own ProRes and DV decoders against ffmpeg (VideoToolbox decodes them on the Mac)"
+else
+    PD="testsrc2=size=480x270:rate=24,noise=alls=12:allf=t"
+    PA="$PD,format=yuva444p10le,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='X*1023/W'"
+    vx_make() { [ -f $O/$1 ] || $F -f lavfi -i "$2" "${@:3}" $O/$1; }
+    vx_own() { $A videoinfo $O/$1 | grep -q "backend $2 "; }
+    vx_make pd_proxy.mov $PD -frames:v 6 -c:v prores_ks -profile:v 0 -pix_fmt yuv422p10le
+    vx_make pd_lt.mov $PD -frames:v 6 -c:v prores_ks -profile:v 1 -pix_fmt yuv422p10le
+    vx_make pd_standard.mov $PD -frames:v 6 -c:v prores_ks -profile:v 2 -pix_fmt yuv422p10le
+    vx_make pd_hq.mov $PD -frames:v 6 -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le
+    vx_make pd_4444.mov $PD -frames:v 6 -c:v prores_ks -profile:v 4 -pix_fmt yuv444p10le
+    vx_make pd_xq.mov $PD -frames:v 6 -c:v prores_ks -profile:v 5 -pix_fmt yuv444p10le
+    vx_make pd_alpha.mov "$PA" -frames:v 4 -c:v prores_ks -profile:v 4 -pix_fmt yuva444p10le
+    vx_make pd_alpha8.mov "$PA" -frames:v 4 -c:v prores_ks -profile:v 4 -alpha_bits 8 -pix_fmt yuva444p10le
+    vx_make pd_odd.mov "testsrc2=size=202x118:rate=24,noise=alls=12:allf=t" -frames:v 5 -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le
+    vx_make pd_tff.mov "$PD,setfield=tff" -frames:v 5 -flags +ildct -c:v prores_ks -profile:v 2 -pix_fmt yuv422p10le
+    vx_make pd_bff.mov "$PD,setfield=bff" -frames:v 5 -flags +ildct -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le
+    vx_make pd_odd_tff.mov "testsrc2=size=210x99:rate=24,setfield=tff" -frames:v 5 -flags +ildct -c:v prores_ks -profile:v 4 -pix_fmt yuv444p10le
+    vx_make pd_aw.mov $PD -frames:v 5 -c:v prores_aw -profile:v 3 -pix_fmt yuv422p10le
+    DN=",noise=alls=12:allf=t"
+    vx_make pd_dv_pal.mov "testsrc2=size=720x576:rate=25$DN" -frames:v 5 -c:v dvvideo -pix_fmt yuv420p
+    vx_make pd_dv_ntsc.mov "testsrc2=size=720x480:rate=30000/1001$DN" -frames:v 5 -c:v dvvideo -pix_fmt yuv411p
+    vx_make pd_dv_pal_bff.avi "testsrc2=size=720x576:rate=25$DN,setfield=bff" -frames:v 5 -flags +ildct -c:v dvvideo -pix_fmt yuv420p
+    vx_make pd_dv_ntsc_bff.avi "testsrc2=size=720x480:rate=30000/1001$DN,setfield=bff" -frames:v 5 -flags +ildct -c:v dvvideo -pix_fmt yuv411p
+    vx_make pd_dv50_pal.mov "testsrc2=size=720x576:rate=25$DN" -frames:v 5 -c:v dvvideo -pix_fmt yuv422p
+    vx_make pd_dv50_ntsc.avi "testsrc2=size=720x480:rate=30000/1001$DN" -frames:v 5 -c:v dvvideo -pix_fmt yuv422p
+    vx_make pd_dvhd_1080i60.mov "testsrc2=size=1280x1080:rate=30000/1001$DN" -frames:v 3 -c:v dvvideo -pix_fmt yuv422p
+    vx_make pd_dvhd_1080i50.mov "testsrc2=size=1440x1080:rate=25$DN" -frames:v 3 -c:v dvvideo -pix_fmt yuv422p
+    vx_make pd_dvhd_1080i50.avi "testsrc2=size=1440x1080:rate=25$DN,setfield=tff" -frames:v 3 -flags +ildct -c:v dvvideo -pix_fmt yuv422p
+    vx_make pd_dvhd_720p60.mov "testsrc2=size=960x720:rate=60000/1001$DN" -frames:v 3 -c:v dvvideo -pix_fmt yuv422p
+    vx_make pd_dvhd_720p50.mov "testsrc2=size=960x720:rate=50$DN" -frames:v 3 -c:v dvvideo -pix_fmt yuv422p
+    for f in pd_proxy.mov pd_lt.mov pd_standard.mov pd_hq.mov pd_4444.mov pd_xq.mov pd_alpha.mov pd_alpha8.mov pd_odd.mov pd_tff.mov pd_bff.mov pd_odd_tff.mov pd_aw.mov \
+        pd_dv_pal.mov pd_dv_ntsc.mov pd_dv_pal_bff.avi pd_dv_ntsc_bff.avi pd_dv50_pal.mov pd_dv50_ntsc.avi pd_dvhd_1080i60.mov pd_dvhd_1080i50.mov pd_dvhd_1080i50.avi \
+        pd_dvhd_720p60.mov pd_dvhd_720p50.mov; do
+        case $f in pd_dv*) backend=dv ;; *) backend=prores ;; esac
+        check "$f opens with the own $backend decoder" vx_own $f $backend
+        check "decode $f bit-exact against ffmpeg" python3 comparex.py decode $O/$f
+        check "random frames of $f equal the straight decode" python3 comparex.py selfseek $O/$f 8 3
+        check "damaged copies of $f never crash" python3 comparex.py fuzz $O/$f 8 5
+    done
+    for f in pd_alpha.mov pd_alpha8.mov; do check "alpha of $f equal to ffmpeg's, at full and at half size" python3 formats_check.py veil $O/$f 480 270 -an; done
+    check "4:1:1 DV as BGRA against ffmpeg's converter" python3 comparex.py sdr $O/pd_dv_ntsc.mov 0.1 0.99
+    $A decode $O/pd_dv_ntsc.mov --bgra > $O/pd_ref.bgra
+    $A frames-out $O/pd_dv_ntsc.mov --format bgra > $O/pd_a.raw
+    check "the frame reader gives 4:1:1 DV as our decoder's BGRA" cmp -s $O/pd_ref.bgra $O/pd_a.raw
+    $F -i $O/pd_dv_ntsc.mov -frames:v 1 -pix_fmt yuv420p -f rawvideo $O/pd_ref.i420
+    $A frames-out $O/pd_dv_ntsc.mov --format i420 --count 1 > $O/pd_a.raw
+    check "the frame reader gives 4:1:1 DV as I420 close to ffmpeg's" python3 capturecheck.py psnr $O/pd_ref.i420 $O/pd_a.raw 40
+    $F -i $O/pd_dv_ntsc.mov -frames:v 1 -vf scale=360:240:flags=bicubic -pix_fmt rgba -f rawvideo $O/pd_ref.rgba
+    $A frames-out $O/pd_dv_ntsc.mov --size 360x240 --format rgba --count 1 > $O/pd_a.raw
+    check "a 4:1:1 DV thumbnail at half size is close to ffmpeg's" python3 capturecheck.py psnr $O/pd_ref.rgba $O/pd_a.raw 30
+    rm -f $O/pd_ref.* $O/pd_a.raw
+fi
 
 echo "== videox: AV1 and VP9 at 1080p against ffmpeg's libsvtav1 and libvpx-vp9, same bitrate and speed setting"
 VXN=60

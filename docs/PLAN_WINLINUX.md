@@ -56,10 +56,10 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | APV | liboapv | liboapv | liboapv | BSD-3-Clause (already in FFamp) |
 | VC-1, WMV7/8, MS-MPEG4 | own | own | own | own |
 | MPEG-4 part 2 (DivX, Xvid) | xvidcore | xvidcore | xvidcore | GPL-2.0-or-later (already in FFamp) |
-| ProRes | VideoToolbox | own decoder based on FFmpeg's (planned) | same | own, LGPL-derived (NOTICE) |
+| ProRes | VideoToolbox | own decoder based on FFmpeg's (round 2) | same | own, LGPL-derived (NOTICE) |
 | MPEG-1, MPEG-2 | VideoToolbox | Media Foundation MPEG-2 decoder; libmpeg2 when missing | libmpeg2 | GPL-2.0-or-later |
 | Motion JPEG, JPEG stills | VideoToolbox / ImageIO | WIC | libjpeg-turbo | IJG + BSD-3-Clause |
-| DV | VideoToolbox | own decoder based on FFmpeg's (planned) | same | own, LGPL-derived |
+| DV | VideoToolbox | own decoder based on FFmpeg's (round 2) | same | own, LGPL-derived |
 | H.263 | VideoToolbox | own (the H.263 core FFamp has for WMV and MS-MPEG4, planned) | same | own |
 | Lossless video and the rest of the gaps rounds | own | own | own | own |
 | AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FAAD2 when missing | FAAD2 | GPL-2.0-or-later |

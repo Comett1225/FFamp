@@ -282,15 +282,12 @@ private:
     }
 
     void shapePlanes() {
-        const size_t lumaWidth = size_t(mbWidth) * 16, chromaWidth = full444 ? lumaWidth : lumaWidth / 2;
-        const int wanted = int(mbHeight) * 16 * (frameType ? 2 : 1);
-        if (stride[0] == lumaWidth && stride[1] == chromaWidth && rows == wanted && (!alphaInfo || !planes[3].empty())) return;
-        stride[0] = stride[3] = lumaWidth;
-        stride[1] = stride[2] = chromaWidth;
-        rows = wanted;
+        stride[0] = stride[3] = size_t(mbWidth) * 16;
+        stride[1] = stride[2] = full444 ? stride[0] : stride[0] / 2;
+        rows = int(mbHeight) * 16 * (frameType ? 2 : 1);
         for (int i = 0; i < 4; i++) {
-            if (i == 3 && !alphaInfo) continue;
-            planes[i].assign(stride[i] * size_t(rows), 0);
+            const size_t wanted = stride[i] * size_t(rows);
+            if ((i < 3 || alphaInfo) && planes[i].size() != wanted) planes[i].assign(wanted, 0);
         }
     }
 

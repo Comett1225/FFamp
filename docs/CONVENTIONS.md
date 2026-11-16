@@ -427,6 +427,10 @@ list; `Sample.offset` is then free for the reader's use.
   lines, BT.709 from 720 lines. Media Foundation is not used for pictures under 64 pixels wide or high (its decoder returns nothing)
   nor for encoding frames under 320 x 240 (the GPU encoders undershoot the bitrate and smear such frames); x264 and OpenH264 take them.
 - FLAC (written from RFC 9639) and ALAC (based on FFmpeg's) are FFamp's own decoders on Windows and Linux, bit-exact with ffmpeg.
+- ProRes and DV (based on FFmpeg's) are FFamp's own video decoders on Windows and Linux (backends `prores` and `dv`), bit-exact with
+  ffmpeg: ProRes 422 as 10-bit, 4444 and XQ as 12-bit with the alpha plane handed out at 8 bits as swscale rounds it ((a + 8) >> 4);
+  DV in the size and chroma layout of the profile its frames name (4:1:1, 4:2:0, 4:2:2; DVCPRO HD 1080 is 1280 or 1440 wide, as in
+  FFmpeg). 4:1:1 pictures convert to BGRA with the chroma sample centred on its four pixels, as swscale does.
 - Libraries: `third_party/build_linux.sh` (gcc, static, PIC, assembly with nasm) and `third_party/build_windows.sh` (Git Bash in a
   vcvars64 shell; the libraries build with MSVC, xvidcore with clang-cl, libvpx with clang in its generic C configuration, GNU make built
   from source for x264 and libvpx; no assembly yet). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so

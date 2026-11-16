@@ -269,7 +269,7 @@ struct Tile {
 };
 
 struct Av1Decoder : SoftDecoder {
-    VaSession session;
+    VaSession session{&wanted};
     Sequence seq;
     Slot slots[8];
     Slot cur;

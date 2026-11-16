@@ -48,6 +48,7 @@ public:
     virtual void reset() = 0;
     virtual bool drainKeepsState() const { return true; }
     virtual bool weavesFields() const { return false; }
+    std::function<bool(int64_t)> wanted;
 };
 
 class SoftEncoder {

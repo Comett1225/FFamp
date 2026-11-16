@@ -272,7 +272,7 @@ struct Ref {
 };
 
 struct H264Decoder : SoftDecoder {
-    VaSession session;
+    VaSession session{&wanted};
     int lengthSize = 4;
     Color color;
     Sps sps[32];

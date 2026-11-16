@@ -36,6 +36,7 @@ inline bool d3d12WrongTenBit(bool deep, int height) { return deep && vaapi() && 
 
 class VaSession {
 public:
+    explicit VaSession(const std::function<bool(int64_t)>* wanted = nullptr) : wanted(wanted) {}
     ~VaSession() { close(); }
     bool open(VAProfile profile, int width, int height, bool deep, int count);
     void close();
@@ -51,6 +52,7 @@ public:
 
 private:
     void drop();
+    const std::function<bool(int64_t)>* wanted = nullptr;
     const Va* va = nullptr;
     VAConfigID config = VA_INVALID_ID;
     VAContextID context = VA_INVALID_ID;

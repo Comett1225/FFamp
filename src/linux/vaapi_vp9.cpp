@@ -82,7 +82,7 @@ struct Feature {
 };
 
 struct Vp9Decoder : SoftDecoder {
-    VaSession session;
+    VaSession session{&wanted};
     VASurfaceID refs[8];
     int refWidth[8] = {};
     int refHeight[8] = {};

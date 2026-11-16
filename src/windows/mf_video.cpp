@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <mutex>
 
 namespace absent {
 
@@ -25,7 +27,7 @@ struct Gpu {
     ComPtr<ID3D11Device> device;
     ComPtr<IMFDXGIDeviceManager> manager;
 
-    bool open() {
+    bool create() {
         const MediaFoundation* mf = mediaFoundation();
         if (!mf || !mf->deviceManager) return false;
         static const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
@@ -35,7 +37,48 @@ struct Gpu {
         UINT token = 0;
         return SUCCEEDED(mf->deviceManager(&token, &manager)) && SUCCEEDED(manager->ResetDevice(device.Get(), token));
     }
+
+    bool open() {
+        static std::mutex lock;
+        static Gpu& shared = *new Gpu;
+        std::lock_guard<std::mutex> hold(lock);
+        if (shared.device && shared.device->GetDeviceRemovedReason() != S_OK) shared = Gpu();
+        if (!shared.device && !shared.create()) {
+            shared = Gpu();
+            return false;
+        }
+        *this = shared;
+        return true;
+    }
 };
+
+DWORD_PTR WINAPI keepAffinity(HANDLE, DWORD_PTR) {
+    DWORD_PTR process = 0, system = 0;
+    GetProcessAffinityMask(GetCurrentProcess(), &process, &system);
+    return process ? process : 1;
+}
+
+void skipAffinityCalls(const wchar_t* dll) {
+    static std::mutex lock;
+    std::lock_guard<std::mutex> hold(lock);
+    BYTE* base = reinterpret_cast<BYTE*>(GetModuleHandleW(dll));
+    if (!base) return;
+    const void* targets[] = {reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadAffinityMask")),
+                             reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "SetThreadAffinityMask"))};
+    const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + reinterpret_cast<const IMAGE_DOS_HEADER*>(base)->e_lfanew);
+    const IMAGE_DATA_DIRECTORY imports = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!imports.VirtualAddress) return;
+    for (auto* entry = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + imports.VirtualAddress); entry->Name; ++entry) {
+        for (auto* slot = reinterpret_cast<IMAGE_THUNK_DATA*>(base + entry->FirstThunk); slot->u1.Function; ++slot) {
+            const void* bound = reinterpret_cast<const void*>(slot->u1.Function);
+            if (!bound || (bound != targets[0] && bound != targets[1])) continue;
+            DWORD old = 0;
+            if (!VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function), PAGE_READWRITE, &old)) continue;
+            slot->u1.Function = reinterpret_cast<ULONG_PTR>(&keepAffinity);
+            VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function), old, &old);
+        }
+    }
+}
 
 struct MfVideoDecoder : SoftDecoder {
     ComPtr<IMFTransform> transform;
@@ -56,6 +99,15 @@ struct MfVideoDecoder : SoftDecoder {
     DWORD outputSize = 0;
     Color color;
     const char* failure = "";
+    struct Pending {
+        int slot = -1;
+        LONGLONG time = 0;
+    };
+    ComPtr<ID3D11DeviceContext> context;
+    ComPtr<ID3D11Texture2D> ring[3];
+    D3D11_TEXTURE2D_DESC ringShape{};
+    std::deque<Pending> pending;
+    unsigned copies = 0;
 
     const char* name() const override { return hardware ? "mediafoundation-gpu" : "mediafoundation"; }
     bool drainKeepsState() const override { return false; }
@@ -83,10 +135,15 @@ struct MfVideoDecoder : SoftDecoder {
     }
 
     bool open(const GUID& subtype, bool useGpu) {
+        static const GUID kH264 = {0x62CE7E72, 0x4C71, 0x4D20, {0xB1, 0x5D, 0x45, 0x28, 0x31, 0xA8, 0x7D, 0x9D}};
+        static const GUID kMpeg2 = {0x2D709E52, 0x123F, 0x49B5, {0x9C, 0xBC, 0x9A, 0xF5, 0xCD, 0xE2, 0x8F, 0xB9}};
+        const bool microsoft = subtype == MFVideoFormat_H264 || subtype == MFVideoFormat_MPEG2;
+        if (microsoft && comReady()) CoCreateInstance(subtype == MFVideoFormat_H264 ? kH264 : kMpeg2, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&transform));
         std::string label;
-        transform = findTransform(MFT_CATEGORY_VIDEO_DECODER, MFMediaType_Video, subtype, GUID_NULL, false, &label);
+        if (!transform) transform = findTransform(MFT_CATEGORY_VIDEO_DECODER, MFMediaType_Video, subtype, GUID_NULL, false, &label);
         failure = "no system decoder for this codec";
         if (!transform) return false;
+        if (microsoft) skipAffinityCalls(L"msmpeg2vdec.dll");
         if (useGpu && gpu.open()) {
             ComPtr<IMFAttributes> attributes;
             UINT32 aware = 0;
@@ -110,11 +167,81 @@ struct MfVideoDecoder : SoftDecoder {
         return true;
     }
 
+    void emit(const Pending& item, const PictureSink& sink) {
+        Picture p;
+        p.stamp = item.time;
+        p.color = color;
+        p.width = std::min<int>(width, int(frameWidth));
+        p.height = std::min<int>(height, int(frameHeight));
+        p.chromaWidth = (p.width + 1) / 2;
+        p.chromaHeight = (p.height + 1) / 2;
+        p.interleaved = true;
+        p.bits = deep ? 10 : 8;
+        p.shift = deep ? 6 : 0;
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (item.slot < 0 || FAILED(context->Map(ring[item.slot].Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+            sink(p);
+            return;
+        }
+        const BYTE* scan = static_cast<const BYTE*>(mapped.pData);
+        p.plane[0] = scan;
+        p.plane[1] = scan + size_t(mapped.RowPitch) * ringShape.Height;
+        p.stride[0] = p.stride[1] = mapped.RowPitch;
+        sink(p);
+        context->Unmap(ring[item.slot].Get(), 0);
+    }
+
+    void flush(const PictureSink& sink, size_t keep = 0) {
+        while (pending.size() > keep) {
+            const Pending item = pending.front();
+            pending.pop_front();
+            emit(item, sink);
+        }
+    }
+
+    bool copyOut(IMFMediaBuffer* buffer, LONGLONG time, const PictureSink& sink) {
+        ComPtr<IMFDXGIBuffer> surface;
+        ComPtr<ID3D11Texture2D> texture;
+        UINT index = 0;
+        if (FAILED(buffer->QueryInterface(IID_PPV_ARGS(&surface))) || FAILED(surface->GetResource(IID_PPV_ARGS(&texture))) || FAILED(surface->GetSubresourceIndex(&index))) return false;
+        D3D11_TEXTURE2D_DESC desc{};
+        texture->GetDesc(&desc);
+        if (!context || desc.Width != ringShape.Width || desc.Height != ringShape.Height || desc.Format != ringShape.Format) {
+            flush(sink);
+            if (!context) gpu.device->GetImmediateContext(&context);
+            D3D11_TEXTURE2D_DESC staging = desc;
+            staging.MipLevels = 1;
+            staging.ArraySize = 1;
+            staging.Usage = D3D11_USAGE_STAGING;
+            staging.BindFlags = 0;
+            staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            staging.MiscFlags = 0;
+            ringShape = D3D11_TEXTURE2D_DESC{};
+            for (auto& slot : ring) {
+                slot.Reset();
+                if (FAILED(gpu.device->CreateTexture2D(&staging, nullptr, &slot))) return false;
+            }
+            ringShape = desc;
+        }
+        flush(sink, std::size(ring) - 1);
+        const int slot = int(copies++ % std::size(ring));
+        context->CopySubresourceRegion(ring[slot].Get(), 0, 0, 0, 0, texture.Get(), index, nullptr);
+        pending.push_back({slot, time});
+        return true;
+    }
+
     void hand(IMFSample* sample, const PictureSink& sink) {
-        ComPtr<IMFMediaBuffer> buffer;
-        if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) return;
         LONGLONG time = 0;
         sample->GetSampleTime(&time);
+        if (wanted && !wanted(time)) {
+            pending.push_back({-1, time});
+            flush(sink, std::size(ring) - 1);
+            return;
+        }
+        ComPtr<IMFMediaBuffer> buffer;
+        if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) return;
+        if (hardware && copyOut(buffer.Get(), time, sink)) return;
+        flush(sink);
         ComPtr<IMF2DBuffer> flat;
         BYTE* scan = nullptr;
         LONG stride = 0;
@@ -127,13 +254,6 @@ struct MfVideoDecoder : SoftDecoder {
             stride = pitch;
         }
         UINT32 rows = std::max<UINT32>(frameHeight, UINT32(height));
-        ComPtr<IMFDXGIBuffer> surface;
-        ComPtr<ID3D11Texture2D> texture;
-        if (hardware && SUCCEEDED(buffer.As(&surface)) && SUCCEEDED(surface->GetResource(IID_PPV_ARGS(&texture)))) {
-            D3D11_TEXTURE2D_DESC desc{};
-            texture->GetDesc(&desc);
-            rows = std::max<UINT32>(rows, desc.Height);
-        }
         if (scan && stride > 0) {
             Picture p;
             p.width = std::min<int>(width, int(frameWidth));
@@ -169,6 +289,7 @@ struct MfVideoDecoder : SoftDecoder {
             if (result == MF_E_TRANSFORM_NEED_MORE_INPUT) return true;
             if (result == MF_E_TRANSFORM_STREAM_CHANGE) {
                 if (output.pEvents) output.pEvents->Release();
+                flush(sink);
                 if (!pickOutput()) return false;
                 continue;
             }
@@ -201,10 +322,13 @@ struct MfVideoDecoder : SoftDecoder {
     bool drain(const PictureSink& sink) override {
         transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
         transform->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
-        return pull(sink);
+        const bool ok = pull(sink);
+        flush(sink);
+        return ok;
     }
 
     void reset() override {
+        pending.clear();
         transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
         transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
         primed = false;

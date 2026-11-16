@@ -68,15 +68,38 @@ void shapeImage(Image& image, int width, int height, int chromaWidth, int chroma
 }
 
 void fillImage(Image& image, const Picture& from) {
-    shapeImage(image, from.width, from.height, from.chromaWidth, from.chromaHeight, from.bits, from.interleaved);
+    shapeImage(image, from.width, from.height, from.chromaWidth, from.chromaHeight, from.bits, false);
     Picture& to = image.picture;
     to.shift = from.shift;
     to.stamp = from.stamp;
     to.color = from.color;
-    for (int plane = 0; plane < (from.interleaved ? 2 : 3); ++plane) {
-        const int rows = plane ? from.chromaHeight : from.height;
-        for (int y = 0; y < rows; ++y) memcpy(const_cast<uint8_t*>(to.plane[plane]) + size_t(y) * to.stride[plane], from.plane[plane] + size_t(y) * from.stride[plane], to.stride[plane]);
-    }
+    const size_t unit = from.bits > 8 ? 2 : 1, lumaRow = size_t(from.width) * unit, chromaRow = size_t(from.chromaWidth) * unit;
+    inParallel(from.height, [&](int top, int bottom) {
+        for (int y = top; y < bottom; ++y) memcpy(const_cast<uint8_t*>(to.plane[0]) + size_t(y) * to.stride[0], from.plane[0] + size_t(y) * from.stride[0], lumaRow);
+        const int first = int(int64_t(top) * from.chromaHeight / from.height), last = int(int64_t(bottom) * from.chromaHeight / from.height);
+        for (int y = first; y < last; ++y) {
+            uint8_t* u = const_cast<uint8_t*>(to.plane[1]) + size_t(y) * to.stride[1];
+            uint8_t* v = const_cast<uint8_t*>(to.plane[2]) + size_t(y) * to.stride[2];
+            if (!from.interleaved) {
+                memcpy(u, from.plane[1] + size_t(y) * from.stride[1], chromaRow);
+                memcpy(v, from.plane[2] + size_t(y) * from.stride[2], chromaRow);
+            } else if (unit == 1) {
+                const uint8_t* line = from.plane[1] + size_t(y) * from.stride[1];
+                for (int x = 0; x < from.chromaWidth; ++x) {
+                    u[x] = line[2 * x];
+                    v[x] = line[2 * x + 1];
+                }
+            } else {
+                const uint16_t* line = reinterpret_cast<const uint16_t*>(from.plane[1] + size_t(y) * from.stride[1]);
+                uint16_t* uu = reinterpret_cast<uint16_t*>(u);
+                uint16_t* vv = reinterpret_cast<uint16_t*>(v);
+                for (int x = 0; x < from.chromaWidth; ++x) {
+                    uu[x] = line[2 * x];
+                    vv[x] = line[2 * x + 1];
+                }
+            }
+        }
+    });
     if (from.alpha) {
         image.alpha.resize(size_t(from.width) * size_t(from.height));
         for (int y = 0; y < from.height; ++y) memcpy(image.alpha.data() + size_t(y) * size_t(from.width), from.alpha + size_t(y) * from.alphaStride, size_t(from.width));
@@ -137,7 +160,7 @@ struct VideoDecoder::Impl {
     std::map<int64_t, std::shared_ptr<Image>> ready;
     std::atomic<uint64_t> shown{0};
     std::atomic<int64_t> floor{0};
-    bool keep = true;
+    std::atomic<bool> keep{true};
     uint32_t ahead = 8;
     uint32_t next = kNone;
     uint32_t last = kNone;
@@ -293,7 +316,7 @@ struct VideoDecoder::Impl {
             std::lock_guard<std::mutex> hold(lock);
             if (!shape.color.known) shape.color = p.color;
         }
-        if (!keep || p.stamp < floor) return;
+        if (!keep || p.stamp < floor || !p.plane[0]) return;
         auto image = pool->copy(p);
         {
             std::lock_guard<std::mutex> hold(lock);
@@ -501,6 +524,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
     }
     if (!d.soft) return nullptr;
+    d.soft->wanted = [&d](int64_t stamp) { return d.keep && stamp >= d.floor; };
     d.backend = d.soft->name();
     return decoder;
 }

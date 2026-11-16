@@ -476,7 +476,7 @@ struct Ref {
 };
 
 struct HevcDecoder : SoftDecoder {
-    VaSession session;
+    VaSession session{&wanted};
     Color color;
     int lengthSize = 4;
     int pool = 0;

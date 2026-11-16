@@ -184,6 +184,13 @@ bool VaSession::submit(VASurfaceID target) {
 
 bool VaSession::hand(VASurfaceID surface, int width, int height, int64_t stamp, const Color& color, const PictureSink& sink, int left, int top) {
     if (failed || left < 0 || top < 0 || left >= frameWidth || top >= frameHeight) return false;
+    if (wanted && *wanted && !(*wanted)(stamp)) {
+        Picture p;
+        p.stamp = stamp;
+        p.color = color;
+        sink(p);
+        return true;
+    }
     VAStatus synced = va->vaSyncSurface2 ? va->vaSyncSurface2(va->display, surface, 2000000000ull) : VA_STATUS_ERROR_UNIMPLEMENTED;
     if (synced == VA_STATUS_ERROR_UNIMPLEMENTED) synced = va->vaSyncSurface(va->display, surface);
     if ((failed = synced != VA_STATUS_SUCCESS)) return false;

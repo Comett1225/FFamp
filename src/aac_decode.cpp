@@ -1577,6 +1577,8 @@ std::unique_ptr<PacketDecoder> openAacAudio(const Track& track, const std::vecto
         audio->packetFrames = doubled ? 2048 : 1024;
     }
     if (audio->channels < 1 || audio->channels > kOutputChannels) return fail("audio layout not supported");
+    const uint64_t layout = audio->core->oc[1].layout;
+    audio->layout = std::popcount(layout) == audio->channels ? layout : 0;
     audio->reset();
     audio->prerollPackets = 2;
     return audio;

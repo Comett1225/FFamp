@@ -219,6 +219,8 @@ std::unique_ptr<PacketDecoder> openAlacAudio(const Track& track, std::string* er
         (decoder->sampleSize != 16 && decoder->sampleSize != 20 && decoder->sampleSize != 24 && decoder->sampleSize != 32) || !decoder->riceLimit) {
         return fail("ALAC configuration not understood");
     }
+    static const uint64_t kLayouts[9] = {0, 0x4, 0x3, 0x7, 0x107, 0x37, 0x3F, 0x13F, 0xFF};
+    decoder->layout = kLayouts[decoder->channels];
     decoder->packetFrames = int(decoder->frameLength);
     decoder->longestPacket = int(decoder->frameLength);
     decoder->stateless = true;

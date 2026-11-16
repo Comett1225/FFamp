@@ -96,7 +96,7 @@ std::unique_ptr<PcmReader> PcmReader::open(const std::string& path, int rate, in
     r.rate = rate;
     r.channels = channels;
     r.kernel = std::make_unique<SincKernel>(r.decoder->sampleRate(), rate);
-    r.mix = std::make_unique<ChannelMix>(r.decoder->channels(), channels);
+    r.mix = std::make_unique<ChannelMix>(r.decoder->channels(), channels, r.decoder->layout());
     r.mixFirst = channels <= r.decoder->channels();
     r.width = r.mixFirst ? channels : r.decoder->channels();
     r.length = r.kernel->identity() ? r.decoder->length() : r.kernel->outputLength(r.decoder->length());

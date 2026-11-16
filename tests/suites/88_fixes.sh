@@ -16,6 +16,12 @@ if have_ffmpeg; then
     check "fixes: FFmpeg reads the late trim of the PCM track in MP4" stated_length $FX/trimmed.mp4 1.000000
     check "fixes: FFmpeg reads the late trim of the PCM track in Matroska" stated_length $FX/late.mka 0.052083
     check "fixes: 7.1 AAC channels come out in FFmpeg's order" same_levels fixtures/fixes/aac_71.m4a 8
+    if on_mac; then
+        skip "fixes: 6.1 ALAC and AAC in FFmpeg's order (the Mac keeps AudioToolbox's WAVE 6.1 order)"
+    else
+        check "fixes: 6.1 ALAC channels come out in FFmpeg's order" same_levels fixtures/fixes/alac_61.m4a 7
+        check "fixes: 6.1 AAC channels come out in FFmpeg's order" same_levels fixtures/fixes/aac_61.m4a 7
+    fi
 else
     skip "fixes: FFmpeg as the judge of the written files and the 7.1 order"
 fi

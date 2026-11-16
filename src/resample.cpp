@@ -1,6 +1,7 @@
 #include "resample.h"
 #include "absent/audio.h"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <numeric>
@@ -32,7 +33,7 @@ double bessel(double x) {
     return sum;
 }
 
-enum Place { FL, FR, FC, LFE, BL, BR, BC, SL, SR };
+enum Place { FL, FR, FC, LFE, BL, BR, BC, SL, SR, FLC, FRC, OTHER };
 
 const std::vector<Place>& layout(int channels) {
     static const std::vector<Place> known[9] = {{}, {FC}, {FL, FR}, {FL, FR, FC}, {FL, FR, FC, BC}, {FL, FR, FC, BL, BR},
@@ -40,16 +41,24 @@ const std::vector<Place>& layout(int channels) {
     return known[channels >= 1 && channels <= 8 ? channels : 0];
 }
 
+std::vector<Place> layout(int channels, uint64_t mask) {
+    static const Place bits[11] = {FL, FR, FC, LFE, BL, BR, FLC, FRC, BC, SL, SR};
+    if (!mask || std::popcount(mask) != channels) return layout(channels);
+    std::vector<Place> places;
+    for (int bit = 0; bit < 64; ++bit) if (mask >> bit & 1) places.push_back(bit < 11 ? bits[bit] : OTHER);
+    return places;
+}
+
 void stereoShare(Place place, float& left, float& right) {
     const float side = float(std::sqrt(0.5));
     left = right = 0;
     switch (place) {
-        case FL: left = 1; break;
-        case FR: right = 1; break;
+        case FL: case FLC: left = 1; break;
+        case FR: case FRC: right = 1; break;
         case FC: left = right = side; break;
         case BL: case SL: left = side; break;
         case BR: case SR: right = side; break;
-        case BC: left = right = 0.5f; break;
+        case BC: case OTHER: left = right = 0.5f; break;
         case LFE: break;
     }
 }
@@ -159,10 +168,10 @@ void SincKernel::render(const float* in, int64_t inBase, int channels, int64_t o
     });
 }
 
-ChannelMix::ChannelMix(int inChannels, int outChannels) : from(std::max(1, inChannels)), to(std::max(1, outChannels)) {
+ChannelMix::ChannelMix(int inChannels, int outChannels, uint64_t inLayout) : from(std::max(1, inChannels)), to(std::max(1, outChannels)) {
     matrix.assign(size_t(from) * size_t(to), 0.0f);
     identity = from == to;
-    const std::vector<Place>& source = layout(from);
+    const std::vector<Place> source = layout(from, inLayout);
     const std::vector<Place>& target = layout(to);
     for (int o = 0; o < to; ++o) {
         for (int i = 0; i < from; ++i) {

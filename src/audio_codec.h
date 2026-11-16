@@ -12,6 +12,7 @@ struct PacketDecoder {
     int prerollFrames = 0;
     int64_t lead = 0;
     int64_t skip = 0;
+    uint64_t layout = 0;
     bool stateless = false;
     const char* refusal = nullptr;
     virtual ~PacketDecoder() = default;

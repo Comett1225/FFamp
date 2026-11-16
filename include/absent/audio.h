@@ -9,6 +9,7 @@ public:
     ~AudioDecoder();
     int sampleRate() const;
     int channels() const;
+    uint64_t layout() const;
     int64_t length() const;
     bool read(int64_t start, size_t frames, float* out);
 

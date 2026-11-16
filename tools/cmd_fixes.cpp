@@ -230,6 +230,11 @@ bool flacChannels() {
 }
 
 bool channelOrder() {
+#ifdef __APPLE__
+    const size_t sixOne[7] = {0, 1, 2, 3, 4, 5, 6};
+#else
+    const size_t sixOne[7] = {0, 1, 2, 3, 6, 4, 5};
+#endif
     const std::pair<const char*, bool> files[] = {{"alac_61.m4a", true}, {"aac_61.m4a", false}, {"aac_71.m4a", false}};
     for (const auto& [name, exact] : files) {
         auto reader = Reader::open(fixtures + "/fixes/" + name);
@@ -241,14 +246,25 @@ bool channelOrder() {
         std::vector<float> pcm(frames * channels);
         if (!frames || !decoder->read(decoder->length() / 4, frames, pcm.data())) return false;
         float before = 0;
-        for (size_t c = 0; c < channels; ++c) {
+        for (size_t s = 0; s < channels; ++s) {
+            const size_t c = channels == 7 ? sixOne[s] : s;
             float peak = 0;
             for (size_t i = 0; i < frames; ++i) peak = std::max(peak, std::fabs(pcm[i * channels + c]));
-            if (exact ? std::fabs(peak - 0.1f * float(c + 1)) > 0.01f : c != 3 && peak < before + 0.05f) return false;
-            if (c != 3) before = peak;
+            if (exact ? std::fabs(peak - 0.1f * float(s + 1)) > 0.01f : s != 3 && peak < before + 0.05f) return false;
+            if (s != 3) before = peak;
         }
     }
-    return true;
+    auto stereo = PcmReader::open(fixtures + "/fixes/alac_61.m4a", 8000, 2);
+    if (!stereo) return false;
+    const size_t frames = size_t(stereo->length() / 2);
+    std::vector<float> mixed(frames * 2);
+    if (!frames || !stereo->read(stereo->length() / 4, frames, mixed.data())) return false;
+    float left = 0, right = 0;
+    for (size_t i = 0; i < frames; ++i) {
+        left = std::max(left, std::fabs(mixed[2 * i]));
+        right = std::max(right, std::fabs(mixed[2 * i + 1]));
+    }
+    return std::fabs(left - 0.9864f) < 0.01f && std::fabs(right - 1.1571f) < 0.01f;
 }
 
 bool emptyFile(const std::string& name, AudioFormat format) {

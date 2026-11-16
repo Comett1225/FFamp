@@ -30,7 +30,7 @@ struct ChannelMix {
     bool identity = true;
     std::vector<float> matrix;
 
-    ChannelMix(int inChannels, int outChannels);
+    ChannelMix(int inChannels, int outChannels, uint64_t inLayout = 0);
     double peak() const;
     void apply(const float* in, size_t frames, float* out) const;
 };

@@ -357,6 +357,7 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
 
 int AudioDecoder::sampleRate() const { return impl->codec->rate; }
 int AudioDecoder::channels() const { return impl->codec->channels; }
+uint64_t AudioDecoder::layout() const { return impl->codec->layout; }
 int64_t AudioDecoder::length() const { return impl->last - impl->first; }
 
 bool AudioDecoder::read(int64_t start, size_t frames, float* out) {

@@ -106,6 +106,7 @@ std::unique_ptr<PcmReader> PcmReader::open(const std::string& path, int rate, in
 int PcmReader::sampleRate() const { return impl->rate; }
 int PcmReader::channels() const { return impl->channels; }
 int64_t PcmReader::length() const { return impl->length; }
+double PcmReader::mixPeak() const { return impl->mix->peak(); }
 
 bool PcmReader::read(int64_t start, size_t frames, float* out) {
     Impl& r = *impl;

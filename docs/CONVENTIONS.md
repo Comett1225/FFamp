@@ -6,7 +6,7 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 
 | Stream | codec | configType | config bytes |
 |---|---|---|---|
-| H.264 | `avc1` | `avcC` | AVCDecoderConfigurationRecord (samples are length-prefixed NAL units, 4-byte lengths unless avcC says otherwise) |
+| H.264 | `avc1` (also for `avc3` input) | `avcC` | AVCDecoderConfigurationRecord (samples are length-prefixed NAL units, 4-byte lengths unless avcC says otherwise) |
 | HEVC | `hvc1` (also for `hev1` input) | `hvcC` | HEVCDecoderConfigurationRecord, samples length-prefixed |
 | AV1 | `av01` | `av1C` | AV1CodecConfigurationRecord; samples are low-overhead OBU temporal units |
 | VP9 | `vp09` | `vpcC` (may be empty) | VPCodecConfigurationRecord body (version/flags + fields), or empty |
@@ -67,6 +67,11 @@ list; `Sample.offset` is then free for the reader's use.
 - `skip` and `length` (track timescale) describe encoder priming and the exact shown length. `Writer::trim(track, skip, length)` sets
   them late, when the length is only known at the end.
 - PCM packets are whole frames; MP4/MOV store them as one sample per frame, Matroska as one block per packet.
+- Stream copies of older codecs, as FFmpeg's muxers store them: in MP4, MP3 and MP2 are `mp4a` with an `esds` of object type 0x6B
+  (0x69 at 24 kHz and below), AC-3 is `ac-3` with a `dac3` read from the first frame, Motion JPEG, MPEG-1 and MPEG-2 video are `mp4v`
+  with object types 0x6C, 0x6A and 0x61 (no `colr` box unless the source had colour labels). QuickTime files take those pictures as
+  `jpeg`, `m1v ` and `m2v1`, but not MP3, MP2 or AC-3 sound. Matroska takes them as `V_MJPEG`, `V_MPEG1`, `V_MPEG2`, `A_MPEG/L2` and
+  `A_AC3`, and MPEG-4 part 2 as `V_MPEG4/ISO/ASP` with the `esds` decoder specific info as CodecPrivate.
 - Sound-only MP4/MOV/M4A files use the sample rate as the movie timescale so lengths are exact to the sample.
 - `AudioFileWriter` rounds float samples the way FFmpeg does on arm64: truncate `x * 2^31` to 32 bits, then 16-bit =
   `(v + 0x8000) >> 16` (clamped), 24-bit = `v >> 8`.
@@ -115,6 +120,9 @@ list; `Sample.offset` is then free for the reader's use.
   the same length, so the sound after them stays at its own time.
 - `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
 - `Mp4Writer` writes version 1 (64-bit) `mvhd`, `tkhd`, `mdhd` and `elst` boxes when a length does not fit in 32 bits.
+- `PcmReader::mixPeak()` is the largest row sum of its channel mix (2.414 for 5.1 to stereo, 1 when nothing is mixed). Float output is
+  not scaled, as FFmpeg's; 16-bit output is divided by it when it is above 1, as FFmpeg's resampler normalises its matrix for integer
+  sample formats (`pcm --format s16le` does this, and so must anything else that turns `PcmReader` output into 16-bit samples).
 
 ## ASF: Windows Media files (.wma, .wmv, .asf)
 
@@ -159,7 +167,9 @@ list; `Sample.offset` is then free for the reader's use.
 ## AVI, CAF, AC-3, AMR and older video (formats round)
 
 - `Reader::format()` is `avi`, `caf`, `amr`, `ac3` or `eac3` for the new readers.
-- AVI video: timescale and frame step come from the stream header (`dwRate`/`dwScale`, reduced). Chunks are found through the OpenDML
+- AVI video: timescale and frame step come from the stream header (`dwRate`/`dwScale`, reduced); the step is kept as
+  `Track.frameStep`, and `Track::rate()` and probe's `avg_frame_rate` are `timescale / frameStep` (FFmpeg's `avg_frame_rate` for AVI is
+  the header rate), also when empty chunks make some pictures last longer. `frameStep` is 0 for every other reader. Chunks are found through the OpenDML
   indexes when there are any, else `idx1`, else by walking the `movi` lists. Empty chunks are not samples; the picture before them
   lasts longer. MPEG-1, MPEG-2 and MPEG-4 pictures get their shown order from their picture types, H.264 from its picture order
   count; `dts` is moved back so it never passes `pts`. A DivX packed bitstream (marked by the `DivX...p` user data) is split into one

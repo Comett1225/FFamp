@@ -42,6 +42,7 @@ public:
     int sampleRate() const;
     int channels() const;
     int64_t length() const;
+    double mixPeak() const;
     bool read(int64_t start, size_t frames, float* out);
 
 private:

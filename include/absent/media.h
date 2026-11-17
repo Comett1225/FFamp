@@ -53,6 +53,7 @@ struct Track {
     bool alpha = false;
     int64_t mediaEnd = -1;
     int64_t delay = 0;
+    uint32_t frameStep = 0;
     std::string language;
     uint32_t configType = 0;
     std::vector<uint8_t> config;

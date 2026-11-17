@@ -179,6 +179,7 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `src/linux/vaapi_hevc.cpp`: `libavcodec/vaapi_hevc.c`, `libavcodec/hevc/ps.c`, `libavcodec/hevc/refs.c`, `libavcodec/hevc/hevcdec.c`; Copyright (C) 2015 Timo Rothenpieler, Copyright (C) 2012 - 2013 Guillaume Martres, Mickael Raulet, Gildas Cocherel, Wassim Hamidouche, Copyright (C) 2013 Vittorio Giovara; LGPL-2.1-or-later.
 - `src/linux/vaapi_vp9.cpp`: `libavcodec/vaapi_vp9.c`, `libavcodec/vp9.c` (frame header); Copyright (C) 2015 Timo Rothenpieler, Copyright (C) 2013 Ronald S. Bultje, Clément Bœsch; LGPL-2.1-or-later.
 - `src/linux/vaapi_av1.cpp`: `libavcodec/vaapi_av1.c`, `libavcodec/cbs_av1.c`, `libavcodec/cbs_av1_syntax_template.c`, `libavcodec/av1dec.c`; the FFmpeg project (these files name no holder); LGPL-2.1-or-later.
+- `src/mp4_write.cpp` (the MPEG-4 object types and the `dac3` box of stream copies): `libavformat/movenc.c`, `libavformat/isom.c`; Copyright (c) 2003 Thomas Raivio, Copyright (c) 2004 Gildas Bazin, Copyright (c) 2009 Baptiste Coudurier, Copyright (c) 2001 Fabrice Bellard, Copyright (c) 2002 Francois Revol, Copyright (c) 2006 Baptiste Coudurier; LGPL-2.1-or-later.
 
 The Bessel function of the KBD window in `src/mdct.cpp` (by way of `libavutil/mathematics.c`) comes from the Boost project's
 `bessel_i0` (Copyright (c) 2006 Xiaogang Zhang), under this licence:

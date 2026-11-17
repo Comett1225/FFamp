@@ -270,13 +270,13 @@ Look lookOf(Reader& reader, const Track& t) {
         look.matrix = t.color.matrix;
     }
     uint32_t c = t.codec;
-    if (c == fourcc("avc1") || c == fourcc("avc3")) {
+    if (c == fourcc("avc1")) {
         look.codec = "h264";
         VideoInfo info = videoInfo(fourcc("avcC"), t.config);
         if (info.valid) look.profile = avcProfile(info.profile, info.compatibility);
         look.pixels = "yuv420p";
         applyVideoInfo(info, look);
-    } else if (c == fourcc("hvc1") || c == fourcc("hev1")) {
+    } else if (c == fourcc("hvc1")) {
         look.codec = "hevc";
         VideoInfo info = videoInfo(fourcc("hvcC"), t.config);
         if (info.valid) look.profile = hevcProfile(info.profile);
@@ -659,7 +659,7 @@ std::string probeJson(const std::string& path, bool packets, std::string* error)
         j.string("id", id);
         bool video = t.kind == Kind::Video && timing.ticks > 0;
         j.string("r_frame_rate", baseRate(t, timing));
-        j.string("avg_frame_rate", video ? fraction(int64_t(t.samples.size()) * t.timescale, timing.ticks) : "0/0");
+        j.string("avg_frame_rate", !video ? "0/0" : t.frameStep ? fraction(t.timescale, t.frameStep) : fraction(int64_t(t.samples.size()) * t.timescale, timing.ticks));
         j.string("time_base", "1/" + std::to_string(clock));
         if (!t.samples.empty() && t.timescale) {
             if (!wave) {

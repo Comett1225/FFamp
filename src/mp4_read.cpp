@@ -33,6 +33,7 @@ double Track::seconds() const {
 }
 
 double Track::rate() const {
+    if (frameStep && timescale) return double(timescale) / frameStep;
     double s = seconds();
     return s > 0 ? order.size() / s : 0;
 }
@@ -227,6 +228,8 @@ void videoKind(Track& track) {
     else if (c == fourcc("m2v1") || c == fourcc("mpg2") || family == 0x686476 || family == 0x786476 || family == 0x786435 || (c >> 16) == 0x6D78) c = fourcc("mp2v");
     else if (c == fourcc("mjpg") || c == fourcc("MJPG") || c == fourcc("AVDJ") || c == fourcc("dmb1")) c = fourcc("jpeg");
     if (c == fourcc("s263") || c == fourcc("H263")) c = fourcc("h263");
+    if (c == fourcc("hev1")) c = fourcc("hvc1");
+    if (c == fourcc("avc3")) c = fourcc("avc1");
     if (c != fourcc("mp4v") || track.configType != fourcc("esds")) return;
     ElementaryStream stream;
     parseElementaryStream(View{track.config.data(), track.config.size()}, stream);

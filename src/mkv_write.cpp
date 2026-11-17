@@ -103,6 +103,12 @@ Entry describe(const TrackSpec& spec) {
     else if (is("Opus")) e = {"A_OPUS", spec.config, true, true};
     else if (is("vorb")) e = {"A_VORBIS", spec.config, true, true};
     else if (is(".mp3")) e = {"A_MPEG/L3", {}, false, false};
+    else if (is(".mp2")) e = {"A_MPEG/L2", {}, false, false};
+    else if (is("ac-3")) e = {"A_AC3", {}, false, false};
+    else if (is("mp4v")) e = {"V_MPEG4/ISO/ASP", spec.configType == fourcc("esds") ? audioConfig(spec.config) : spec.config, false, false};
+    else if (is("mp1v")) e = {"V_MPEG1", {}, false, false};
+    else if (is("mp2v")) e = {"V_MPEG2", {}, false, false};
+    else if (is("jpeg")) e = {"V_MJPEG", {}, false, false};
     else if (is("alac")) e = {"A_ALAC", spec.config.size() >= 24 ? std::vector<uint8_t>(spec.config.end() - 24, spec.config.end()) : std::vector<uint8_t>(), true, false};
     else if (is("fLaC")) {
         e = {"A_FLAC", {'f', 'L', 'a', 'C', 0x80, 0, 0, uint8_t(spec.config.size())}, true, false};

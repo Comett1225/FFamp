@@ -1454,3 +1454,44 @@ of the 720p and 1080p clips bit-exact through Media Foundation, so the fallback 
 against ffmpeg and the encoder names. What still fails is what failed in the merged run: `rd_vorbis.ogg`'s trim (both), the WMA 2
 600 s speed checks and the 10-bit HEVC whole-program rate (Windows), `wv_speed_v3.avi`'s one-thread speed (both), and on Linux the
 100-frame AAC file (vo-aacenc's priming), the RGBA frame rates through WSL's d3d12 copy-out and dav1d's 400 fps.
+
+# App findings of 2026-11-17: copies of hev1, avc3 and older codecs, AVI frame rate, 16-bit mix level
+
+Branch `fix-app-517`. Five verified findings from the app review; three are fixed in FFamp, two need app changes that FFamp now
+makes possible.
+
+- **hev1 and avc3** (high): the MP4 reader kept the sample entry name, so HEVC from FFmpeg's default MP4 output (`hev1`) and H.264 in
+  `avc3` decoded but could not be trimmed, merged or have their sound removed ("a track cannot be stored"). The reader now gives
+  `hvc1` and `avc1`, as CONVENTIONS always said, so every writer and tool takes them. Copies are written as `hvc1`/`avc1`.
+- **Copies of older codecs** (medium): MP4 now holds MP3, MP2, AC-3, Motion JPEG, MPEG-1 and MPEG-2 by stream copy the way FFmpeg's
+  muxer stores them, QuickTime the three picture codecs, Matroska all of them and MPEG-4 part 2. The app's fast Trim of DivX AVI, AC-3
+  or MP3 in MP4/MOV, Motion JPEG MOV and MPEG-2 MP4 now succeeds in FFamp. Still not stored: E-AC-3 in MP4, MP3, MP2 and AC-3 sound in
+  QuickTime; the app's missing retry with FFmpeg after a failed copy is an app change.
+- **AVI frame rate** (low): `Track::rate()` and probe's `avg_frame_rate` are the header rate (`Track.frameStep`), as FFmpeg reports it,
+  also when empty chunks drop pictures (`avi_mpeg4_mp3.avi` gave 500/21, now 25/1). The AVI ffprobe comparison no longer skips
+  `avg_frame_rate`.
+- **16-bit mix level** (medium, app): `PcmReader::mixPeak()` gives the gain FFmpeg's resampler applies before integer output; the app's
+  16-bit playback must divide by it (the CLI now uses it).
+- **Late tracks on Android** (medium, app): FFamp's `Track.delay` was already right; the probe suite now checks it against ffprobe for
+  late sound in MOV and WMV and late pictures in MP4.
+
+New checks: hev1/avc3 trim, Matroska trim, strip-audio and merge, trims and rewraps of the committed AVI, MOV and MP4 fixtures into
+MP4, Matroska and QuickTime with every packet kept, FFmpeg's own hev1 MP4 trimmed against the app's FFmpeg trim, the dropped-frame AVI
+rate, `fixes: s16-gain`, three late-start files against ffprobe.
+
+| Suite | Mac | Windows | Linux (WSL) |
+|---|---|---|---|
+| 00_independence | 2 / 0 / 0 | 2 / 0 / 0 | 2 / 0 / 0 |
+| 20_audio | 172 / 0 / 0 | 163 / 0 / 2 | 163 / 0 / 2 |
+| 30_readers | 229 / 0 / 0 | 202 / 1 / 26 | 202 / 1 / 26 |
+| 40_probe | 239 / 0 / 0 | 236 / 0 / 3 | 235 / 1 / 3 |
+| 45_formats | 351 / 0 / 0 | 342 / 0 / 30 | 354 / 0 / 18 |
+| 46_mpeg4 | 79 / 0 / 0 | 77 / 0 / 0 | 77 / 0 / 0 |
+| 50_writers | 436 / 0 / 0 | 369 / 0 / 67 | 369 / 0 / 67 |
+| 70_tools | 217 / 0 / 0 | 194 / 0 / 21 | 197 / 0 / 20 |
+| 86_shim | 48 / 0 / 0 | | |
+| 88_fixes | 49 / 0 / 1 | 50 / 0 / 0 | 49 / 1 / 0 |
+
+The failures are the known ones (`rd_vorbis.ogg`'s trim, the 100-frame AAC file on Linux) and, on Linux, `decode open_mp2.ts`, which
+failed once while both systems ran suites on the one GPU and passed twice when run again alone (`decode rd_ntsc.mkv` did the same and
+passed in a rerun of 30_readers).

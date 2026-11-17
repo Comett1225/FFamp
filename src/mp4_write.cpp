@@ -1,4 +1,5 @@
 #include "absent/media.h"
+#include "bits.h"
 #include "bytes.h"
 #include <algorithm>
 #include <cstdio>
@@ -36,34 +37,70 @@ bool needsConfig(uint32_t codec) {
         || codec == fourcc("fLaC") || codec == fourcc("alac");
 }
 
-bool storable(const TrackSpec& spec) {
-    if (isPcm(spec)) return spec.bits == 8 || spec.bits == 16 || spec.bits == 24 || spec.bits == 32 || (spec.floating && spec.bits == 64);
-    return needsConfig(spec.codec) || isProRes(spec.codec) || spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08");
+uint32_t objectType(const TrackSpec& spec) {
+    if (spec.codec == fourcc(".mp3") || spec.codec == fourcc(".mp2")) return spec.sampleRate > 24000 ? 0x6B : 0x69;
+    if (spec.codec == fourcc("jpeg")) return 0x6C;
+    if (spec.codec == fourcc("mp1v")) return 0x6A;
+    if (spec.codec == fourcc("mp2v")) return 0x61;
+    return 0;
 }
 
-std::vector<uint8_t> elementaryStream(const TrackSpec& spec) {
-    if (spec.configType != fourcc("ASC ")) return spec.config;
+bool storable(const TrackSpec& spec) {
+    if (isPcm(spec)) return spec.bits == 8 || spec.bits == 16 || spec.bits == 24 || spec.bits == 32 || (spec.floating && spec.bits == 64);
+    return needsConfig(spec.codec) || isProRes(spec.codec) || objectType(spec) || spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08") || spec.codec == fourcc("ac-3");
+}
+
+std::vector<uint8_t> descriptor(uint32_t kind, uint32_t stream, const uint8_t* specific, uint32_t n) {
     Bytes b;
-    uint32_t n = uint32_t(std::min<size_t>(spec.config.size(), 64));
+    const uint32_t inner = n ? n + 2 : 0;
     b.u32(0);
     b.u8(0x03);
-    b.u8(23 + n);
+    b.u8(21 + inner);
     b.u16(0);
     b.u8(0);
     b.u8(0x04);
-    b.u8(15 + n);
-    b.u8(0x40);
-    b.u8(0x15);
+    b.u8(13 + inner);
+    b.u8(kind);
+    b.u8(stream);
     b.u24(0);
     b.u32(0);
     b.u32(0);
-    b.u8(0x05);
-    b.u8(n);
-    b.raw(spec.config.data(), n);
+    if (n) {
+        b.u8(0x05);
+        b.u8(n);
+        b.raw(specific, n);
+    }
     b.u8(0x06);
     b.u8(1);
     b.u8(0x02);
     return b.d;
+}
+
+std::vector<uint8_t> elementaryStream(const TrackSpec& spec) {
+    if (objectType(spec)) return descriptor(objectType(spec), spec.kind == Kind::Audio ? 0x15 : 0x11, nullptr, 0);
+    if (spec.configType != fourcc("ASC ")) return spec.config;
+    return descriptor(0x40, 0x15, spec.config.data(), uint32_t(std::min<size_t>(spec.config.size(), 64)));
+}
+
+std::vector<uint8_t> ac3Specific(const std::vector<uint8_t>& frame) {
+    BitReader r(frame.data(), frame.size());
+    if (frame.size() < 8 || r.read(16) != 0x0B77) return {};
+    r.skip(16);
+    const uint32_t rate = r.read(2), size = r.read(6), version = r.read(5), service = r.read(3), mode = r.read(3);
+    if ((mode & 1) && mode != 1) r.skip(2);
+    if (mode & 4) r.skip(2);
+    if (mode == 2) r.skip(2);
+    const uint32_t lfe = r.read(1);
+    if (rate == 3 || size > 37 || version > 8) return {};
+    const uint32_t packed = rate << 22 | version << 17 | service << 14 | mode << 11 | lfe << 10 | (size >> 1) << 5;
+    return {uint8_t(packed >> 16), uint8_t(packed >> 8), uint8_t(packed)};
+}
+
+uint32_t entryType(const TrackSpec& spec, bool quickTime) {
+    if (!objectType(spec)) return spec.codec;
+    if (spec.kind == Kind::Audio) return fourcc("mp4a");
+    if (!quickTime) return fourcc("mp4v");
+    return spec.codec == fourcc("mp1v") ? fourcc("m1v ") : spec.codec == fourcc("mp2v") ? fourcc("m2v1") : spec.codec;
 }
 
 std::vector<uint8_t> opusSpecific(const std::vector<uint8_t>& head) {
@@ -257,6 +294,16 @@ void soundEntry(Bytes& b, const Out& t, bool quickTime) {
         soundStart(b, 0, spec.channels, 16, 0, 48000);
         child(b, fourcc("dOps"), opusSpecific(spec.config));
         b.close(at);
+    } else if (objectType(spec)) {
+        size_t at = open(entryType(spec, quickTime));
+        soundStart(b, 0, spec.channels, 16, 0, rate);
+        child(b, fourcc("esds"), elementaryStream(spec));
+        b.close(at);
+    } else if (spec.codec == fourcc("ac-3")) {
+        size_t at = open(spec.codec);
+        soundStart(b, 0, spec.channels, 16, 0, rate);
+        child(b, fourcc("dac3"), ac3Specific(t.opening));
+        b.close(at);
     } else {
         uint32_t shown = rate;
         while (shown > 0xFFFF) shown /= 2;
@@ -341,7 +388,8 @@ void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
         return;
     }
     const bool proRes = isProRes(spec.codec);
-    size_t at = b.open(spec.codec);
+    const bool plain = objectType(spec);
+    size_t at = b.open(entryType(spec, quickTime));
     b.zero(6);
     b.u16(1);
     b.zero(4);
@@ -358,20 +406,23 @@ void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
     b.u16(0xFFFF);
     if (spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08")) child(b, fourcc("vpcC"), vpConfig(t));
     else if (spec.codec == fourcc("mp4v")) child(b, fourcc("esds"), spec.config);
-    else if (!proRes) child(b, spec.codec == fourcc("avc1") ? fourcc("avcC") : spec.codec == fourcc("hvc1") ? fourcc("hvcC") : spec.codec == fourcc("apv1") ? fourcc("apvC") : fourcc("av1C"), spec.config);
+    else if (plain && !quickTime) child(b, fourcc("esds"), elementaryStream(spec));
+    else if (!proRes && !plain) child(b, spec.codec == fourcc("avc1") ? fourcc("avcC") : spec.codec == fourcc("hvc1") ? fourcc("hvcC") : spec.codec == fourcc("apv1") ? fourcc("apvC") : fourcc("av1C"), spec.config);
     if (proRes) {
         size_t fields = b.open(fourcc("fiel"));
         b.u8(1);
         b.u8(0);
         b.close(fields);
     }
-    size_t color = b.open(fourcc("colr"));
-    b.u32(quickTime ? fourcc("nclc") : fourcc("nclx"));
-    b.u16(spec.color.primaries);
-    b.u16(spec.color.transfer);
-    b.u16(spec.color.matrix);
-    if (!quickTime) b.u8(spec.color.full ? 0x80 : 0);
-    b.close(color);
+    if (!plain || spec.color.known) {
+        size_t color = b.open(fourcc("colr"));
+        b.u32(quickTime ? fourcc("nclc") : fourcc("nclx"));
+        b.u16(spec.color.primaries);
+        b.u16(spec.color.transfer);
+        b.u16(spec.color.matrix);
+        if (!quickTime) b.u8(spec.color.full ? 0x80 : 0);
+        b.close(color);
+    }
     b.close(at);
 }
 
@@ -737,8 +788,9 @@ bool Mp4Writer::finish(std::string* error) {
         const size_t least = t.spec.codec == fourcc("alac") ? 24 : t.spec.codec == fourcc("Opus") ? 19 : t.spec.codec == fourcc("fLaC") ? 34 : 1;
         if (needsConfig(t.spec.codec) && t.spec.config.size() < least) return fail("a track has no codec configuration");
         if (t.spec.codec == fourcc("fLaC") && t.spec.config.size() != 34) return fail("a track has no codec configuration");
+        if (t.spec.codec == fourcc("ac-3") && ac3Specific(t.opening).empty()) return fail("a track has no codec configuration");
         if (impl->brand == Mp4Brand::M4a && t.spec.kind != Kind::Audio) return fail("an M4A file holds sound only");
-        if (impl->brand == Mp4Brand::QuickTime && (t.spec.codec == fourcc("Opus") || t.spec.codec == fourcc("fLaC") || t.spec.codec == fourcc("vp09") || t.spec.codec == fourcc("vp08")))
+        if (impl->brand == Mp4Brand::QuickTime && (t.spec.codec == fourcc("Opus") || t.spec.codec == fourcc("fLaC") || t.spec.codec == fourcc("vp09") || t.spec.codec == fourcc("vp08") || t.spec.codec == fourcc("ac-3") || (t.spec.kind == Kind::Audio && objectType(t.spec))))
             return fail("QuickTime files cannot hold this codec");
         prepare(t);
         any = true;

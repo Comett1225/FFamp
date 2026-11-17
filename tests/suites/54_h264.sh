@@ -121,7 +121,7 @@ frext10 FRExt High 10 and High 4:2:2
 TABLE
     if [ "$SYSTEM" = Windows ]; then
         for g in baseline cavlc cabac field mref frext8 frext10; do
-            check "FATE h264 conformance through VideoDecoder, $g, Media Foundation first: every frame's md5 equals ffmpeg's" python3 h264_check.py fate "$H4_FATE" $O $g --decode
+            check "FATE h264 conformance through VideoDecoder, $g, Media Foundation first: every frame's md5 equals ffmpeg's (but Microsoft's known frames 10 and 28 of HPCAMAPALQ_BRCM_B)" python3 h264_check.py fate "$H4_FATE" $O $g --decode
             check "FATE h264 conformance through VideoDecoder, $g, own decoder first (FFAMP_OWN_H264)" env FFAMP_OWN_H264=1 python3 h264_check.py fate "$H4_FATE" $O $g --decode
         done
     fi

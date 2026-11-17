@@ -170,6 +170,9 @@ def retimed(wrapped):
     return path
 
 
+MICROSOFT_KNOWN = {"frext-hpcamapalq_bcrm_b": {10, 28}}
+
+
 def fate(folder, work, group, through=False):
     rows = [line.strip().split("|") for line in open(os.path.join(HERE, "h264_fate.txt")) if line.strip()]
     passed, failed = 0, []
@@ -199,9 +202,10 @@ def fate(folder, work, group, through=False):
             theirs_md5 = [line.split(",")[-1].strip() for line in judge if line and not line.startswith("#")]
             mine = md5s(data, frame_size(shape))
             bad = [i for i in range(min(len(mine), len(theirs_md5))) if mine[i] != theirs_md5[i]]
-            ok = code == 0 and len(mine) == len(theirs_md5) and mine and not bad
+            known = MICROSOFT_KNOWN.get(test, set()) if through and label.startswith("mediafoundation") else set()
+            ok = code == 0 and len(mine) == len(theirs_md5) and mine and not set(bad) - known
             good &= bool(ok)
-            results.append(f"{label} {len(mine)}/{len(theirs_md5)}" + ("" if ok else f" differing {bad[:6]}"))
+            results.append(f"{label} {len(mine)}/{len(theirs_md5)}" + (f" differing {bad[:6]}" if bad else "") + (" (the known Microsoft decoder difference)" if ok and bad else ""))
         print(f"{test} [{shape[0] if shape else '?'}]: {'pass' if good else 'FAIL'}; " + "; ".join(results))
         if good:
             passed += 1

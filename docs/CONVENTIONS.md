@@ -691,6 +691,8 @@ list; `Sample.offset` is then free for the reader's use.
 - FFmpeg's FATE h264 conformance tests (`tests/h264_fate.txt`: 185 bitstreams of the ITU-T H.264.1 set in seven groups) run when
   `H264_CONFORMANCE` names the `h264-conformance` folder of the FATE suite (or `FATE_SAMPLES` the suite); each file is compared frame
   by frame with `-f framemd5` against ffmpeg with one thread, frame threads and slice threads. The bitstreams are not in the repository.
+  On Windows every file also goes through `VideoDecoder` in both orders (`h264_check.py ... --decode`); with Media Foundation first,
+  frames 10 and 28 of `FRExt/HPCAMAPALQ_BRCM_B` may differ (Microsoft's decoder, RESULTS), any other difference fails.
 - FLAC (written from RFC 9639) and ALAC (based on FFmpeg's) are FFamp's own decoders on Windows and Linux, bit-exact with ffmpeg.
 - AC-3 and E-AC-3 are FFamp's own decoder on Windows and Linux (`src/ac3_decode.cpp`, based on FFmpeg's `ac3`/`eac3` float decoders,
   NOTICE), 135 dB or better against ffmpeg with its length and timing to the sample (no lead). It follows FFmpeg 9.0, which

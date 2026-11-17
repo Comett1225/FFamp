@@ -1892,3 +1892,49 @@ rate, `fixes: s16-gain`, three late-start files against ffprobe.
 The failures are the known ones (`rd_vorbis.ogg`'s trim, the 100-frame AAC file on Linux) and, on Linux, `decode open_mp2.ts`, which
 failed once while both systems ran suites on the one GPU and passed twice when run again alone (`decode rd_ntsc.mkv` did the same and
 passed in a rerun of 30_readers).
+
+# Round of 2026-11-17 merged (branch `int-517`)
+
+The eight branches of the round merged into `int-517` on top of `aa9ff85`, in this order: `mf-first`, `avi-517`,
+`fix-containers-517`, `fix-video-517`, `fix-audio-517`, `fix-writers-517`, `fix-platform-517`, `fix-app-517`. Same PC and judge as the
+follow-up round (Windows 11 and Ubuntu 24.04 under WSL, the BtbN FFmpeg 9.0.2 the app bundles); the Mac with Homebrew's FFmpeg 9.0.2.
+
+## Where two branches did the same job
+
+| Job | Branches | Kept |
+|---|---|---|
+| Raw video decoder (`src/raw_video.cpp`) | `avi-517`, `fix-video-517` | One decoder: `fix-video-517`'s (planes, v210, QuickTime RGB, the alpha of 32-bit BGRA) with `avi-517`'s palettes (1, 2, 4, 8 bits from the end of the format block), the rest of the AVI YUV fourccs (4:1:0, 4:1:1 and planar 4:2:2, `YVYU`, bottom-up `cyuv`) and grey as full range. BI_RGB in AVI is `DIB ` (`avi-517` called it `raw `, the QuickTime RGB name). Cinepak opens through `openOwnVideo` too, so probe names it `cinepak`. |
+| RGB pictures on the Mac | `avi-517`, `fix-video-517` | `fix-video-517`'s exact path (G, B and R in a full-range 4:4:4 pixel buffer, matrix 0); `avi-517`'s conversion to BT.709 YCbCr (`gbrToYuv`) is gone, so AVI RGB, palette and Cinepak files decode exact on the Mac where the AVI suite allowed 45 dB. |
+| AVI H.264 stored with an `avcC` | `avi-517`, `fix-containers-517` | `fix-containers-517`'s, which also does HEVC. Open-GOP key frames come from the index flags only when the file has an index, as FFmpeg's parser does; a walked file keeps IDR pictures. |
+| Matroska rotation | `fix-containers-517`, `fix-writers-517` | The reader of `fix-containers-517` (FFmpeg's projection rules, yaw flip included), the writer of `fix-writers-517` (with the colour labels left out when unknown). |
+| Media Foundation AAC | `fix-audio-517`, `fix-platform-517` | `fix-audio-517`'s rule: Media Foundation is refused when it would give another rate or channel count than the configuration states, and a stream change that changes the format ends it. `fix-platform-517`'s first-packet probe is gone; implicit HE-AAC in ADTS and transport streams goes to FFamp's own decoder on Windows (`56_audiofix` asks 120 dB against ffmpeg there), and `fix-platform-517`'s HE-AAC, low-rate and program config element checks pass on it. |
+| Copies of older codecs into MP4, MOV and Matroska | `fix-writers-517`, `fix-app-517` | `fix-writers-517`'s writers, with `fix-app-517`'s MPEG-1 and MPEG-2 video added (`mp4v` with object types 0x6A and 0x61, `m1v ` and `m2v1` in MOV, `V_MPEG1` and `V_MPEG2`). MOV keeps MP3 and AC-3 (`fix-writers-517`); `fix-app-517` refused them. |
+| `renameFile` on Windows | `fix-writers-517`, `fix-platform-517` | `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, so a finished `.part` replaces an older output. |
+| libmpeg2 for Windows | `fix-video-517`, `fix-platform-517` | One step in `build_windows.sh` (`fix-video-517`'s). |
+| MPEG-1/2 chroma format on the desktop | `fix-video-517`, `fix-platform-517` | One read of the first sample (`mpegChroma`) sets the shape, and the shape decides whether Media Foundation and VA-API get the stream. |
+
+## Suites
+
+Full runs of `tests/run.sh` (pass / fail / skip), with the conformance set present on Windows and Linux:
+
+| System | This round | `aa9ff85` (follow-up round) |
+|---|---|---|
+| Windows (clang-cl, libraries with NASM) | 3,643 / 7 / 225 in the full run; 3,645 / 5 / 225 with `50_writers` and `54_h264` run again | 3,105 / 5 / 222 |
+| Linux (WSL, gcc 13, VA-API through d3d12) | 3,779 / 7 / 203 | 3,260 / 7 / 201 |
+| Mac (arm64, VideoToolbox) | 3,427 / 0 / 30 | not counted then |
+
+No new failure. What still fails is what failed at `aa9ff85`: `rd_vorbis.ogg`'s trim (both), the WMA 2 600 s speed checks and the
+10-bit HEVC whole-program rate (Windows), `wv_speed_v3.avi`'s one-thread speed (both), and on Linux the 100-frame AAC file
+(vo-aacenc's priming), the two RGBA frame rates through WSL's d3d12 copy-out and dav1d's 400 fps. The Windows and Linux runs went at
+the same time on the one PC.
+
+Two checks failed in the Windows full run and were dealt with:
+
+- `remux h264_270p.mp4 into MOV decodes to the same frames` failed once and passed in 120 repeats (60 on the idle PC, 60 with WSL
+  decoding 1080p H.264 and HEVC on the GPU through VA-API) and in `50_writers` run again (369 / 0 / 67): like the one-off GPU
+  failures of earlier rounds while both systems ran suites.
+- `FATE h264 conformance through VideoDecoder, frext8, Media Foundation first` failed on `FRExt/HPCAMAPALQ_BRCM_B`, frames 10 and 28:
+  the Microsoft decoder difference `mf-first` found (its own full run failed the same check). Interlaced coding with scaling matrices
+  is not the cause: x264 MBAFF with JVT matrices, MBAFF without them and progressive with them all decode bit-exact through Media
+  Foundation, so no routing rule was added. `h264_check.py` now allows exactly those two frames of that file when Media Foundation
+  decoded it and fails on any other difference; `54_h264` run again: 84 / 0 / 1.

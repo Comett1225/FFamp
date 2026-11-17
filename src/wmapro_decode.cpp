@@ -445,6 +445,7 @@ struct WmaPro : PacketDecoder {
         const uint32_t mask = le32(e + 2);
         bitsPerSample = int(le16(e));
         channels = mask ? __builtin_popcount(mask) : declared;
+        if (mask) layout = mask;
         if (bitsPerSample > 32 || bitsPerSample < 1) return fail("Windows Media Audio 9 Professional sample size not supported");
         log2FrameSize = log2Of(unsigned(blockAlign)) + 4;
         lengthPrefix = decodeFlags & 0x40;

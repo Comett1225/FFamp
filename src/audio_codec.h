@@ -1,4 +1,5 @@
 #pragma once
+#include "absent/audio.h"
 #include "absent/media.h"
 
 namespace absent {
@@ -52,5 +53,6 @@ std::unique_ptr<PacketDecoder> openWmaVoiceAudio(const Track& track, std::string
 std::unique_ptr<PacketDecoder> openWaveAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openTtaAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openAc3Audio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
+bool dolbyMixLevels(const uint8_t* frame, size_t size, MixLevels& levels);
 
 }

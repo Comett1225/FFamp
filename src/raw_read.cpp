@@ -403,6 +403,7 @@ const char* flac(FileReader& reader, uint64_t start) {
     }
     FlacInfo info;
     if (!flacInfo(track.config.data(), track.config.size(), info)) return "no stream description in this FLAC file";
+    track.channelMask = takeChannelMask(reader.found);
     track.sampleRate = info.sampleRate;
     track.timescale = uint32_t(info.sampleRate);
     track.channels = info.channels;

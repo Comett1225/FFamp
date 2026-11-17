@@ -3,6 +3,15 @@
 
 namespace absent {
 
+struct MixLevels {
+    float centre = 0.70710678f;
+    float surround = 0.70710678f;
+    float centreLtRt = 0.70710678f;
+    float surroundLtRt = 0.70710678f;
+    float lfe = 0;
+    int preferred = 0;
+};
+
 class AudioDecoder {
 public:
     static std::unique_ptr<AudioDecoder> open(Reader& file, const Track& track, std::string* error = nullptr);
@@ -10,6 +19,7 @@ public:
     int sampleRate() const;
     int channels() const;
     uint64_t layout() const;
+    const MixLevels& mixLevels() const;
     int64_t length() const;
     bool read(int64_t start, size_t frames, float* out);
 
@@ -42,6 +52,7 @@ public:
     int sampleRate() const;
     int channels() const;
     int64_t length() const;
+    double mixPeak() const;
     bool read(int64_t start, size_t frames, float* out);
 
 private:

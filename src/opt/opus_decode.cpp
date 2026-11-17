@@ -38,14 +38,14 @@ std::unique_ptr<PacketDecoder> openOpusAudio(const Track& track, std::string* er
     int family = head[18];
     int streams = 1;
     int coupled = channels == 2 ? 1 : 0;
-    uint8_t mapping[8] = {0, 1};
+    uint8_t mapping[64] = {0, 1};
     if (family == 0) {
         if (channels < 1 || channels > 2) return fail("Opus channel layout not supported");
-    } else if (family == 1) {
-        if (channels < 1 || channels > 8 || head.size() < size_t(21 + channels)) return fail("Opus channel layout not supported");
+    } else if (family == 1 || family == 255) {
+        if (channels < 1 || channels > (family == 1 ? 8 : 64) || head.size() < size_t(21 + channels)) return fail("Opus channel layout not supported");
         streams = head[19];
         coupled = head[20];
-        for (int i = 0; i < channels; ++i) mapping[i] = head[size_t(21 + kWavOrder[channels][i])];
+        for (int i = 0; i < channels; ++i) mapping[i] = head[size_t(21 + (family == 1 ? kWavOrder[channels][i] : i))];
     } else {
         return fail("Opus channel layout not supported");
     }

@@ -81,6 +81,7 @@ struct Header {
     int srCode = 0, srShift = 0, sampleRate = 0, frameSize = 0, numBlocks = 6, channels = 0;
     int compressionExists[2] = {};
     int channelMap = 0;
+    int centreLevel = 5, surroundLevel = 6, centreLtRt = 4, surroundLtRt = 4, preferred = 0, lfeLevel = -1;
 };
 
 int signedBits(BitReader& r, int n) { return int32_t(r.read(n) << (32 - n)) >> (32 - n); }
@@ -94,8 +95,17 @@ int ac3Info(BitReader& r, Header& h) {
         if (r.bit()) r.skip(7);
     }
     r.skip(2);
-    if (r.bit()) r.skip(14);
-    if (r.bit()) r.skip(14);
+    if (h.bitstreamId != 6) {
+        if (r.bit()) r.skip(14);
+        if (r.bit()) r.skip(14);
+    } else {
+        if (r.bit()) {
+            r.skip(8);
+            h.centreLevel = int(r.read(3));
+            h.surroundLevel = std::clamp(int(r.read(3)), 3, 7);
+        }
+        if (r.bit()) r.skip(14);
+    }
     if (r.bit()) {
         int i = int(r.read(6));
         do r.skip(8);
@@ -125,11 +135,17 @@ int eac3Info(BitReader& r, Header& h) {
     }
     if (r.bit()) {
         if (h.channelMode > kStereo) {
-            r.skip(2);
-            if (h.channelMode & 1) r.skip(6);
-            if (h.channelMode & 4) r.skip(6);
+            h.preferred = int(r.read(2));
+            if (h.channelMode & 1) {
+                h.centreLtRt = int(r.read(3));
+                h.centreLevel = int(r.read(3));
+            }
+            if (h.channelMode & 4) {
+                h.surroundLtRt = std::clamp(int(r.read(3)), 3, 7);
+                h.surroundLevel = std::clamp(int(r.read(3)), 3, 7);
+            }
         }
-        if (h.lfeOn && r.bit()) r.skip(5);
+        if (h.lfeOn && r.bit()) h.lfeLevel = int(r.read(5));
         if (h.frameType == kIndependent) {
             for (int i = 0; i < (h.channelMode ? 1 : 2); i++)
                 if (r.bit()) r.skip(6);
@@ -192,11 +208,12 @@ int parseHeader(BitReader& r, Header& h) {
         r.skip(5);
         r.skip(3);
         h.channelMode = int(r.read(3));
+        static const uint8_t centreLevels[4] = {4, 5, 6, 5}, surroundLevels[4] = {4, 6, 7, 6};
         if (h.channelMode == kStereo) {
             r.skip(2);
         } else {
-            if ((h.channelMode & 1) && h.channelMode != kMono) r.skip(2);
-            if (h.channelMode & 4) r.skip(2);
+            if ((h.channelMode & 1) && h.channelMode != kMono) h.centreLevel = centreLevels[r.read(2)];
+            if (h.channelMode & 4) h.surroundLevel = surroundLevels[r.read(2)];
         }
         h.lfeOn = r.bit();
         h.srShift = std::max(h.bitstreamId, 8) - 8;
@@ -1581,6 +1598,29 @@ struct Ac3Audio : PacketDecoder {
     }
 };
 
+}
+
+bool dolbyMixLevels(const uint8_t* frame, size_t size, MixLevels& levels) {
+    static const float gains[9] = {1.4142135623730950f, 1.1892071150027209f, 1.0f, 0.8408964152537145f, 0.7071067811865476f, 0.5946035575013605f, 0.5f, 0.0f,
+        0.3535533905932738f};
+    static const float lfeGains[32] = {3.162275f, 2.818382f, 2.511886f, 2.238719f, 1.995261f, 1.778278f, 1.584893f, 1.412536f, 1.258924f, 1.122018f, 1.000000f,
+        0.891251f, 0.794328f, 0.707946f, 0.630957f, 0.562341f, 0.501187f, 0.446683f, 0.398107f, 0.354813f, 0.316227f, 0.281838f, 0.251188f, 0.223872f, 0.199526f,
+        0.177828f, 0.158489f, 0.141253f, 0.125892f, 0.112201f, 0.100000f, 0.089125f};
+    BitReader r(frame, size);
+    Header h;
+    if (size < 8 || parseHeader(r, h) < 0 || h.channelMode <= kStereo) return false;
+    if (h.bitstreamId <= 10) {
+        h.preferred = 0;
+        h.centreLtRt = h.surroundLtRt = 4;
+        h.lfeLevel = -1;
+    }
+    levels.centre = gains[h.centreLevel];
+    levels.surround = gains[h.surroundLevel];
+    levels.centreLtRt = gains[h.centreLtRt];
+    levels.surroundLtRt = gains[h.surroundLtRt];
+    levels.lfe = h.lfeLevel >= 0 ? lfeGains[h.lfeLevel] : 0.0f;
+    levels.preferred = h.preferred;
+    return true;
 }
 
 std::unique_ptr<PacketDecoder> openAc3Audio(const Track&, const std::vector<uint8_t>& firstPacket, std::string* error) {

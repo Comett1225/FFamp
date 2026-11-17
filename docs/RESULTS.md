@@ -1938,3 +1938,21 @@ Two checks failed in the Windows full run and were dealt with:
   is not the cause: x264 MBAFF with JVT matrices, MBAFF without them and progressive with them all decode bit-exact through Media
   Foundation, so no routing rule was added. `h264_check.py` now allows exactly those two frames of that file when Media Foundation
   decoded it and fails on any other difference; `54_h264` run again: 84 / 0 / 1.
+
+# Android route merged (branch `int2-517`)
+
+`int2-517` is `7616ed0` with `android-517` merged: FFamp's own sound and picture decoders behind MediaCodec (`docs/INTEGRATION.md`).
+`gop-517` (open-GOP jumps with VideoToolbox and VA-API, Mac export chroma) is left out: its recheck found that the open-GOP AVI checks it
+moves to the system decoder in `32_containers` fail under Media Foundation on Windows (15 of 16 random frames, 178 of 180 backwards, the
+same wrong frames as `7616ed0`), so it waits for a Media Foundation fix. libmpeg2 for Windows needed no change here: `build_windows.sh`
+with `ONLY=mpeg2` added it to the Windows library folder.
+
+| System | Suites | `int2-517` (pass / fail / skip) |
+|---|---|---|
+| Mac (arm64, VideoToolbox) | full `tests/run.sh` | 3,455 / 0 / 30 (`7616ed0`: 3,427 / 0 / 30; the 28 more are `58_android`) |
+| Windows (clang-cl) | `00_independence`, `10_video`, `20_audio`, `45_formats`, `52_sound`, `53_ac3`, `54_aac`, `56_audiofix`, `57_avi`, `58_android`, `70_tools`, `88_fixes` | 1,736 / 0 / 66 |
+| Linux (WSL, gcc 13) | the same | 1,746 / 1 / 52 |
+
+No new failure. The one Linux failure is the 100-frame AAC file (vo-aacenc's priming), which fails at `7616ed0` too. `58_android` has 27
+checks off the Mac, where the VideoToolbox file without reorder information cannot be made. `54_h264` was not run again off the Mac: the
+desktop compiles the same H.264 sources, only without the `if(NOT ANDROID)` gate around them.

@@ -6,7 +6,7 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 
 | Stream | codec | configType | config bytes |
 |---|---|---|---|
-| H.264 | `avc1` | `avcC` | AVCDecoderConfigurationRecord (samples are length-prefixed NAL units, 4-byte lengths unless avcC says otherwise) |
+| H.264 | `avc1` (also for `avc3` input) | `avcC` | AVCDecoderConfigurationRecord (samples are length-prefixed NAL units, 4-byte lengths unless avcC says otherwise) |
 | HEVC | `hvc1` (also for `hev1` input) | `hvcC` | HEVCDecoderConfigurationRecord, samples length-prefixed |
 | AV1 | `av01` | `av1C` | AV1CodecConfigurationRecord; samples are low-overhead OBU temporal units |
 | VP9 | `vp09` | `vpcC` (may be empty) | VPCodecConfigurationRecord body (version/flags + fields), or empty |
@@ -98,11 +98,12 @@ list; `Sample.offset` is then free for the reader's use.
   The MP4 reader reads `©xyz` as location.
 - MP4 also holds MPEG audio (`mp4a`, object type 0x6B, 0x69 at 24 kHz and below), Vorbis (`mp4a`, object type 0xDD, the Xiph-laced
   headers as decoder specific info; the reader takes them back as `vorb`), AC-3 and E-AC-3 (`ac-3`/`ec-3` with `dac3`/`dec3` made
-  from the first packet as FFmpeg makes them; E-AC-3 packets are not joined into six-block samples) and Motion JPEG (`mp4v`, object
-  type 0x6C). MOV takes MP3 as `.mp3` (sound description version 1), AC-3 and E-AC-3 inside `wave`, Motion JPEG as `jpeg`, and
+  from the first packet as FFmpeg makes them; E-AC-3 packets are not joined into six-block samples) and Motion JPEG, MPEG-1 and
+  MPEG-2 video (`mp4v`, object types 0x6C, 0x6A and 0x61). MOV takes MP3 as `.mp3` (sound description version 1), AC-3 and E-AC-3
+  inside `wave`, Motion JPEG, MPEG-1 and MPEG-2 video as `jpeg`, `m1v ` and `m2v1`, and
   refuses Vorbis and MP2. M4A refuses MP3, MP2, Vorbis and E-AC-3, as FFmpeg's `ipod` muxer does.
-- Matroska also holds MPEG-4 part 2 (`V_MPEG4/ISO/ASP`, the decoder specific info as CodecPrivate), Motion JPEG (`V_MJPEG`), MP2,
-  AC-3 and E-AC-3. Video tracks get a DefaultDuration: the steps between shown frames that lie within 5 % of the median step,
+- Matroska also holds MPEG-4 part 2 (`V_MPEG4/ISO/ASP`, the decoder specific info as CodecPrivate), Motion JPEG (`V_MJPEG`), MPEG-1 and
+  MPEG-2 video (`V_MPEG1`, `V_MPEG2`), MP2, AC-3 and E-AC-3. Video tracks get a DefaultDuration: the steps between shown frames that lie within 5 % of the median step,
   averaged, and snapped to a standard rate (23.976 to 120) within 0.2 %. Rotation is written as ProjectionPoseRoll, the negative of
   `rotation` in (-180, 180], as FFmpeg writes a display matrix, and the reader turns it back into `rotation`.
 - MP4/MOV stretch the last sample of a video track to the end of `length` (`Writer::trim`) when the track would end earlier, so a held
@@ -176,6 +177,9 @@ list; `Sample.offset` is then free for the reader's use.
   the output still inside the decoder.
 - `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
 - `Mp4Writer` writes version 1 (64-bit) `mvhd`, `tkhd`, `mdhd` and `elst` boxes when a length does not fit in 32 bits.
+- `PcmReader::mixPeak()` is the largest row sum of its channel mix (2.414 for 5.1 to stereo, 1 when nothing is mixed). Float output is
+  not scaled, as FFmpeg's; 16-bit output is divided by it when it is above 1, as FFmpeg's resampler normalises its matrix for integer
+  sample formats (`pcm --format s16le` does this, and so must anything else that turns `PcmReader` output into 16-bit samples).
 
 ## ASF: Windows Media files (.wma, .wmv, .asf)
 
@@ -221,7 +225,9 @@ list; `Sample.offset` is then free for the reader's use.
 
 - `Reader::format()` is `avi`, `caf`, `amr`, `ac3` or `eac3` for the new readers.
 - AVI video: timescale and frame step come from the stream header (`dwRate`/`dwScale`, reduced); a header without them takes the main
-  header's frame period, else 25 frames a second, as FFmpeg does. Chunks are found through the OpenDML indexes when there are any
+  header's frame period, else 25 frames a second, as FFmpeg does. The step is kept as `Track.frameStep`, and `Track::rate()` and
+  probe's `avg_frame_rate` are `timescale / frameStep` (FFmpeg's `avg_frame_rate` for AVI is the header rate), also when empty chunks
+  make some pictures last longer. `frameStep` is 0 for every other reader. Chunks are found through the OpenDML indexes when there are any
   (super indexes, nested ones too, and standard indexes; a base offset that repeats its low 32 bits in the high ones is cut to 32 bits,
   as FFmpeg does), else `idx1`, else by walking the `movi` lists. The `idx1` base is the `movi` list, the file start or the distance
   between the first entry and the first chunk the walk finds (FFmpeg's rule), whichever makes the first entry, up to 64 others spread

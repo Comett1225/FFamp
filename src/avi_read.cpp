@@ -1014,6 +1014,7 @@ public:
         const uint32_t shared = std::gcd(s.scale, s.rate);
         const uint32_t step = s.scale / shared;
         t.timescale = s.rate / shared;
+        t.frameStep = step;
         const bool part2 = t.codec == fourcc("mp4v");
         const bool mpeg = t.codec == fourcc("mp1v") || t.codec == fourcc("mp2v");
         const bool avc = t.codec == fourcc("avc1");

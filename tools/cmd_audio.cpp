@@ -84,8 +84,7 @@ int pcm(const Args& args) {
     int64_t at = args.has("first") ? args.number("first", 0) : int64_t(std::llround(atof(args.get("start", "0").c_str()) * rate));
     int64_t end = args.has("frames") ? at + args.number("frames", 0) : reader->length();
     size_t chunk = size_t(std::max(1L, args.number("chunk", long(kChunk))));
-    float gain = 1;
-    if (format == "s16le" && reader->mixPeak() > 1) gain = float(1 / reader->mixPeak());
+    const float gain = format == "s16le" && reader->mixPeak() > 1 ? float(1 / reader->mixPeak()) : 1;
     std::vector<float> pcm(chunk * size_t(channels));
     std::vector<int16_t> whole(chunk * size_t(channels));
     while (at < end) {

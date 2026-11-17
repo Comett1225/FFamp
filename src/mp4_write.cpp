@@ -36,6 +36,8 @@ bool isDolby(uint32_t codec) { return codec == fourcc("ac-3") || codec == fourcc
 
 bool isMpegAudio(uint32_t codec) { return codec == fourcc(".mp3") || codec == fourcc(".mp2"); }
 
+uint32_t visualObjectType(uint32_t codec) { return codec == fourcc("jpeg") ? 0x6C : codec == fourcc("mp1v") ? 0x6A : codec == fourcc("mp2v") ? 0x61 : 0; }
+
 bool needsConfig(uint32_t codec) {
     return codec == fourcc("avc1") || codec == fourcc("hvc1") || codec == fourcc("av01") || codec == fourcc("apv1") || codec == fourcc("mp4v") || codec == fourcc("mp4a") || codec == fourcc("Opus")
         || codec == fourcc("fLaC") || codec == fourcc("alac") || codec == fourcc("vorb");
@@ -43,7 +45,7 @@ bool needsConfig(uint32_t codec) {
 
 bool storable(const TrackSpec& spec) {
     if (isPcm(spec)) return spec.bits == 8 || spec.bits == 16 || spec.bits == 24 || spec.bits == 32 || (spec.floating && spec.bits == 64);
-    return needsConfig(spec.codec) || isProRes(spec.codec) || isDolby(spec.codec) || isMpegAudio(spec.codec) || spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08") || spec.codec == fourcc("jpeg");
+    return needsConfig(spec.codec) || isProRes(spec.codec) || isDolby(spec.codec) || isMpegAudio(spec.codec) || spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08") || visualObjectType(spec.codec);
 }
 
 void wrap(Bytes& b, uint32_t tag, const std::vector<uint8_t>& body) {
@@ -379,8 +381,8 @@ void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
         return;
     }
     const bool proRes = isProRes(spec.codec);
-    const bool jpeg = spec.codec == fourcc("jpeg");
-    size_t at = b.open(jpeg && !quickTime ? fourcc("mp4v") : spec.codec);
+    const uint32_t visual = visualObjectType(spec.codec);
+    size_t at = b.open(visual && !quickTime ? fourcc("mp4v") : spec.codec == fourcc("mp1v") ? fourcc("m1v ") : spec.codec == fourcc("mp2v") ? fourcc("m2v1") : spec.codec);
     b.zero(6);
     b.u16(1);
     b.zero(4);
@@ -397,8 +399,8 @@ void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
     b.u16(0xFFFF);
     if (spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08")) child(b, fourcc("vpcC"), vpConfig(t));
     else if (spec.codec == fourcc("mp4v")) child(b, fourcc("esds"), spec.config);
-    else if (jpeg) {
-        if (!quickTime) child(b, fourcc("esds"), descriptor(0x6C, 0x11, {}));
+    else if (visual) {
+        if (!quickTime) child(b, fourcc("esds"), descriptor(visual, 0x11, {}));
     } else if (!proRes) child(b, spec.codec == fourcc("avc1") ? fourcc("avcC") : spec.codec == fourcc("hvc1") ? fourcc("hvcC") : spec.codec == fourcc("apv1") ? fourcc("apvC") : fourcc("av1C"), spec.config);
     if (proRes) {
         size_t fields = b.open(fourcc("fiel"));

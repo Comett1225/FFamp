@@ -87,6 +87,9 @@ other probe_opus.ogg -f lavfi -i sine=frequency=440:sample_rate=48000 -t 1 -c:a 
 other probe_s16.wav -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 -ac 2 -c:a pcm_s16le
 other probe_lame.mp3 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 -c:a libmp3lame -b:a 64k
 other probe_s16.flac -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 -c:a flac
+other probe_late_sound.mov -f lavfi -i testsrc2=size=320x240:rate=30:duration=2 -itsoffset 0.5 -f lavfi -i sine=frequency=440:sample_rate=48000:duration=1.5 -c:v libx264 -c:a aac
+other probe_late_picture.mp4 -itsoffset 0.5 -f lavfi -i testsrc2=size=320x240:rate=30:duration=2 -f lavfi -i sine=frequency=440:sample_rate=48000:duration=1.5 -c:v libx264 -c:a aac
+OTHER_KNOWN="stream0.avg_frame_rate duration format.bit_rate" other probe_late_sound.wmv -f lavfi -i testsrc2=size=320x240:rate=30:duration=2 -itsoffset 0.5 -f lavfi -i sine=frequency=440:sample_rate=48000:duration=1.5 -c:v wmv2 -c:a wmav2
 
 echo "== probe: committed reader, audio and video fixtures against ffprobe"
 RXP=fixtures/readers

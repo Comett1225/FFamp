@@ -196,6 +196,12 @@ bool mixCentre() {
     return mixer.pull(out.data(), 100) == 100 && out[100] > 0.5f && out[101] > 0.5f;
 }
 
+bool s16Gain() {
+    auto surround = PcmReader::open(fixtures + "/audio/aac_51_48k.m4a", 48000, 2);
+    auto stereo = PcmReader::open(fixtures + "/audio/aac_stereo_48k.m4a", 48000, 2);
+    return surround && stereo && std::fabs(surround->mixPeak() - (1 + std::sqrt(2.0))) < 0.001 && stereo->mixPeak() == 1;
+}
+
 std::unique_ptr<AudioFileWriter> levels(const std::string& path, AudioFormat format, int channels, size_t frames) {
     auto writer = AudioFileWriter::open(path, format, 48000, channels, 0);
     if (!writer) return nullptr;
@@ -1315,7 +1321,7 @@ bool manyReaders() {
 #endif
 
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
-    {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre},
+    {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre}, {"s16-gain", s16Gain},
     {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"encoder-names", encoderNames}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
     {"aac-rate", aacRate}, {"rf64-size", rf64Size}, {"aifc-flip", aifcFlip}, {"trun-offset", trunOffset}, {"decode-time-limit", decodeTimeLimit},
     {"flac-rate", flacRate}, {"lace-bounds", laceBounds}, {"vorbis-modes", vorbisModes}, {"sps-limits", spsLimits}, {"tag-flags", tagFlags},

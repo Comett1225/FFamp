@@ -150,6 +150,50 @@ check "rewrap a file with late sound into Matroska keeps the gap" judged sync fi
 tool rewrap fixtures/probe/delay.mp4 $T/delay.mp4
 check "rewrap a file with late sound into MP4 keeps the gap" judged sync fixtures/probe/delay.mp4 $T/delay.mp4
 
+python3 -c "
+for source, out, old, new in (('$FX/clip.mp4', '$T/avc3.mp4', b'avc1', b'avc3'), ('fixtures/video/hevc_270p.mp4', '$T/hev1.mp4', b'hvc1', b'hev1')):
+    data = bytearray(open(source, 'rb').read())
+    at = data.find(b'stsd')
+    while at >= 0:
+        if data[at + 16:at + 20] == old: data[at + 16:at + 20] = new
+        at = data.find(b'stsd', at + 4)
+    open(out, 'wb').write(data)"
+check "H.264 in an avc3 sample entry reads as avc1" [ "$($A probe $T/avc3.mp4 | grep -c 'video avc1 ')" = 1 ]
+check "HEVC in a hev1 sample entry reads as hvc1" [ "$($A probe $T/hev1.mp4 | grep -c 'video hvc1 ')" = 1 ]
+tool trim $T/avc3.mp4 $T/avc3_cut.mp4 --start 1.3 --end 2.5
+check "trim an avc3 file by copy" judged trim $T/avc3.mp4 $T/avc3_cut.mp4 1.3 2.5
+tool trim $T/hev1.mp4 $T/hev1_cut.mp4 --start 0.5 --end 1.5
+check "trim a hev1 file by copy" judged trim $T/hev1.mp4 $T/hev1_cut.mp4 0.5 1.5
+tool trim $T/hev1.mp4 $T/hev1_cut.mkv --start 0.5 --end 1.5
+check "trim a hev1 file by copy into Matroska" [ "$($A probe $T/hev1_cut.mkv | grep -c 'video hvc1 ')" = 1 ]
+tool strip-audio $T/avc3.mp4 $T/avc3_silent.mp4
+check "strip-audio of an avc3 file keeps every video packet" judged same_packets $T/avc3_silent.mp4 video $T/avc3.mp4
+tool merge $T/hev1.mp4 $FX/dash_audio.m4a $T/hev1_joined.mp4
+check "merge hev1 video with AAC sound: every packet kept" judged merge $T/hev1.mp4 $FX/dash_audio.m4a $T/hev1_joined.mp4
+FM=fixtures/formats
+for f in avi_mpeg4_mp3.avi avi_asp_ac3.avi avi_mpeg2_mp2.avi mjpeg.mov mpeg2.mp4; do
+    tool trim $FM/$f $T/cut_${f%.*}.mp4 --start 0.3 --end 0.7
+    check "trim $f by copy into MP4" judged trim $FM/$f $T/cut_${f%.*}.mp4 0.3 0.7
+done
+while read f kinds; do
+    for ext in mp4 mkv; do
+        tool rewrap $FM/$f $T/kept_${f%.*}.$ext
+        for kind in $kinds; do check "rewrap $f into .$ext keeps every $kind packet" judged same_packets $T/kept_${f%.*}.$ext $kind $FM/$f; done
+    done
+done <<TABLE
+avi_mpeg4_mp3.avi video audio
+avi_asp_ac3.avi video audio
+avi_mpeg2_mp2.avi video audio
+ac3_stereo.mp4 audio
+mjpeg.mov video
+mpeg1.mov video
+mpeg2.mp4 video
+TABLE
+for f in mjpeg.mov mpeg1.mov mpeg2.mov; do
+    tool strip-audio $FM/$f $T/silent_$f
+    check "strip-audio of $f into QuickTime keeps every video packet" judged same_packets $T/silent_$f video $FM/$f
+done
+
 head -c 70000 $FX/clip.mp4 > $T/cut.mp4
 head -c 30000 $FX/dash_video.mp4 > $T/cut_frag.mp4
 head -c 40001 fixtures/probe/h264_aac.ts > $T/cut.ts
@@ -182,7 +226,10 @@ have_ffmpeg || { skip "tools against the app's FFmpeg command lines"; return 0; 
 clean_timed() { [ -z "$("$FFPROBE" -v error "$1" 2>&1)" ] && [ -z "$("$FFMPEG" -nostdin -v error -i "$1" -fps_mode passthrough -f null - 2>&1)" ]; }
 echo "== tools: against what the app's FFmpeg command lines produce"
 for f in trim_mid.mp4 trim_tail.mp4 trim.mkv trim.webm trim_ts.mp4 copy.m4a sound.m4a sound.mp3 named.opus small.mp4 double.mp4 hevc.mp4 vp9.webm av1.mp4 from10.mp4 steady.mp4 back.mp4 back_part.mp4 back_vfr.mp4 \
-    opaque.mp4 alpha.mp4 alpha-mask.mp4 woven.mp4 woven-mask.mp4 partial.mp4 partial-mask.mp4 ntsc.mp4 late_copy.mp4 late_aac.mp4 trim_sound.m4a merged.mp4 merged.webm auto_mixed.mp4 auto_other.mkv silent.mp4 from_ts.mp4 delay.mkv delay.mp4; do
+    opaque.mp4 alpha.mp4 alpha-mask.mp4 woven.mp4 woven-mask.mp4 partial.mp4 partial-mask.mp4 ntsc.mp4 late_copy.mp4 late_aac.mp4 trim_sound.m4a merged.mp4 merged.webm auto_mixed.mp4 auto_other.mkv silent.mp4 from_ts.mp4 delay.mkv delay.mp4 \
+    avc3_cut.mp4 hev1_cut.mp4 hev1_cut.mkv avc3_silent.mp4 hev1_joined.mp4 cut_avi_mpeg4_mp3.mp4 cut_avi_asp_ac3.mp4 cut_avi_mpeg2_mp2.mp4 cut_mjpeg.mp4 cut_mpeg2.mp4 \
+    kept_avi_mpeg4_mp3.mp4 kept_avi_mpeg4_mp3.mkv kept_avi_asp_ac3.mp4 kept_avi_asp_ac3.mkv kept_avi_mpeg2_mp2.mp4 kept_avi_mpeg2_mp2.mkv kept_ac3_stereo.mp4 kept_ac3_stereo.mkv \
+    kept_mjpeg.mp4 kept_mjpeg.mkv kept_mpeg1.mp4 kept_mpeg1.mkv kept_mpeg2.mp4 kept_mpeg2.mkv silent_mjpeg.mov silent_mpeg1.mov silent_mpeg2.mov; do
     check "$f has no ffprobe or decode messages" clean_timed $T/$f
 done
 $F -ss 1.300000 -i $FX/clip.mp4 -t 1.200000 -map 0:v:0 -map "0:a:0?" -c copy -avoid_negative_ts make_zero -movflags +faststart $T/ff_trim.mp4
@@ -242,3 +289,12 @@ for path in sys.argv[1:3]:
 sys.exit(0 if abs(gaps[0] - gaps[1]) < 0.001 else 1)" $1 $2
 }
 check "transport stream to MP4: ffprobe sees the same gap between picture and sound as in FFmpeg's file (1 ms)" same_gap $T/from_ts.mp4 $T/ff_from_ts.mp4
+for f in avi_mpeg4_mp3.avi mjpeg.mov mpeg2.mp4; do
+    $F -ss 0.300000 -i $FM/$f -t 0.400000 -map 0:v:0 -map "0:a:0?" -c copy -avoid_negative_ts make_zero -movflags +faststart $T/ff_cut_${f%.*}.mp4
+    check "trim $f: our video packets are among those of the app's FFmpeg trim" judged subset $T/cut_${f%.*}.mp4 $T/ff_cut_${f%.*}.mp4 video
+done
+$F -f lavfi -i testsrc2=s=320x240:r=25:d=2 -f lavfi -i sine=r=48000:d=2 -c:v libx265 -x265-params log-level=error -c:a aac $T/ff_hev1.mp4
+tool trim $T/ff_hev1.mp4 $T/ff_hev1_cut.mp4 --start 0.5 --end 1.5
+$F -ss 0.500000 -i $T/ff_hev1.mp4 -t 1.000000 -map 0:v:0 -map "0:a:0?" -c copy -avoid_negative_ts make_zero -movflags +faststart $T/ff_hev1_ff.mp4
+check "trim of FFmpeg's default HEVC MP4 (hev1): our video packets are among those of the app's FFmpeg trim" judged subset $T/ff_hev1_cut.mp4 $T/ff_hev1_ff.mp4 video
+check "trim of FFmpeg's default HEVC MP4 (hev1) has no ffprobe or decode messages" clean_timed $T/ff_hev1_cut.mp4

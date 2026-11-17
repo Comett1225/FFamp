@@ -55,6 +55,7 @@ check "MPEG-2 in MOV and Matroska decodes to the MP4 file's frames" [ "$($A deco
 check "a DivX packed bitstream is unpacked to the times of the same stream in MP4" $FC times $FX/avi_packed.avi $FX/mpeg4_asp.mp4
 check "AVI with B-frames has the times of the same stream in MP4" $FC times $FX/avi_asp_ac3.avi $FX/mpeg4_asp.mp4
 check "the packed bitstream has one packet for each picture" [ "$($A packets $FX/avi_packed.avi | grep -cE '^-?[0-9]')" = 20 ]
+check "an AVI with a dropped (empty) chunk keeps its header frame rate" [ "$($A probe $FX/avi_mpeg4_mp3.avi | grep -c 'frames 20 duration 0.840 fps 25.000 ')" = 1 ]
 refuses_with() { ! $A decode $1 > /dev/null 2> $O/fx_refused.txt && grep -q "$2" $O/fx_refused.txt; }
 if [ -n "$FX_XVID" ]; then
     fx_asp() { [ "$($A decode $FX/$1 | md5)" = "$($A decode $FX/mpeg4_asp.mp4 | md5)" ] && [ "$($A decode $FX/$1 | wc -c)" -eq 576000 ]; }
@@ -191,7 +192,7 @@ for f in caf_s16be.caf caf_s24le.caf caf_f32le.caf caf_aac.caf caf_alac.caf caf_
     check "fields of $f (ffprobe counts sample frames, we count packets)" python3 probe_check.py compare $FX/$f stream0.nb_frames stream0.bit_rate
 done
 for f in avi_mpeg4_mp3.avi avi_asp_ac3.avi avi_mjpeg_pcm.avi avi_mjpeg422_pcm.avi avi_h264_mp3.avi avi_mpeg2_mp2.avi avi_mpeg1_pcm.avi avi_dv_pcm.avi; do
-    check "fields of $f (sound timed by its own frames, not by AVI blocks)" python3 probe_check.py compare $FX/$f bit_rate nb_frames avg_frame_rate stream1.time_base stream1.duration stream1.sample_fmt format.duration stream0.profile stream0.color_range
+    check "fields of $f (sound timed by its own frames, not by AVI blocks; avg_frame_rate is the header rate, also with a dropped frame)" python3 probe_check.py compare $FX/$f bit_rate nb_frames stream1.time_base stream1.duration stream1.sample_fmt format.duration stream0.profile stream0.color_range
 done
 
 if [ -z "${QUICK:-}" ]; then

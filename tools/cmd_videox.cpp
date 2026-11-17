@@ -122,6 +122,9 @@ void testCard(std::vector<uint8_t>& pixels, int width, int height) {
             p[3] = 255;
         }
     }
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            if ((x | y) & 1) memcpy(&pixels[(size_t(y) * size_t(width) + size_t(x)) * 4], &pixels[(size_t(y & ~1) * size_t(width) + size_t(x & ~1)) * 4], 4);
 }
 
 int pixels(const Args& args) {

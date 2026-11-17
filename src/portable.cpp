@@ -27,6 +27,8 @@ FILE* openFile(const std::string& path, const char* mode) {
 
 void removeFile(const std::string& path) { _wremove(wide(path).c_str()); }
 
+bool renameFile(const std::string& from, const std::string& to) { return MoveFileExW(wide(from).c_str(), wide(to).c_str(), MOVEFILE_REPLACE_EXISTING) != 0; }
+
 int64_t fileBytes(const std::string& path) {
     struct _stat64 status;
     return _wstat64(wide(path).c_str(), &status) == 0 ? int64_t(status.st_size) : 0;
@@ -37,6 +39,8 @@ bool utcParts(time_t seconds, struct tm& parts) { return gmtime_s(&parts, &secon
 FILE* openFile(const std::string& path, const char* mode) { return fopen(path.c_str(), mode); }
 
 void removeFile(const std::string& path) { remove(path.c_str()); }
+
+bool renameFile(const std::string& from, const std::string& to) { return rename(from.c_str(), to.c_str()) == 0; }
 
 int64_t fileBytes(const std::string& path) {
     struct stat status;

@@ -82,6 +82,31 @@ list; `Sample.offset` is then free for the reader's use.
 - Sound-only MP4/MOV/M4A files use the sample rate as the movie timescale so lengths are exact to the sample.
 - `AudioFileWriter` rounds float samples the way FFmpeg does on arm64: truncate `x * 2^31` to 32 bits, then 16-bit =
   `(v + 0x8000) >> 16` (clamped), 24-bit = `v >> 8`.
+- Packets reach the file in decode-time order whatever order they are handed in, as FFmpeg's muxer interleaves them: a writer holds
+  them until every track has one waiting (or 10 s of time or 64 MB are waiting, or `finish`) and writes the earliest first. Callers
+  may feed sound ahead of an encoder's delayed pictures; a Matroska cluster then holds the sound of its own time, so sound survives
+  a seek to a cue.
+- `finish` moves the data of `<output>.part` forward in place by the size of the header and renames the file: the drive needs the
+  output's size plus its header, not twice the size.
+- Colour labels: `TrackSpec.color` defaults to BT.709 limited with `known` set, what the encoders write. Copies take `Track.color`,
+  so a source without labels gives a track with no `colr` box and no Matroska `Colour` element (ffprobe then reads the stream's own
+  VUI, as from the source). `colr` is written only when primaries, transfer and matrix are all given, as in FFmpeg; Matroska leaves
+  out each unspecified (2) value.
+- `Writer::tags` takes a file's tags (the copy tools pass `Reader::tags()`). MP4, MOV and M4A write title, artist, album_artist,
+  composer, album, date, comment, genre, copyright, grouping, lyrics and description as iTunes items (`udta/meta/ilst`) and location
+  as `©xyz`; Matroska writes the title into Info and the others as global SimpleTags in capitals, without creation_time and encoder.
+  The MP4 reader reads `©xyz` as location.
+- MP4 also holds MPEG audio (`mp4a`, object type 0x6B, 0x69 at 24 kHz and below), Vorbis (`mp4a`, object type 0xDD, the Xiph-laced
+  headers as decoder specific info; the reader takes them back as `vorb`), AC-3 and E-AC-3 (`ac-3`/`ec-3` with `dac3`/`dec3` made
+  from the first packet as FFmpeg makes them; E-AC-3 packets are not joined into six-block samples) and Motion JPEG (`mp4v`, object
+  type 0x6C). MOV takes MP3 as `.mp3` (sound description version 1), AC-3 and E-AC-3 inside `wave`, Motion JPEG as `jpeg`, and
+  refuses Vorbis and MP2. M4A refuses MP3, MP2, Vorbis and E-AC-3, as FFmpeg's `ipod` muxer does.
+- Matroska also holds MPEG-4 part 2 (`V_MPEG4/ISO/ASP`, the decoder specific info as CodecPrivate), Motion JPEG (`V_MJPEG`), MP2,
+  AC-3 and E-AC-3. Video tracks get a DefaultDuration: the steps between shown frames that lie within 5 % of the median step,
+  averaged, and snapped to a standard rate (23.976 to 120) within 0.2 %. Rotation is written as ProjectionPoseRoll, the negative of
+  `rotation` in (-180, 180], as FFmpeg writes a display matrix, and the reader turns it back into `rotation`.
+- MP4/MOV stretch the last sample of a video track to the end of `length` (`Writer::trim`) when the track would end earlier, so a held
+  last frame keeps its time with encoders that hand out no packet durations (x264, Media Foundation).
 
 ## Presentation delay and file clocks (`Track.delay`)
 
@@ -123,6 +148,8 @@ list; `Sample.offset` is then free for the reader's use.
   them with `skip`.
 - A source frame without colour labels is taken as BT.709 and not converted; labelled frames are converted to 8-bit BT.709 limited
   range before encoding (`Scaler` in `src/mac/tools_scale.cpp`).
+- Stream copies (`trimCopy`, `rewrap`, `stripAudio`, `merge`, `extractAudio` by copy) keep the source's tags, rotation and colour labels
+  (none when the source has none); `merge` takes the tags of the video file.
 
 ## Decoded sound (`AudioDecoder`)
 
@@ -612,8 +639,14 @@ list; `Sample.offset` is then free for the reader's use.
   places its sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore,
   libopus, libvorbis, LAME, libmpeg2 (MPEG-1/2 when no system decoder takes the stream: always on Linux, on Windows for 4:2:2 and
   without Media Foundation), libjpeg-turbo (Linux). libvpx also gives VP9 4:4:0 (profile 1).
+  vo-aacenc swaps any bitrate above 160 kbit/s per channel (or 6 bits per sample per channel, or below 4 kbit/s per channel) for its
+  default of about 64 kbit/s per channel, so `openVoAac` clamps the asked bitrate into that range: mono at 192 to 320 kbit/s is
+  encoded at 160 kbit/s. AudioToolbox on the Mac gets the highest applicable bitrate at or below the asked one (mono stops at 256).
   `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
+- `bgraToI420` (every BGRA and RGBA frame handed to `VideoEncoder::encodeBGRA` off the Mac, and the Mac's software path) takes the
+  chroma of each 2x2 block as the average of its four pixels; a 1-pixel coloured line keeps half its colour, as swscale's
+  `rgb0` to `yuv420p` gives it (within 16 levels on the fixes suite's test frame, mean under 2).
 - Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media
   Foundation after a flush, the H.264 decoder's frame threads) need no drain inside a stream. `SoftDecoder::drainKeepsState` is false for
   decoders whose drain ends the stream (the H.264 decoder, Media Foundation, libmpeg2): after such a drain the next jump starts again at a key frame.

@@ -103,7 +103,7 @@ struct TrackSpec {
     int channels = 0;
     uint32_t configType = 0;
     std::vector<uint8_t> config;
-    Color color;
+    Color color{true};
     int64_t skip = 0;
     int64_t length = 0;
     int bits = 0;
@@ -121,6 +121,7 @@ public:
     virtual bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) = 0;
     virtual bool finish(std::string* error = nullptr) = 0;
     virtual void trim(int, int64_t, int64_t) {}
+    virtual void tags(const std::map<std::string, std::string>&) {}
 };
 
 enum class Mp4Brand { Mp4, QuickTime, M4a };
@@ -135,6 +136,7 @@ public:
     void configure(int track, uint32_t type, const std::vector<uint8_t>& config) override;
     bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) override;
     bool finish(std::string* error = nullptr) override;
+    void tags(const std::map<std::string, std::string>& values) override;
 
 private:
     Mp4Writer();
@@ -150,6 +152,7 @@ public:
     void configure(int track, uint32_t type, const std::vector<uint8_t>& config) override;
     bool write(int track, const uint8_t* data, size_t size, int64_t pts, int64_t dts, uint32_t duration, bool sync) override;
     bool finish(std::string* error = nullptr) override;
+    void tags(const std::map<std::string, std::string>& values) override;
     void trim(int track, int64_t skip, int64_t length) override;
 
 private:

@@ -96,6 +96,18 @@ std::unique_ptr<AacEncoder> AacEncoder::open(int rate, int channels, int bitrate
     UInt32 control = kAudioCodecBitRateControlMode_Constant;
     AudioConverterSetProperty(a.converter, kAudioCodecPropertyBitRateControlMode, sizeof(control), &control);
     UInt32 rateValue = UInt32(bitrate);
+    UInt32 listSize = 0;
+    if (AudioConverterGetPropertyInfo(a.converter, kAudioConverterApplicableEncodeBitRates, &listSize, nullptr) == noErr && listSize >= sizeof(AudioValueRange)) {
+        std::vector<AudioValueRange> rates(listSize / sizeof(AudioValueRange));
+        if (AudioConverterGetProperty(a.converter, kAudioConverterApplicableEncodeBitRates, &listSize, rates.data()) == noErr) {
+            double best = 0, least = 0;
+            for (const AudioValueRange& range : rates) {
+                if (range.mMinimum <= bitrate) best = std::max(best, std::min<double>(range.mMaximum, bitrate));
+                least = least ? std::min(least, range.mMinimum) : range.mMinimum;
+            }
+            if (best > 0 || least > 0) rateValue = UInt32(best > 0 ? best : least);
+        }
+    }
     AudioConverterSetProperty(a.converter, kAudioConverterEncodeBitRate, sizeof(rateValue), &rateValue);
     UInt32 largest = 0;
     UInt32 size = sizeof(largest);

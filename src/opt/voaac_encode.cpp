@@ -1,5 +1,6 @@
 #include "audio_codec.h"
 #ifdef ABSENT_VOAAC
+#include <algorithm>
 #include <vo-aacenc/cmnMemory.h>
 #include <vo-aacenc/voAAC.h>
 
@@ -91,7 +92,7 @@ std::unique_ptr<AacCore> openVoAac(int rate, int channels, int bitrate, std::str
     }
     AACENC_PARAM settings = {};
     settings.sampleRate = rate;
-    settings.bitRate = bitrate;
+    settings.bitRate = bitrate > 0 ? std::clamp(bitrate, 4000 * channels, std::min(160000, rate * 6) * channels) : 0;
     settings.nChannels = short(channels);
     settings.adtsUsed = 0;
     if (encoder->api.SetParam(encoder->handle, VO_PID_AAC_ENCPARAM, &settings) != VO_ERR_NONE) return fail("the AAC encoder refused these settings");

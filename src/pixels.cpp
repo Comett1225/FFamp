@@ -370,10 +370,13 @@ void bgraToI420(const uint8_t* pixels, size_t stride, int width, int height, uin
                 for (int x = 0; x < width; ++x, line += 4) luma[x] = uint8_t((11966 * line[ri] + 40254 * line[1] + 4064 * line[bi] + (16 << 16) + 32768) >> 16);
             }
             const uint8_t* top = pixels + size_t(y0) * stride;
-            for (int cx = 0; cx < cw; ++cx, top += 8) {
-                const int r = top[ri], g = top[1], b = top[bi];
-                uOut[size_t(cy) * size_t(cw) + size_t(cx)] = uint8_t((-6596 * r - 22188 * g + 28784 * b + (128 << 16) + 32768) >> 16);
-                vOut[size_t(cy) * size_t(cw) + size_t(cx)] = uint8_t((28784 * r - 26145 * g - 2639 * b + (128 << 16) + 32768) >> 16);
+            const uint8_t* bottom = pixels + size_t(y1) * stride;
+            for (int cx = 0; cx < cw; ++cx) {
+                const size_t left = size_t(cx) * 8, right = size_t(std::min(2 * cx + 1, width - 1)) * 4;
+                auto sum = [&](int c) { return top[left + c] + top[right + c] + bottom[left + c] + bottom[right + c]; };
+                const int r = sum(ri), g = sum(1), b = sum(bi);
+                uOut[size_t(cy) * size_t(cw) + size_t(cx)] = uint8_t((-6596 * r - 22188 * g + 28784 * b + (128 << 18) + (1 << 17)) >> 18);
+                vOut[size_t(cy) * size_t(cw) + size_t(cx)] = uint8_t((28784 * r - 26145 * g - 2639 * b + (128 << 18) + (1 << 17)) >> 18);
             }
         }
     });

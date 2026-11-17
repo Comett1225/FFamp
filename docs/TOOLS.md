@@ -73,6 +73,9 @@ Not done: more than two channels in re-encoded sound; a choice of scaling filter
   ours leaves them out.
 - A file with sound only can be trimmed (the app's command fails on it). `--end` at or before `--start` means "to the end".
 - Every one of our video and sound packets is among FFmpeg's for the same call (tested).
+- MP3, AC-3, E-AC-3, Vorbis and Motion JPEG copy into MP4 as with the app's command (and AC-3, E-AC-3, MP2, MPEG-4 part 2 and Motion
+  JPEG into Matroska). Title, location and the other tags, rotation and colour labels are copied; a video without colour labels
+  stays without them, as in FFmpeg's copy.
 
 ## Extract Audio (`absent::extractAudio`)
 

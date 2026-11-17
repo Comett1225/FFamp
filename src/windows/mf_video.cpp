@@ -539,7 +539,7 @@ struct MfVideoEncoder : SoftEncoder {
 
 }
 
-std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::vector<uint8_t>& config, const StreamShape&, std::string* error) {
+std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::vector<uint8_t>& config, const StreamShape& shape, std::string* error) {
     const bool hevc = track.configType == fourcc("hvcC");
     const bool mpeg = track.codec == fourcc("mp1v") || track.codec == fourcc("mp2v");
     if (!hevc && !mpeg && track.configType != fourcc("avcC")) return nullptr;
@@ -550,6 +550,19 @@ std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::ve
     const VideoInfo info = mpeg ? VideoInfo() : videoInfo(track.configType, config);
     std::string why;
     if (track.width < 64 || track.height < 64) return nullptr;
+    if (mpeg && (shape.chromaX != 1 || shape.chromaY != 1)) {
+        if (error) *error = "Media Foundation decodes only 4:2:0 MPEG-1 and MPEG-2 video";
+        return nullptr;
+    }
+    if (hevc) {
+        const bool main = (info.profile >= 1 && info.profile <= 3) || (!info.profile && (info.compatibilityFlags & 0x70000000u));
+        const int64_t largest = 35651584, side = 16888;
+        if (!info.valid || !main || info.chroma != 1 || (info.bitDepth != 8 && info.bitDepth != 10) || info.bitDepthChroma != info.bitDepth ||
+            int64_t(track.width) * track.height > largest || track.width > side || track.height > side) {
+            if (error) *error = "Media Foundation decodes only HEVC Main and Main 10 at 4:2:0 within level 6.2";
+            return nullptr;
+        }
+    }
     for (bool useGpu : {d3dEnabled(), false}) {
         auto decoder = std::make_unique<MfVideoDecoder>();
         decoder->hevc = hevc;

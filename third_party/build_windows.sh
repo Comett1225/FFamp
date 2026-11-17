@@ -135,6 +135,15 @@ fetch https://download.videolan.org/pub/videolan/x265/x265_4.2.tar.gz 40b1ea0453
 SOURCE=source with_cmake -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_ASSEMBLY=ON -DHIGH_BIT_DEPTH=OFF -DSTATIC_LINK_CRT=OFF -DENABLE_HDR10_PLUS=OFF
 fi
 
+if step mpeg2; then
+fetch https://download.videolan.org/contrib/libmpeg2/libmpeg2-0.5.1.tar.gz dee22e893cb5fc2b2b6ebd60b88478ab8556cb3b93f9a0d7ce8f3b61851871d4 mpeg2 libmpeg2-0.5.1.tar.gz
+printf '#define inline __inline\n#define restrict __restrict\n' > include/config.h
+plain_library mpeg2 libmpeg2/alloc.c libmpeg2/cpu_accel.c libmpeg2/cpu_state.c libmpeg2/decode.c libmpeg2/header.c libmpeg2/idct.c libmpeg2/motion_comp.c libmpeg2/slice.c
+with_cmake "-DINCLUDES=include"
+mkdir -p "$PREFIX/include/mpeg2dec"
+cp include/mpeg2.h "$PREFIX/include/mpeg2dec/"
+fi
+
 export PATH="$(cygpath -u "$VCToolsInstallDir")bin/Hostx64/x64:$(cygpath -u "$WORK")/bin:$PATH"
 if step make; then
 fetch https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3 make make-4.4.1.tar.gz

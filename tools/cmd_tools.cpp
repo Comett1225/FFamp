@@ -123,7 +123,7 @@ void describe(const GifInfo& info) {
 
 int gifInfo(const Args& args) {
     if (args.plain.empty()) return fail("gif-info needs <in.gif> [--frames out.bgra]");
-    FILE* out = args.has("frames") ? fopen(args.get("frames").c_str(), "wb") : nullptr;
+    FILE* out = args.has("frames") ? openFile(args.get("frames").c_str(), "wb") : nullptr;
     if (args.has("frames") && !out) return fail("cannot create the frame file");
     GifInfo info;
     std::string error;

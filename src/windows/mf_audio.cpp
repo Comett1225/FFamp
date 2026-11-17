@@ -30,7 +30,13 @@ struct MfAudio : PacketDecoder {
             in->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
             in->SetBlob(MF_MT_USER_DATA, userData.data(), UINT32(userData.size()));
         }
-        if (FAILED(transform->SetInputType(0, in.Get(), 0))) return false;
+        if (FAILED(transform->SetInputType(0, in.Get(), 0)) || !pickOutput()) return false;
+        transform->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+        transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+        return true;
+    }
+
+    bool pickOutput() {
         for (int pass = 0; pass < 2; ++pass) {
             for (DWORD i = 0;; ++i) {
                 ComPtr<IMFMediaType> out;
@@ -45,8 +51,6 @@ struct MfAudio : PacketDecoder {
                 if (SUCCEEDED(out->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &value))) rate = int(value);
                 if (SUCCEEDED(out->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &value))) channels = int(value);
                 floats = pass == 0;
-                transform->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
-                transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
                 return true;
             }
         }
@@ -62,6 +66,7 @@ struct MfAudio : PacketDecoder {
         MFT_OUTPUT_STREAM_INFO info{};
         transform->GetOutputStreamInfo(0, &info);
         const bool provides = info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES);
+        bool changed = false;
         for (;;) {
             MFT_OUTPUT_DATA_BUFFER output{};
             ComPtr<IMFSample> own;
@@ -74,6 +79,10 @@ struct MfAudio : PacketDecoder {
             DWORD status = 0;
             const HRESULT result = transform->ProcessOutput(0, 1, &output, &status);
             if (output.pEvents) output.pEvents->Release();
+            if (result == MF_E_TRANSFORM_STREAM_CHANGE && !changed && pickOutput()) {
+                changed = true;
+                continue;
+            }
             if (FAILED(result)) return;
             ComPtr<IMFMediaBuffer> buffer;
             BYTE* data = nullptr;
@@ -178,9 +187,10 @@ struct MfAac : AacCore {
 
 }
 
-std::unique_ptr<PacketDecoder> openPlatformAudio(const Track& track, const std::vector<uint8_t>&, std::string* error) {
+std::unique_ptr<PacketDecoder> openPlatformAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error) {
     if (!mediaFoundation() || std::getenv("FFAMP_NO_SYSTEM_AUDIO")) return nullptr;
     auto decoder = std::make_unique<MfAudio>();
+    AacConfig described;
     if (track.codec == fourcc("mp4a")) {
         std::vector<uint8_t> specific;
         if (track.configType == fourcc("ASC ")) specific = track.config;
@@ -188,16 +198,13 @@ std::unique_ptr<PacketDecoder> openPlatformAudio(const Track& track, const std::
             ElementaryStream stream;
             if (parseElementaryStream(View{track.config.data(), track.config.size()}, stream) && stream.specific.p) specific.assign(stream.specific.p, stream.specific.p + stream.specific.n);
         }
-        AacConfig described;
-        if (specific.empty() || !parseAacConfig(View{specific.data(), specific.size()}, described)) return nullptr;
+        if (specific.empty() || !parseAacConfig(View{specific.data(), specific.size()}, described) || !described.channelConfiguration) return nullptr;
         decoder->input = MFAudioFormat_AAC;
         decoder->sourceRate = described.rate;
         decoder->sourceChannels = described.channels;
         decoder->userData = {0, 0, 0xFE, 0, 0, 0, 0, 0, 0, 0, 0, 0};
         decoder->userData.insert(decoder->userData.end(), specific.begin(), specific.end());
-        decoder->packetFrames = described.frameLength * (described.outputRate > described.rate ? 2 : 1);
         decoder->prerollPackets = 4;
-        decoder->lead = decoder->packetFrames;
     } else {
         return nullptr;
     }
@@ -206,6 +213,15 @@ std::unique_ptr<PacketDecoder> openPlatformAudio(const Track& track, const std::
         if (error) *error = "the system audio decoder refused this stream";
         return nullptr;
     }
+    if (decoder->rate > decoder->sourceRate) {
+        const int guessed = decoder->rate;
+        std::vector<float> probe;
+        decoder->feed(firstPacket, probe);
+        if (decoder->rate != guessed) return nullptr;
+        decoder->reset();
+    }
+    decoder->packetFrames = described.frameLength * (decoder->rate > decoder->sourceRate ? 2 : 1);
+    decoder->lead = decoder->packetFrames;
     return decoder;
 }
 

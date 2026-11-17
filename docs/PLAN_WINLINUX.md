@@ -33,7 +33,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | Thumbnail (`still`) | ffmpeg decode, scale, PNG | `FrameReader` over the decoders below | same |
 | Sound for the mix and viewer (`pcm`, `playback`) | ffmpeg decode + aresample | `PcmReader` (own resampler) over the audio decoders below | same |
 | I420 frames (`yuv`), RGBA frames (`play`, `videoSource`, `steadyFrames`) | ffmpeg rawvideo pipes | `FrameReader` (own scaler) | same |
-| Preview decoder (`video.cpp`, D3D11VA or VA-API, copied to memory) | libav linked | `VideoDecoder`: FFamp's own H.264 decoder first; Media Foundation with DXVA for HEVC and MPEG-2, and for H.264 the own decoder cannot open; else software | `VideoDecoder`: VA-API for H.264, HEVC, VP9 and AV1 where a driver loads (round 2), else software libraries |
+| Preview decoder (`video.cpp`, D3D11VA or VA-API, copied to memory) | libav linked | `VideoDecoder`: FFamp's own H.264 decoder first; Media Foundation with DXVA for HEVC Main and Main 10 at 4:2:0, 4:2:0 MPEG-2, and H.264 the own decoder cannot open; else software | `VideoDecoder`: VA-API for H.264, HEVC, VP9 and AV1 where a driver loads (round 2), else software libraries |
 | Encoder list and trial (`encoders`, `encoderWorks`) | `ffmpeg -encoders`, 2-frame trial | `encoders()`, `encoderWorks()` | same |
 | Video export (H.264, HEVC, AV1, VP9, APV; AAC, Opus; MP4, MOV, WebM, MKV) | `h264_nvenc/qsv/amf/mf`, `libx264`, `libx265`, `libsvtav1`, `libvpx-vp9`, `liboapv`, `aac_mf`, `aac`, `libopus` | Media Foundation H.264/HEVC (hardware encoder MFT first, then Microsoft's software H.264 MFT), x264 / x265 when Media Foundation cannot; SVT-AV1, libvpx, liboapv, libopus; AAC: Media Foundation (96 to 192 kbit/s), else vo-aacenc | x264, x265, SVT-AV1, libvpx, liboapv, libopus, vo-aacenc (VA-API encode later) |
 | Audio export (WAV 16/24, FLAC, M4A, Ogg Opus, MP3) | pcm, flac, aac, libopus, libmp3lame | own WAV and FLAC, AAC as above, libopus, LAME | own, vo-aacenc, libopus, LAME |
@@ -50,19 +50,19 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | Codec | Mac today | Windows | Linux | Licence of the added part |
 |---|---|---|---|---|
 | H.264 | VideoToolbox | FFamp's own decoder (FFmpeg's, ported) first (owner decision 2026-11-16); Media Foundation (DXVA when the GPU has it) only for streams the own decoder cannot open | VA-API for 8-bit 4:2:0 (round 2); FFamp's own decoder based on FFmpeg's, with its assembly and frame threads, otherwise | own, LGPL-derived (NOTICE) |
-| HEVC | VideoToolbox | Media Foundation when the HEVC Video Extensions are installed (DXVA); libde265 otherwise | VA-API (round 2); libde265 otherwise | LGPL-3.0-or-later |
+| HEVC | VideoToolbox | Media Foundation for Main and Main 10 at 4:2:0 up to level 6.2 when the HEVC Video Extensions are installed (DXVA); libde265 for the rest (4:2:2, 4:4:4, 12-bit, larger pictures) and otherwise | VA-API (round 2); libde265 otherwise | LGPL-3.0-or-later |
 | VP8, VP9 | libvpx / system | libvpx | VA-API for VP9 (round 2); libvpx | BSD-3-Clause (already in FFamp) |
 | AV1 | dav1d / system | dav1d | VA-API (round 2); dav1d | BSD-2-Clause (already in FFamp) |
 | APV | liboapv | liboapv | liboapv | BSD-3-Clause (already in FFamp) |
 | VC-1, WMV7/8, MS-MPEG4 | own | own | own | own |
 | MPEG-4 part 2 (DivX, Xvid) | xvidcore | xvidcore | xvidcore | GPL-2.0-or-later (already in FFamp) |
 | ProRes | VideoToolbox | own decoder based on FFmpeg's (round 2) | same | own, LGPL-derived (NOTICE) |
-| MPEG-1, MPEG-2 | VideoToolbox | Media Foundation MPEG-2 decoder (libmpeg2 for Windows without Media Foundation not built yet) | libmpeg2 0.5.1 (round 2) | GPL-2.0-or-later |
+| MPEG-1, MPEG-2 | VideoToolbox | Media Foundation MPEG-2 decoder for 4:2:0; libmpeg2 0.5.1 (C code) for 4:2:2 and without Media Foundation | libmpeg2 0.5.1 (round 2) | GPL-2.0-or-later |
 | Motion JPEG, JPEG stills | VideoToolbox / ImageIO | WIC | libjpeg-turbo 3.2.1, the libjpeg API (round 2) | IJG (its SIMD code: zlib) |
 | DV | VideoToolbox | own decoder based on FFmpeg's (round 2) | same | own, LGPL-derived |
 | H.263 | VideoToolbox | own decoder on the H.263 core FFamp has for WMV and MS-MPEG4, based on FFmpeg's (round 2) | same | own, LGPL-derived (NOTICE) |
 | Lossless video and the rest of the gaps rounds | own | own | own | own |
-| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
+| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing, for program config elements, 6.1, 7.1 and LC at up to 24 kHz without SBR | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
 | MP3, MP2, MP1 | AudioToolbox | mpg123 (Media Foundation's MP3 decoder was tried: it places the sound 624 frames later than FFmpeg's) | mpg123 | LGPL-2.1-or-later (already in the Mac dependency list) |
 | Opus, Vorbis | libopus, libvorbis | same | same | BSD-3-Clause (already in FFamp) |
 | FLAC | AudioToolbox | own decoder written from RFC 9639 (round 1) | same | own |
@@ -92,7 +92,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | mpg123 | 0.5 MB | 0.7 MB | MP1/MP2/MP3 decode on both systems |
 | x264 (8-bit) | 1.3 MB | 2.0 MB | Linux H.264 encode, Windows fallback |
 | x265 (8-bit) | 7.9 MB | 4.2 MB | Linux HEVC encode, Windows fallback |
-| libmpeg2 | 0.2 MB | not built (Media Foundation) | Linux MPEG-1/2 decode |
+| libmpeg2 | 0.2 MB | 0.14 MB (C code only) | Linux MPEG-1/2 decode, Windows 4:2:2 and fallback |
 | libjpeg-turbo | 1.2 MB | not built (WIC) | Linux Motion JPEG and JPEG decode |
 | libvpx, dav1d, SVT-AV1, libopus, libvorbis, libogg, LAME, liboapv, xvidcore | 22 MB together | 14 MB together | all systems |
 
@@ -104,7 +104,7 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 
 | Missing part | Effect |
 |---|---|
-| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: FFamp's H.264 decoder, libde265, FFamp's own AAC decoder, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. MPEG-1/2 does not decode there until libmpeg2 is built for Windows. |
+| Windows N edition without the Media Feature Pack (no Media Foundation) | everything takes the software path: FFamp's H.264 decoder, libde265, libmpeg2, FFamp's own AAC decoder, mpg123, x264, x265, vo-aacenc. WIC is part of every edition. |
 | HEVC Video Extensions not installed | HEVC decodes with libde265; HEVC export uses the GPU driver's encoder MFT when there is one, else x265 |
 | No GPU video decoder (old GPU, remote desktop, virtual machine) | nothing changes for H.264 (FFamp's own decoder on the processor); HEVC through libde265 |
 | GPU encoder MFT refuses the size or is busy | Microsoft's software H.264 MFT, then x264 (the encoder trial picks it as the app does today) |
@@ -180,5 +180,4 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
 3. FFmpeg's FATE h264 conformance set against FFamp's own decoder on Windows and Linux, as a suite that runs when the folder is there.
 4. FFamp links next to FFmpeg in one library (no `av_`/`ff_` names), and the encoder list names the Windows and Linux encoders.
 
-Later rounds: capture on both systems, NVDEC, DXVA zero-copy into the app's D3D11 path, libmpeg2 for Windows without Media
-Foundation, then the app wiring (round 2 of the app work).
+Later rounds: capture on both systems, NVDEC, DXVA zero-copy into the app's D3D11 path, then the app wiring (round 2 of the app work).

@@ -7,6 +7,7 @@ struct AacConfig {
     int objectType = 0;
     int rate = 0;
     int channels = 0;
+    int channelConfiguration = 0;
     int outputRate = 0;
     int outputChannels = 0;
     int frameLength = 1024;

@@ -466,6 +466,15 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.chromaY = codec == fourcc("dvcp") ? 1 : 0;
     } else if (part2 || jpeg || mpeg) {
         d.shape.chromaY = 1;
+        std::vector<uint8_t> first(mpeg ? track.samples[0].size : 0);
+        if (!first.empty() && !file.read(track, 0, first.data())) first.clear();
+        for (size_t i = 0; i + 6 <= first.size(); ++i) {
+            if (first[i] || first[i + 1] || first[i + 2] != 1 || first[i + 3] != 0xB5 || (first[i + 4] >> 4) != 1) continue;
+            const int chroma = (first[i + 5] >> 1) & 3;
+            if (chroma >= 2) d.shape.chromaY = 0;
+            if (chroma == 3) d.shape.chromaX = 0;
+            break;
+        }
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
         config.clear();
     }

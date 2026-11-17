@@ -131,8 +131,8 @@ int pixels(const Args& args) {
     testCard(source, width, height);
     const size_t cw = size_t((width + 1) / 2), ch = size_t((height + 1) / 2), luma = size_t(width) * size_t(height);
     std::vector<uint8_t> ours(luma + 2 * cw * ch);
-    FILE* in = args.has("video") ? fopen(args.get("video").c_str(), "rb") : nullptr;
-    FILE* out = args.has("out") ? fopen(args.get("out").c_str(), "wb") : nullptr;
+    FILE* in = args.has("video") ? openFile(args.get("video").c_str(), "rb") : nullptr;
+    FILE* out = args.has("out") ? openFile(args.get("out").c_str(), "wb") : nullptr;
     if ((args.has("video") && !in) || (args.has("out") && !out)) return fail("cannot open the files");
     for (long n = 0;; ++n) {
         if (in && fread(source.data(), 1, source.size(), in) != source.size()) {
@@ -192,7 +192,7 @@ int encodeSurface(const Args& args) {
     if (args.plain.empty() || !args.has("video") || !args.has("size")) return fail("encode-surface needs an output file, --video raw.bgra and --size WxH");
     int width = 0, height = 0;
     if (sscanf(args.get("size").c_str(), "%dx%d", &width, &height) != 2 || width <= 0 || height <= 0 || width > 16384 || height > 16384) return fail("bad --size");
-    FILE* video = fopen(args.get("video").c_str(), "rb");
+    FILE* video = openFile(args.get("video").c_str(), "rb");
     if (!video) return fail("cannot open the raw video");
     uint32_t codec = videoCodec(args);
     if (!codec) return fail("--codec is h264, hevc, av1, vp9 or apv");
@@ -268,7 +268,7 @@ Register encodeSurfaceCommand("encode-surface", encodeSurface);
 std::unique_ptr<Writer> openOutput(const std::string& path, std::string* error) {
     if (!endsWith(path, ".ivf")) return Writer::open(path, error);
     std::unique_ptr<IvfWriter> writer(new IvfWriter);
-    writer->file = fopen(path.c_str(), "wb");
+    writer->file = openFile(path.c_str(), "wb");
     if (!writer->file) {
         if (error) *error = "cannot create the output file";
         return nullptr;

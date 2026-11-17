@@ -53,7 +53,7 @@ int framesOut(const Args& args) {
             list.push_back(index);
         }
     }
-    FILE* out = args.has("out") ? fopen(args.get("out").c_str(), "wb") : stdout;
+    FILE* out = args.has("out") ? openFile(args.get("out").c_str(), "wb") : stdout;
     if (!out) return fail("cannot write " + args.get("out"));
     const bool paced = args.has("realtime"), loop = args.has("loop");
     std::vector<uint8_t> pixels;
@@ -98,7 +98,7 @@ int framesIn(const Args& args) {
     spec.audioStart = real(args, "audio-start", 0);
     spec.audioLength = real(args, "audio-length", -1);
     spec.audioBitrate = int(args.number("audio-bitrate", 160000));
-    FILE* in = args.has("in") ? fopen(args.get("in").c_str(), "rb") : stdin;
+    FILE* in = args.has("in") ? openFile(args.get("in").c_str(), "rb") : stdin;
     if (!in) return fail("cannot open " + args.get("in"));
     std::string error;
     auto writer = FrameWriter::open(args.plain[0], spec, &error);
@@ -114,7 +114,7 @@ int framesIn(const Args& args) {
         }
         if (got != pixels.size()) {
             if (got) {
-                remove(args.plain[0].c_str());
+                removeFile(args.plain[0]);
                 return fail("the last frame is incomplete");
             }
             break;
@@ -123,7 +123,7 @@ int framesIn(const Args& args) {
     }
     if (in != stdin) fclose(in);
     if (!writer->finish(&error)) {
-        remove(args.plain[0].c_str());
+        removeFile(args.plain[0]);
         return fail(error);
     }
     const double spent = now() - began;
@@ -135,7 +135,7 @@ int speech(const Args& args) {
     if (args.plain.size() < 2) return fail("speech needs <in> <out.wav> [--rate R] [--speed s] [--pitch p]");
     std::string error;
     if (!convertSpeech(args.plain[0], args.plain[1], int(args.number("rate", 44100)), real(args, "speed", 1), real(args, "pitch", 1), &error)) {
-        remove(args.plain[1].c_str());
+        removeFile(args.plain[1]);
         return fail(error);
     }
     return 0;

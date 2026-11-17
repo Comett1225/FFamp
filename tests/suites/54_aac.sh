@@ -1,9 +1,30 @@
-echo "== AAC: FFamp's own decoder (LC, HE-AAC, HE-AAC v2) against ffmpeg's: LC at 135 dB, HE-AAC as close as ffmpeg's own C code is to its SIMD code"
+echo "== AAC: the default decoder (Media Foundation on Windows) on implicit HE-AAC, low rates and program config elements; FFamp's own decoder (LC, HE-AAC, HE-AAC v2) against ffmpeg's: LC at 135 dB, HE-AAC as close as ffmpeg's own C code is to its SIMD code"
 if on_mac; then skip "AAC against ffmpeg at 135 dB (the Mac decodes AAC with AudioToolbox)"; return 0; fi
 have_ffmpeg || { skip "AAC against ffmpeg's decoder"; return 0; }
+FAA=fixtures/aac
+AS=$O/aacsys
+rm -rf $AS
+mkdir -p $AS
+for f in he_stereo_48k he_v2_48k; do
+    $F -i $FAA/$f.m4a -c copy $AS/$f.ts
+    $F -i $FAA/$f.m4a -c copy -f adts $AS/${f}_adts.aac
+done
+for rate in 16000 22050; do python3 audio.py signal $rate 2 2 $AS/s$rate.wav; done
+$F -i $AS/s22050.wav -c:a aac -b:a 64k $AS/lc_22k.aac
+$F -i $AS/s16000.wav -c:a aac -b:a 64k $AS/lc_16k.m4a
+$F -i $AS/lc_22k.aac -c copy $AS/lc_22k.ts
+for f in $FAA/he_stereo_44k.aac $FAA/he_v2_44k.aac $AS/he_stereo_48k.ts $AS/he_v2_48k.ts $AS/he_stereo_48k_adts.aac $AS/he_v2_48k_adts.aac $AS/lc_22k.aac $AS/lc_22k.ts $AS/lc_16k.m4a; do
+    check "$(basename $f) through the default AAC decoder (Media Foundation on Windows) as 48 kHz stereo against ffmpeg: whole length, no offset" python3 audio.py reader $f 48000 2 f32le 60 2 0
+done
+for entry in 2.1:3 "3.0(back):3" quad:4 hexagonal:6; do
+    IFS=: read layout n <<< "$entry"
+    python3 audio.py signal 48000 $n 1 $AS/n.wav
+    $F -i $AS/n.wav -af "channelmap=channel_layout=$layout" -c:a aac -aac_pce 1 -b:a 256k $AS/pce.m4a
+    check "aac $layout with a program config element through the default AAC decoder mixes to stereo as ffmpeg's -ac 2" python3 audio.py reader $AS/pce.m4a 48000 2 f32le 60 2 0
+done
+rm -rf $AS
 export FFAMP_NO_SYSTEM_AUDIO=1
 AX=$O/aacx
-FAA=fixtures/aac
 rm -rf $AX
 mkdir -p $AX/fz
 for f in $FAA/*.m4a $FAA/*.aac; do

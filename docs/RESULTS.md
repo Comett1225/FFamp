@@ -1454,3 +1454,47 @@ of the 720p and 1080p clips bit-exact through Media Foundation, so the fallback 
 against ffmpeg and the encoder names. What still fails is what failed in the merged run: `rd_vorbis.ogg`'s trim (both), the WMA 2
 600 s speed checks and the 10-bit HEVC whole-program rate (Windows), `wv_speed_v3.avi`'s one-thread speed (both), and on Linux the
 100-frame AAC file (vo-aacenc's priming), the RGBA frame rates through WSL's d3d12 copy-out and dav1d's 400 fps.
+
+# Windows platform fixes: what Media Foundation cannot decode, HE-AAC timing, paths and open files
+
+Six findings of the platform review, on branch `fix-platform-517`. Same PC and judge as the follow-up round (Windows 11 and Ubuntu 24.04
+under WSL, the BtbN FFmpeg 9.0.2 the app bundles); the Mac runs the suites its code reaches.
+
+| Finding (Windows) | Before | Now |
+|---|---|---|
+| HEVC 4:2:2 (8 and 10-bit) and 4:4:4 | Microsoft's decoder opens them and waits forever in its drain (no processor time); without the GPU, no picture | libde265, every frame bit-exact against ffmpeg |
+| HEVC 12-bit 4:2:0, 8192 x 8192 | open on Media Foundation, then `frame 0 did not decode` | libde265, bit-exact; 8192 x 4320 (within level 6.2) stays on the GPU, bit-exact |
+| HE-AAC in transport streams (implicit SBR) | 38,912 of 77,824 frames: the second half missing | 77,824 frames, 127 to 131 dB against ffmpeg at no offset |
+| HE-AAC in ADTS `.aac` | right length, 2,048 frames late, the last 46 ms cut | no offset, 101 to 131 dB |
+| LC AAC at 16 and 22.05 kHz (not in the finding, same cause) | silence: Media Foundation guesses SBR, opens at twice the rate, then changes its output format and FFamp stopped reading | FFamp's own decoder, 98 dB against ffmpeg at no offset |
+| AAC with a program config element (2.1, 3.0(back), quad, hexagonal) | 2.1 silent; the others in Media Foundation's element order, mixed by count | FFamp's own decoder: stereo mix 138 to 139 dB against `ffmpeg -ac 2` |
+| MPEG-2 4:2:2 (plain, XDCAM HD422-style 1080i, IMX) | `frame 0 did not decode` | libmpeg2 (C code, built for Windows now): 65.5 to 66.1 dB against ffmpeg's IDCT |
+| MPEG-1/2 without Media Foundation (N editions) | `not decoded on this system yet` | libmpeg2, 65.5 to 66.2 dB |
+| 1,000 open readers in one process | the 510th fails (`cannot open file`), then every `fopen` of the process | all 1,000 open, files still written |
+| `ffamp` with paths in Café, Привет, 動画 | `cannot open file` for every command | probe, extract-audio (copy to MP3 through a renamed `.part` file, and to M4A) work |
+
+How: `openPlatformVideo` on Windows takes HEVC only as Main or Main 10 at 4:2:0 within level 6.2 (the check VA-API already made) and
+MPEG-1/2 only at 4:2:0 (the chroma format of the first sample's sequence extension); everything else falls to the software decoders,
+as on Linux. Media Foundation AAC refuses channel configuration 0, sets its frames per packet and delay from its own output rate, handles
+a format change, and gives the stream to FFamp's own decoder when its implicit-SBR guess proves wrong on the first packet. `openFile` raises
+the C runtime's stream limit to 8,192; the command rebuilds its arguments from `GetCommandLineW` as UTF-8 and opens, removes and renames
+files through the UTF-8 helpers. libmpeg2 0.5.1 is built by `build_windows.sh` with MSVC (C code; 135,684 bytes).
+
+New checks: `54_aac` runs the HE-AAC, low-rate and program config element files through the default decoder (Media Foundation on
+Windows) before it turns the system decoder off; `60_videox` checks HEVC 4:2:2, 4:4:4, 12-bit and 8192 x 8192 on libde265 bit-exact,
+4:2:2 MPEG-2 on libmpeg2 and MPEG-1/2 without Media Foundation, on Windows and Linux, each open under a 60 s limit; `fixes: many-readers`
+(Windows) keeps 1,000 readers open, and the fixes suite opens, probes and extracts from folders and files named Café, Привет and 動画.
+
+Suites the change reaches (pass / fail / skip):
+
+| Suite | Windows (clang-cl) | Linux (WSL, gcc 13) | Mac |
+|---|---|---|---|
+| `88_fixes` | 53 / 0 / 0 | 51 / 1 / 0 | 51 / 0 / 1 |
+| `54_aac` | 98 / 0 / 0 | 98 / 0 / 0 | skipped (AudioToolbox) |
+| `60_videox` | 236 / 0 / 7 | 316 / 0 / 6 | not reached |
+| `45_formats` | 341 / 0 / 30 | 353 / 0 / 18 | not reached |
+| `20_audio` | 163 / 0 / 2 | 163 / 0 / 2 | not reached |
+| `70_tools` | 127 / 0 / 21 | 130 / 0 / 20 | 150 / 0 / 0 |
+| `50_writers` | 369 / 0 / 67 | 369 / 0 / 67 | 436 / 0 / 0 |
+
+The one failure is the Linux 100-frame AAC file of the earlier rounds (vo-aacenc's priming), unchanged.

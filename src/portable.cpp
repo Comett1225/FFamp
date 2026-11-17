@@ -21,11 +21,15 @@ std::wstring wide(const std::string& text) {
 }
 
 FILE* openFile(const std::string& path, const char* mode) {
+    static const int streams = _getmaxstdio() < 8192 ? _setmaxstdio(8192) : _getmaxstdio();
+    (void)streams;
     const std::wstring how = wide(mode);
     return _wfopen(wide(path).c_str(), how.c_str());
 }
 
 void removeFile(const std::string& path) { _wremove(wide(path).c_str()); }
+
+bool renameFile(const std::string& from, const std::string& to) { return _wrename(wide(from).c_str(), wide(to).c_str()) == 0; }
 
 int64_t fileBytes(const std::string& path) {
     struct _stat64 status;
@@ -37,6 +41,8 @@ bool utcParts(time_t seconds, struct tm& parts) { return gmtime_s(&parts, &secon
 FILE* openFile(const std::string& path, const char* mode) { return fopen(path.c_str(), mode); }
 
 void removeFile(const std::string& path) { remove(path.c_str()); }
+
+bool renameFile(const std::string& from, const std::string& to) { return rename(from.c_str(), to.c_str()) == 0; }
 
 int64_t fileBytes(const std::string& path) {
     struct stat status;

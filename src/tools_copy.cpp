@@ -290,7 +290,7 @@ bool copyFrames(Piece& piece, const std::string& output, Ticker& ticker, std::st
         if ((i & 31) == 0 && !ticker(double(i) / double(piece.samples.size()) * 0.99)) break;
     }
     ok = fclose(file) == 0 && ok && !ticker.cancelled;
-    if (ok) ok = rename(temp.c_str(), output.c_str()) == 0;
+    if (ok) ok = renameFile(temp, output);
     if (!ok) {
         removeFile(temp);
         if (!ticker.stopped(error) && error) *error = "writing the output file failed";

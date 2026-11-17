@@ -161,7 +161,7 @@ int encode(const Args& args) {
     long num = 30, den = 1;
     std::string fps = args.get("fps", "30");
     if (sscanf(fps.c_str(), "%ld/%ld", &num, &den) < 1 || num <= 0 || den <= 0) return fail("bad --fps");
-    FILE* video = args.get("video") == "-" ? stdin : fopen(args.get("video").c_str(), "rb");
+    FILE* video = args.get("video") == "-" ? stdin : openFile(args.get("video").c_str(), "rb");
     if (!video) return fail("cannot open the raw video");
     bool redFirst = args.get("format", "i420") == "rgb0";
     bool bgra = redFirst || args.get("format", "i420") == "bgra";
@@ -213,7 +213,7 @@ int encode(const Args& args) {
     std::unique_ptr<OpusEncoder> voice;
 #endif
     if (args.has("audio")) {
-        audio = fopen(args.get("audio").c_str(), "rb");
+        audio = openFile(args.get("audio").c_str(), "rb");
         if (!audio) return fail("cannot open the raw audio");
         if (opus) {
 #ifdef ABSENT_OPUS

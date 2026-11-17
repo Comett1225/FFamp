@@ -223,6 +223,36 @@ TABLE
     check "a picture size change in the stream gives each part as its own file does" [ "$($A decode $O/mv_joined.mkv | md5)" = "$( { $A decode $O/mv_a.mkv; $A decode $O/mv_b.mkv; } | md5)" ]
 fi
 
+echo "== videox: what the system decoder cannot take goes to FFamp's software decoders (HEVC beyond Main 10 at 4:2:0 or level 6.2, 4:2:2 MPEG-2, MPEG without Media Foundation)"
+if on_mac; then
+    skip "software decoders behind Media Foundation and VA-API (the Mac decodes these with VideoToolbox)"
+else
+    sf_backend() { [ "$(env ${3:+FFAMP_NO_MEDIA_FOUNDATION=1} timeout 60 $A videoinfo $O/$1 | sed -n 's/.*backend \([^ ]*\).*/\1/p')" = "$2" ]; }
+    SF="testsrc2=size=640x360:rate=25,noise=alls=10:allf=t"
+    for fmt in yuv422p10le yuv422p yuv444p yuv420p12le; do
+        f=sf_hevc_$fmt.mp4
+        [ -f $O/$f ] || $F -f lavfi -i "$SF" -frames:v 20 -c:v libx265 -preset fast -x265-params log-level=error -pix_fmt $fmt $O/$f
+        check "HEVC $fmt opens with libde265" sf_backend $f libde265
+        check "HEVC $fmt: every frame bit-exact against ffmpeg" timeout 120 python3 comparex.py decode $O/$f
+    done
+    [ -f $O/sf_hevc_huge.mp4 ] || $F -f lavfi -i testsrc2=size=8192x8192:rate=25 -frames:v 1 -c:v libx265 -preset ultrafast -x265-params log-level=error $O/sf_hevc_huge.mp4
+    check "HEVC 8192x8192 (above level 6.2) opens with libde265" sf_backend sf_hevc_huge.mp4 libde265
+    [ -f $O/sf_mpeg2_422.mov ] || $F -f lavfi -i "$SF" -frames:v 20 -c:v mpeg2video -pix_fmt yuv422p -q:v 4 -g 12 -bf 2 $O/sf_mpeg2_422.mov
+    [ -f $O/sf_xdcam422.mov ] || $F -f lavfi -i "testsrc2=size=1920x1080:rate=25,noise=alls=12:allf=t,setfield=tff" -frames:v 8 -c:v mpeg2video -pix_fmt yuv422p -q:v 4 -g 12 -bf 2 -flags +ildct+ilme -tag:v xd5c $O/sf_xdcam422.mov
+    [ -f $O/sf_imx.mov ] || $F -f lavfi -i "testsrc2=size=720x608:rate=25,noise=alls=12:allf=t,setfield=tff" -frames:v 6 -c:v mpeg2video -pix_fmt yuv422p -g 1 -bf 0 -dc 10 -intra_vlc 1 -non_linear_quant 1 -qmax 28 -q:v 2 -flags +ildct -tag:v mx5p $O/sf_imx.mov
+    [ -f $O/sf_mpeg2_420.mp4 ] || $F -f lavfi -i "$SF" -frames:v 20 -c:v mpeg2video -q:v 4 -g 12 -bf 2 $O/sf_mpeg2_420.mp4
+    [ -f $O/sf_mpeg1.mkv ] || $F -f lavfi -i "$SF" -frames:v 20 -c:v mpeg1video -q:v 4 -g 12 -bf 2 $O/sf_mpeg1.mkv
+    for f in sf_mpeg2_422.mov sf_xdcam422.mov sf_imx.mov; do
+        check "4:2:2 MPEG-2 $f opens with libmpeg2" sf_backend $f libmpeg2
+        check "4:2:2 MPEG-2 $f against ffmpeg (other IDCT, within 55 dB)" timeout 120 python3 comparex.py decode $O/$f 55
+    done
+    for f in sf_mpeg2_420.mp4 sf_mpeg1.mkv; do
+        check "$f opens with libmpeg2 when Media Foundation is missing" sf_backend $f libmpeg2 1
+        check "$f without Media Foundation against ffmpeg (other IDCT, within 55 dB)" env FFAMP_NO_MEDIA_FOUNDATION=1 timeout 120 python3 comparex.py decode $O/$f 55
+    done
+    rm -f $O/sf_*
+fi
+
 echo "== videox: AV1 and VP9 at 1080p against ffmpeg's libsvtav1 and libvpx-vp9, same bitrate and speed setting"
 VXN=60
 [ -n "${QUICK:-}" ] || VXN=150

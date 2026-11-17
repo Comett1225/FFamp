@@ -177,8 +177,17 @@ void pictureToPlanar(const Picture& p, std::vector<uint8_t>& out, bool narrow) {
     }
 }
 
+bool rgbPlanes(const Picture& p) { return p.color.known && p.color.matrix == 0 && p.chromaWidth == p.width && p.chromaHeight == p.height; }
+
 void pictureToI420(const Picture& p, std::vector<uint8_t>& out) {
     const int cw = (p.width + 1) / 2, ch = (p.height + 1) / 2;
+    if (rgbPlanes(p)) {
+        std::vector<uint8_t> bgra(size_t(p.width) * size_t(p.height) * 4);
+        pictureToBGRA(p, bgra.data(), size_t(p.width) * 4);
+        out.resize(size_t(p.width) * size_t(p.height) + 2 * size_t(cw) * size_t(ch));
+        bgraToI420(bgra.data(), size_t(p.width) * 4, p.width, p.height, out.data());
+        return;
+    }
     if (p.chromaWidth == cw && p.chromaHeight == ch) {
         pictureToPlanar(p, out, true);
         return;
@@ -213,6 +222,20 @@ void pictureRow(const Picture& p, int plane, int y, float* out) {
 }
 
 void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, int from, int to) {
+    if (rgbPlanes(p)) {
+        std::vector<uint16_t> line(size_t(p.width));
+        const int drop = p.bits - 8, place[3] = {1, redFirst ? 2 : 0, redFirst ? 0 : 2};
+        for (int y = from; y < to; ++y) {
+            uint8_t* row = out + size_t(y) * stride;
+            for (int plane = 0; plane < 3; ++plane) {
+                rowOf(p, plane, y, line.data());
+                for (int x = 0; x < p.width; ++x) row[4 * x + place[plane]] = uint8_t(drop ? std::min((line[size_t(x)] + (1 << (drop - 1))) >> drop, 255) : line[size_t(x)]);
+            }
+            const uint8_t* mask = p.alpha ? p.alpha + size_t(y) * p.alphaStride : nullptr;
+            for (int x = 0; x < p.width; ++x) row[4 * x + 3] = mask ? mask[x] : 255;
+        }
+        return;
+    }
     static const Levels levels;
     const bool hlg = p.color.transfer == 18, hdr = hlg || p.color.transfer == 16;
     int matrix = p.color.known ? p.color.matrix : 2;

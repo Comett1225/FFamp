@@ -1454,3 +1454,32 @@ of the 720p and 1080p clips bit-exact through Media Foundation, so the fallback 
 against ffmpeg and the encoder names. What still fails is what failed in the merged run: `rd_vorbis.ogg`'s trim (both), the WMA 2
 600 s speed checks and the 10-bit HEVC whole-program rate (Windows), `wv_speed_v3.avi`'s one-thread speed (both), and on Linux the
 100-frame AAC file (vo-aacenc's priming), the RGBA frame rates through WSL's d3d12 copy-out and dav1d's 400 fps.
+
+# Review fixes, video (branch `fix-video-517`)
+
+Each finding of the 5.17 review in the video area, fixed where it starts, with its check in `tests/suites/62_videofix.sh` (ffmpeg
+9.0.2 as the judge on each machine). "Bit-exact" means every plane of every frame equals ffmpeg's output.
+
+| Finding | Fix | Result |
+|---|---|---|
+| HEVC 4:2:2, 4:4:4 and monochrome on Windows: Media Foundation hangs (GPU) or gives nothing (software) | only HEVC Main and Main 10 4:2:0 go to the system decoder (the H.264 rule, now for HEVC too) | 4:2:2 10-bit and 4:4:4 open at once on libde265 and are bit-exact on Windows and Linux; VideoToolbox on the Mac bit-exact too |
+| HEVC monochrome and VP9 4:4:0 decode nowhere | libde265's monochrome pictures come out as 4:2:0 with neutral chroma; libvpx's 4:4:0 accepted (held as 4:4:4 on the Mac) | gray and gray10 luma bit-exact on Windows and Linux (the Mac's VideoToolbox: gray exact, gray10 within 1); VP9 4:4:0 bit-exact |
+| MPEG-2 4:2:2 gives no pictures on Windows | MPEG-2 4:2:0 only to Media Foundation, 4:2:2 to libmpeg2, now built for Windows (C code, `build_windows.sh` step `mpeg2`); the Mac asks VideoToolbox for 4:2:2 instead of 4:2:0 | 720x480 MKV and 720p MOV 4:2:2: every picture at 51 dB or better against ffmpeg on all three systems |
+| Odd-sized VP9 and AV1 crash the process through WSL's d3d12 VA-API driver | `d3d12Wrong` keeps odd widths and heights on libvpx and dav1d | 853x480 and 640x361 VP9, 641x361 AV1 open and are bit-exact; even sizes stay on VA-API |
+| RGB-coded streams (matrix 0) come out with wrong colours | `rgbPlanes`: BGRA/RGBA/RGB24 reorder the G, B, R planes, I420 output converts RGB to BT.709 limited, a picture's matrix 0 wins over container labels (desktop and Mac) | libx264rgb H.264, VP9 and AV1 `gbrp`: BGRA and RGBA identical to ffmpeg's; I420 within 0.2 of ffmpeg's BT.709 conversion on average |
+| `mjpa` not recognised | the MP4/MOV reader maps `mjpa` to `jpeg` | decodes exactly as the same pictures tagged `jpeg` |
+| Microsoft MPEG-4 v2/v3, WMV7, WMV8 not bit-exact on x86-64 | the H.263 core's IDCT and half-pel averages follow the FFmpeg of each system for every decoder on it | 25 of 25 frames bit-exact for each codec on Windows and Linux (were 0 of 100 and 14 of 100); `vc1_check.py` no longer accepts 40 dB; the WMV fixtures got an x86-64 checksum table |
+| DNxHD/DNxHR, QuickTime Animation, PNG, CineForm, Ut Video, FFV1, v210, raw, HAP missing | own decoders for all but CineForm (CONVENTIONS); probe names them as ffprobe does | all bit-exact (planes and alpha) on Windows and Linux: DNxHD 1080p, DNxHR HQ and HQX, qtrle 24 and 32-bit, PNG RGB/RGBA (also palette, grey, grey+alpha, 1-bit, 16-bit checked by hand), v210, raw I420/BGR24/UYVY, Ut Video in every prediction and format FFmpeg's encoder writes, FFV1 versions 1 to 4 with both coders, slices, 8 to 16 bits, YCbCr, RGB, alpha, HAP, HAP Alpha, HAP Q; the Mac the same up to 10 bits (its buffers); 40 damaged copies of each file decode or fail cleanly. CineForm is still missing |
+
+## Suites
+
+Full runs of `tests/run.sh` before the last test fixes, then the affected suites again:
+
+| System | Full run | Failures, and what they were |
+|---|---|---|
+| Windows (clang-cl, libraries with NASM, libmpeg2 added) | 3,196 / 12 / 222 | the 5 of the follow-up round (`rd_vorbis.ogg`, the two WMA 2 600 s speed checks, `wv_speed_v3.avi` one-thread speed, the 10-bit HEVC rate) and 7 old expectations: the FFV1 file used as "a codec nothing decodes" now decodes (its packet table now lists the record) and five WMV fixtures now give FFmpeg's x86-64 pictures. After the test fixes `00_independence`, `45_formats`, `51_wmv78` and `62_videofix` pass apart from `wv_speed_v3.avi` |
+| Linux (WSL, gcc 13, VA-API through d3d12) | 3,336 / 24 / 201 | the 7 known (`rd_vorbis.ogg`, `wv_speed_v3.avi`, the 100-frame AAC file, the two RGBA frame rates, dav1d's 400 fps, the 10-bit HEVC rate), the same 7 old expectations plus a string that named FFmpeg, and 9 VA-API H.264/HEVC decodes that lost a picture while the Windows suites and other jobs ran on the same PC; run alone, `30_readers`, `40_probe`, `45_formats`, `47_asf`, `51_wmv78` and `62_videofix` pass apart from the known ones, and those files decode the same with this branch and with main |
+| Mac (arm64) | not run in full (disk space) | `00_independence`, `10_video` (apart from the encoder checks that need the 1 GB raw clip), `45_formats`, `49_vc1`, `51_wmv78`, `53_h263` and `62_videofix`: 519 pass, 0 fail, 7 skip |
+
+`62_videofix`: 98 checks on Windows, 93 on Linux, 76 on the Mac (HAP needs an ffmpeg with Snappy, which the Mac's lacks; 12 and 16-bit
+FFV1 skipped there).

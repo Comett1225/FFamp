@@ -385,6 +385,12 @@ Look lookOf(Reader& reader, const Track& t) {
         look.codec = c == fourcc("mp1v") ? "mpeg1video" : c == fourcc("mp2v") ? "mpeg2video" : "h263";
         look.pixels = "yuv420p";
         look.rangeKnown = look.rangeKnown || c != fourcc("h263");
+    } else if (const char* own = ownVideoName(c)) {
+        look.codec = own;
+        if (c == fourcc("v210")) look.pixels = "yuv422p10le";
+        else if (c == fourcc("Hap1") || c == fourcc("HapY")) look.pixels = "rgb0";
+        else if (c == fourcc("Hap5") || c == fourcc("HapM")) look.pixels = "rgba";
+        else if (c == fourcc("HapA")) look.pixels = "gray";
     } else if ((c >> 16) == 0x6476) {
         look.codec = "dvvideo";
         look.pixels = c == fourcc("dvcp") ? "yuv420p" : c == fourcc("dvc ") || c == fourcc("dvpp") ? "yuv411p" : "yuv422p";

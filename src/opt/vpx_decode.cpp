@@ -25,7 +25,7 @@ struct VpxDecoder : SoftDecoder {
         vpx_codec_iter_t walk = nullptr;
         while (vpx_image_t* image = vpx_codec_get_frame(&context, &walk)) {
             const int kind = image->fmt & ~VPX_IMG_FMT_HIGHBITDEPTH;
-            if (kind != VPX_IMG_FMT_I420 && kind != VPX_IMG_FMT_I422 && kind != VPX_IMG_FMT_I444) return false;
+            if (kind != VPX_IMG_FMT_I420 && kind != VPX_IMG_FMT_I422 && kind != VPX_IMG_FMT_I440 && kind != VPX_IMG_FMT_I444) return false;
             Picture p;
             p.stamp = stamp;
             p.width = int(image->d_w);

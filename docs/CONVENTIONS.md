@@ -32,6 +32,13 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | TTA (True Audio) | `TTA1` | `TTA1` | the 22-byte TTA1 header; Matroska builds it as FFmpeg does (format 1, channels, bit depth, rate, the segment duration in frames) |
 | Sound named by a WAVE format tag: Microsoft ADPCM (0x0002), IMA ADPCM (0x0011, 2 to 5 bits), Yamaha ADPCM (0x0020), IMA DK4 (0x0061), IMA DK3 (0x0062), G.726 (0x0014, 0x0040, 0x0045, 0x0064), G.722 (0x028F) | `ms` and the 16-bit tag, as QuickTime names them (`ms\0\x02` = 0x6D730002) | `wfex` | the WAVEFORMATEX and its codec data; QuickTime takes it from the atom of that name inside `wave`, CAF and QuickTime files without one get a made-up one from their description |
 | Windows Media Video 7, 8, 9, VC-1, Microsoft MPEG-4 v1 to v3 | `WMV1`, `WMV2`, `WMV3`, `WVC1`, `WMVA`, `MPG4`, `MP42`, `MP43` (every reader gives these names for the fourccs that mean the same codec: `DIV3`, `DIV4`, `DIV5`, `DIV6`, `MPG3`, `DVX3`, `AP41`, `COL0`, `COL1` are `MP43`; `DIV2` is `MP42`; `MP41` is `MPG4`; `GXVE` is `WMV2`) | `bmih` | the stream's BITMAPINFOHEADER (40 bytes, little-endian) followed by its codec data (WMV2: 4 bytes of stream settings; WMV3: the 4-byte sequence header; WVC1: sequence header and entry point); Matroska `V_MPEG4/MS/V3` gives `MP43` with no config |
+| DNxHD / DNxHR | `AVdn`, `AVdh` as found | 0 | empty |
+| QuickTime Animation | `rle ` | 0 | empty; `bits` is the sample description's depth (16, 24 and 32 are decoded) |
+| PNG | `png ` (also for AVI `MPNG`) | 0 | empty; one PNG file per sample |
+| Ut Video | the fourcc as found (`ULY0`, `ULY2`, `ULY4`, `ULRG`, `ULRA`, `ULH0`, `ULH2`, `ULH4`, `UQY0`, `UQY2`, `UQRG`, `UQRA`; the `UM` pack modes too) | `bmih` | the BITMAPINFOHEADER and the codec's 16 (or 8) bytes behind it |
+| FFV1 | `FFV1` | `bmih` (AVI, Matroska `V_MS/VFW/FOURCC`) or `FFV1` (Matroska `V_FFV1`) | the BITMAPINFOHEADER with the configuration record behind it, or the record alone; versions 0 and 1 have none |
+| HAP | `Hap1`, `Hap5`, `HapY`, `HapM`, `HapA` | 0 | empty |
+| v210 and uncompressed video | `v210`; `I420`, `IYUV`, `YV12`, `NV12`, `NV21`, `YUY2`, `YUYV`, `yuvs`, `UYVY`, `2vuy`, `HDYC`, `Y42B`, `Y800`, `GREY`; `raw ` (QuickTime RGB, `bits` 16, 24 or 32); `DIB ` (BI_RGB in AVI and Matroska) | `bmih` for `DIB ` | the BITMAPINFOHEADER: bit count 16, 24 or 32, rows bottom-up when its height is positive, padded to 4 bytes |
 | Windows Media Audio 1, 2, 9 Pro, 9 Lossless, 9 Voice | `wma1`, `wma2`, `wmap`, `wmal`, `wmas` | `wfex` | the stream's WAVEFORMATEX (18 bytes, little-endian; WAVEFORMATEXTENSIBLE when the tag is 0xFFFE) followed by its codec data; one sample is one ASF media object |
 
 ## Timing
@@ -361,9 +368,12 @@ list; `Sample.offset` is then free for the reader's use.
   from a cached 64-bit window so the run-level loop reads code and sign with one load), `vc1::Bits`, the frame pool and picture
   buffers (`vc1::FramePool`, now shared, 64-pixel margins), the half-pel copy and average functions, edge emulation, the simple IDCT
   family and the Microsoft MPEG-4 DC, intra pattern and scan tables of `src/vc1_tables.cpp`.
-- IDCT: FFmpeg on arm64 runs its NEON simple IDCT for these codecs, which computes rows without the C version's shortcut for rows
-  that hold only a DC value; `vc1::neonSimpleIdctPut` and `neonSimpleIdctAdd` give exactly its results (NEON intrinsics on arm64, the
-  same arithmetic in plain C++ elsewhere). WMV8 uses its own IDCT (`wmv2IdctPut`, `wmv2IdctAdd` in `src/intrax8.cpp`).
+- IDCT and half-pel averages follow the FFmpeg of each system, for every decoder on the core (H.263, Microsoft MPEG-4 v1 to v3, WMV7,
+  WMV8): on arm64 FFmpeg's NEON simple IDCT, which computes rows without the C version's shortcut for rows that hold only a DC value
+  (`vc1::neonSimpleIdctPut`, `neonSimpleIdctAdd`), and exact averages; elsewhere the C simple IDCT with that shortcut (`h263::cIdctPut`,
+  `cIdctAdd`; FFmpeg's x86-64 SSE2 IDCT copies it) and, on x86-64, the approximate 8-wide no-rounding horizontal and vertical half-pel
+  averages FFmpeg's x86 build uses (`h263::pixelOps()`). WMV8 uses its own IDCT (`wmv2IdctPut`, `wmv2IdctAdd` in `src/intrax8.cpp`).
+  All five versions are bit-exact with ffmpeg on x86-64 and arm64; `tests/vc1_check.py` no longer accepts a PSNR floor for them.
 
 ## Microsoft MPEG-4 v1 to v3, WMV7 and WMV8 (`src/msmpeg4.cpp`, backends `msmpeg4v1`, `msmpeg4v2`, `msmpeg4v3`, `wmv1`, `wmv2`)
 
@@ -387,11 +397,44 @@ list; `Sample.offset` is then free for the reader's use.
   pictures). Baseline, GOB headers, long vectors, PB-frames (the B part is read and dropped, as FFmpeg does), and the H.263+ options
   FFmpeg decodes: unrestricted vectors, advanced prediction (4MV and OBMC), advanced intra coding, deblocking, slices, alternative
   inter VLC, modified quantisation, rounding type. H.263+ B-pictures (Annex O) are not decoded (`decode` returns `false`).
-- Bit-exact with the FFmpeg of each system: on x86-64 the IDCT keeps the C simple IDCT's shortcut for DC-only rows (FFmpeg's SSE2
-  IDCT copies it) and the 8-wide no-rounding horizontal and vertical half-pel averages are the approximate ones FFmpeg's x86 build
-  uses (`ff_put_no_rnd_pixels8_x2_approx`, `_y2_approx`); arm64 builds take the NEON IDCT and exact averages, as FFmpeg there.
+- Bit-exact with the FFmpeg of each system through the core's IDCT and averages (above): on x86-64 the C simple IDCT with its DC-row
+  shortcut and FFmpeg's approximate averages (`ff_put_no_rnd_pixels8_x2_approx`, `_y2_approx`); arm64 builds take the NEON IDCT and
+  exact averages, as FFmpeg there.
 - In AVI, H.263 key frames are the I-pictures read from each chunk's picture header (FFmpeg's AVI writer marks every chunk).
 - Macroblocks that do not decode are filled from the picture before (grey at the start); FFmpeg's error resilience differs there.
+
+## Editing, lossless and uncompressed video (`src/own_video.h` and the decoders below, every system)
+
+- Codecs FFmpeg decodes for MOV, AVI and MKV files from editors, capture tools and screen recorders, as FFamp's own `SoftDecoder`s
+  behind `openOwnVideo` (`ownVideoName` gives FFmpeg's codec name, which probe reports). Desktop `VideoDecoder` and the Mac's soft path
+  both use them. Each one is bit-exact with ffmpeg's planes (and alpha) on the test files of `tests/suites/62_videofix.sh`.
+- `Planes` (`src/own_video.h`) holds a decoder's picture: 8 or 16-bit samples, any chroma size, an optional alpha plane (handed out
+  at 8 bits, rounded); `rgb` labels G, B, R planes as matrix 0 full range.
+- DNxHD and DNxHR (`src/dnxhd_decode.cpp`, `src/dnxhd_tables.cpp`, backend `dnxhd`, based on FFmpeg's): every CID FFmpeg knows, 8, 10
+  and 12 bits, 4:2:2 and 4:4:4 (RGB as G, B, R; with the adaptive colour transform as YCbCr), interlaced two-field frames, MBAFF,
+  DNxHR's variable sizes; the simple IDCT of each bit depth as FFmpeg runs it (8 bits: the C IDCT on x86-64, the NEON one on arm64).
+  Rows are decoded on the pixel crew. 4:4:4 at 8 bits is refused, as in FFmpeg.
+- QuickTime Animation (`src/qtrle_decode.cpp`, backend `qtrle`): 16, 24 and 32 bits per pixel (32 with alpha). Each frame updates
+  the lines it names on the picture before, so a jump starts at a key frame. The palette depths (1, 2, 4, 8 bits and grey) are not
+  decoded; `VideoDecoder::open` says so.
+- PNG (`src/png_decode.cpp`, backend `png`, written from the PNG specification and RFC 1950/1951 with its own inflate): grey, grey and
+  alpha, RGB, RGBA and palette pictures at 1 to 16 bits, transparency chunks, Adam7 interlacing; one file per sample (MOV `png `, AVI
+  `MPNG`). 16-bit pictures stay 16-bit.
+- HAP (`src/hap_decode.cpp`, backend `hap`, based on FFmpeg's): `Hap1` (DXT1), `Hap5` (DXT5 with alpha), `HapY` (scaled YCoCg DXT5),
+  `HapM` (YCoCg with an RGTC1 alpha texture), `HapA` (RGTC1 alpha only, shown as grey); Snappy and uncompressed chunks, the decode
+  instructions container. Snappy is FFamp's own (from the format description). The 4x4 blocks are cut to the picture size.
+- Ut Video (`src/utvideo_decode.cpp`, backend `utvideo`, based on FFmpeg's): the 8-bit formats (4:2:0, 4:2:2, 4:4:4, RGB, RGBA, BT.601
+  and BT.709), the 10-bit `UQ` formats, the `UM` pack modes; none, left, gradient and median prediction, slices, interlaced coding.
+  Odd picture sizes in subsampled formats are refused, as in FFmpeg.
+- FFV1 (`src/ffv1_decode.cpp`, backend `ffv1`, based on FFmpeg's): versions 0 to 4, Golomb-Rice and range coding with default and
+  custom state tables, several quantisation tables and initial states, slices (decoded on the pixel crew), context carried across
+  frames until the next key frame. YCbCr 4:4:4 to 4:1:0 at 8 to 16 bits with or without alpha, grey (with neutral chroma), RGB at 8 to
+  16 bits with or without alpha (the reversible colour transform). Not decoded: the float, remap and Bayer modes of version 4.
+  Slice CRCs are not checked and a damaged slice is not concealed from the picture before (FFmpeg does both).
+- v210 and uncompressed video (`src/raw_video.cpp`, backends `v210` and `rawvideo`): v210 with FFmpeg's line strides (48-pixel or
+  24-pixel alignment); planar and packed 4:2:0 and 4:2:2, NV12/NV21, grey, and BI_RGB / QuickTime RGB at 16, 24 and 32 bits.
+- CineForm (`CFHD`) is not decoded yet.
+- Matroska `V_UNCOMPRESSED` takes its fourcc from the track's UncompressedFourCC element, `V_FFV1` its record from CodecPrivate.
 
 ## G.711, ADPCM and sound in more containers (`src/wave_audio.cpp`, gaps round)
 
@@ -441,7 +484,10 @@ list; `Sample.offset` is then free for the reader's use.
   nothing there yet.
 - H.264 on Windows goes to FFamp's own decoder first; Media Foundation decodes it only when that decoder cannot open the stream
   (`FFAMP_SYSTEM_H264` puts Media Foundation first again, for tests and speed comparisons). HEVC and MPEG-2 stay on Media Foundation
-  first. On Linux VA-API stays first for H.264.
+  first, but only in the profiles it decodes: HEVC Main and Main 10 4:2:0 and MPEG-1/2 4:2:0 (the chroma format of the first sample's
+  sequence extension, `mpegChroma`). Media Foundation accepts every HEVC and MPEG-2 stream and then hangs (GPU) or gives no pictures
+  (software) on HEVC 4:2:2, 4:4:4, monochrome and MPEG-2 4:2:2, so those go to libde265 and libmpeg2. On Linux VA-API stays first for
+  H.264, and the same profile rule decides what reaches the platform decoder on both systems.
 - `encoders()` names the encoders `VideoEncoder` and `AacEncoder` really use, under FFmpeg's names for the same job: `h264_mf`,
   `hevc_mf` and `aac_mf` on Windows (x264, x265 and vo-aacenc behind them where Media Foundation cannot), `libx264` and `libx265` on
   Linux, and `aac` for vo-aacenc on both.
@@ -458,13 +504,16 @@ list; `Sample.offset` is then free for the reader's use.
   nothing is linked. H.264 (8-bit 4:2:0, progressive, MBAFF and field pairs woven into one frame), HEVC Main and Main 10, VP9 profiles
   0 and 2 and AV1 Main (8 and 10-bit) are parsed by FFamp and sent as VA-API picture and slice buffers; pictures are copied out as
   NV12 or P010 after `vaSyncSurface2` (2 s at most), and a failed submit or copy-out stops the GPU path for that decoder. Under the
-  d3d12 driver three cases stay on the software decoders (H.264 on FFamp's own decoder) because the driver gets them wrong: H.264 with non-flat scaling matrices
-  (it ignores them), 10-bit VP9 and AV1 whose height % 16 is 2 to 9 (wrong chroma and inter pictures), and AV1 film grain. NVIDIA's
+  d3d12 driver four cases stay on the software decoders (H.264 on FFamp's own decoder) because the driver gets them wrong: H.264 with non-flat scaling matrices
+  (it ignores them), 10-bit VP9 and AV1 whose height % 16 is 2 to 9 (wrong chroma and inter pictures), VP9 and AV1 with an odd width
+  or height (the driver crashes the process in `vaEndPicture`; `d3d12Wrong`), and AV1 film grain. NVIDIA's
   driver has no VA-API; see `docs/PLAN_WINLINUX.md` for what NVDEC would take.
-- Software paths: FFamp's own H.264 decoder (below), libde265, FFamp's own AAC decoder (`src/aac_*.cpp`: LC, HE-AAC, HE-AAC v2) and
+- Software paths: FFamp's own H.264 decoder (below), libde265 (monochrome HEVC comes out as 4:2:0 with neutral chroma, as dav1d's
+  monochrome AV1), FFamp's own AAC decoder (`src/aac_*.cpp`: LC, HE-AAC, HE-AAC v2) and
   AC-3/E-AC-3 decoder, opencore-amr (AMR-NB, AMR-WB), mpg123 (MP1, MP2, MP3 on every desktop system: Media Foundation's MP3 decoder
   places its sound 624 frames later than FFmpeg's), vo-aacenc (priming 1600), x264, x265, libvpx, dav1d, SVT-AV1, liboapv, xvidcore,
-  libopus, libvorbis, LAME, libmpeg2 (MPEG-1/2 when no system decoder takes the stream: always on Linux), libjpeg-turbo (Linux).
+  libopus, libvorbis, LAME, libmpeg2 (MPEG-1/2 when no system decoder takes the stream: always on Linux, on Windows for 4:2:2 and
+  without Media Foundation), libjpeg-turbo (Linux). libvpx also gives VP9 4:4:0 (profile 1).
   `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
 - Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media
@@ -474,6 +523,10 @@ list; `Sample.offset` is then free for the reader's use.
   picture never arrives after a jump (a recovery point that is not an IDR, such as x264's intra refresh, whose pictures the H.264 decoder
   holds back until the refresh is complete, as FFmpeg does), the decoder starts again up to three key frames earlier before concealing.
   A `Picture` may carry `keep`, the decoder's own frame: the `Image` then points at the decoder's planes instead of copying them.
+- Pictures coded as RGB (matrix 0: libx264rgb H.264, VP9 and AV1 `gbrp`, and the RGB modes of the decoders in the next section) carry
+  their G, B and R planes at full size in `plane[0..2]`. BGRA, RGBA and RGB24 output reorder them (exact at 8 bits), I420 output
+  (`pictureToI420`, the scaled frame reader, the encoders) converts them to 8-bit BT.709 limited range with `bgraToI420`, and a
+  picture's matrix 0 wins over the container's colour labels (`rgbPlanes`). `decode` writes the planes as ffmpeg's `gbrp`.
 - A frame the stream leaves without colour labels is labelled as VideoToolbox labels it: BT.601 with SMPTE C primaries below 720
   lines, BT.709 from 720 lines. Media Foundation is not used for pictures under 64 pixels wide or high (its decoder returns nothing)
   nor for encoding frames under 320 x 240 (the GPU encoders undershoot the bitrate and smear such frames); x264 and the H.264 decoder take them.
@@ -517,7 +570,9 @@ list; `Sample.offset` is then free for the reader's use.
   ffmpeg: ProRes 422 as 10-bit, 4444 and XQ as 12-bit with the alpha plane handed out at 8 bits as swscale rounds it ((a + 8) >> 4);
   DV in the size and chroma layout of the profile its frames name (4:1:1, 4:2:0, 4:2:2; DVCPRO HD 1080 is 1280 or 1440 wide, as in
   FFmpeg). 4:1:1 pictures convert to BGRA with the chroma sample centred on its four pixels, as swscale does.
-- MPEG-1/2 on Linux: libmpeg2 (backend `libmpeg2`, `openMpeg2`), used whenever `openPlatformVideo` gives nothing. Each sample's time
+- MPEG-1/2 on Linux, and on Windows for 4:2:2 streams and Windows without Media Foundation: libmpeg2 (backend `libmpeg2`,
+  `openMpeg2`), used whenever `openPlatformVideo` gives nothing. `build_windows.sh` builds it with MSVC from its C code only (its x86
+  code is GCC inline assembly), so its IDCT on Windows is the C one; 4:2:2 MPEG-2 comes out as 4:2:2, 51 dB or better against ffmpeg. Each sample's time
   goes in as libmpeg2's picture tag and comes back on the picture it shows, so B-frame order needs no help; field pictures are woven
   in libmpeg2's own frame, and a sequence header with a new size ends the old pictures and starts again. A slice ends only at the
   next start code, so pictures come out one sample late; the drain (a sequence end code) ends the stream. B-pictures that lead an

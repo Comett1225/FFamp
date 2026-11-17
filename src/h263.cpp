@@ -17,7 +17,53 @@ void pairs(Vlc& vlc, int bits, size_t count, const T (*table)[2], const int32_t*
     vlc.build(bits, count, lengths.data(), codes.data(), symbols);
 }
 
+#if defined(__x86_64__) || defined(_M_X64)
+void putNoRnd8X2Approx(uint8_t* dst, const uint8_t* src, ptrdiff_t stride, int h) {
+    for (int y = 0; y < h; y++, dst += stride, src += stride)
+        for (int x = 0; x < 8; x++) dst[x] = uint8_t((std::max(src[x] - 1, 0) + src[x + 1] + 1) >> 1);
 }
+
+void putNoRnd8Y2Approx(uint8_t* dst, const uint8_t* src, ptrdiff_t stride, int h) {
+    for (int y = 0; y < h; y++, dst += stride, src += stride) {
+        const uint8_t* odd = (y & 1) ? src : src + stride;
+        const uint8_t* even = (y & 1) ? src + stride : src;
+        for (int x = 0; x < 8; x++) dst[x] = uint8_t((std::max(odd[x] - 1, 0) + even[x] + 1) >> 1);
+    }
+}
+#endif
+
+const vc1::Dsp& cIdct() {
+    static const vc1::Dsp made = [] {
+        vc1::Dsp d{};
+        vc1::simpleIdct(d);
+        return d;
+    }();
+    return made;
+}
+
+}
+
+const PixelOps& pixelOps() {
+    static const PixelOps made = [] {
+        PixelOps o;
+        const vc1::Dsp& d = vc1::dsp();
+        memcpy(o.put, d.putPixelsTab, sizeof o.put);
+        memcpy(o.noRnd, d.putNoRndPixelsTab, sizeof o.noRnd);
+#if defined(__x86_64__) || defined(_M_X64)
+        o.noRnd[1][1] = putNoRnd8X2Approx;
+        o.noRnd[1][2] = putNoRnd8Y2Approx;
+#endif
+        return o;
+    }();
+    return made;
+}
+
+void cIdctPut(uint8_t* dst, ptrdiff_t stride, int16_t* block) {
+    cIdct().invTrans8x8(block);
+    vc1::putPixelsClamped(block, dst, stride);
+}
+
+void cIdctAdd(uint8_t* dst, ptrdiff_t stride, int16_t* block) { cIdct().invTrans8x8Dc(dst, stride, block); }
 
 const uint8_t kIdentityQscale[32] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
 

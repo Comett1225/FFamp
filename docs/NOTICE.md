@@ -22,7 +22,7 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `src/vc1_decode.cpp`: libavcodec/vc1dec.c, mpegvideo.c, mpegvideo_dec.c, mpegpicture.c; Copyright (c) 2011 Mashiat Sarker Shakkhar; Copyright (c) 2006-2007 Konstantin Shishkov; partly based on vc9.c (c) 2005 Anonymous, Alex Beregszaszi, Michael Niedermayer; Copyright (c) 2000, 2001 Fabrice Bellard; Copyright (c) 2002-2004 Michael Niedermayer; the FFmpeg project (mpegpicture.c names no holder). LGPL-2.1-or-later.
 - `src/wmalossless_decode.cpp`: `libavcodec/wmalosslessdec.c`, `libavcodec/lossless_audiodsp.c`; Copyright (c) 2007 Baptiste Coudurier, Benjamin Larsson, Ulion, Copyright (c) 2008-2011 Sascha Sommer, Benjamin Larsson, Copyright (c) 2011 Andreas Öman, Copyright (c) 2011-2012 Mashiat Sarker Shakkhar, Copyright (c) 2007 Benjamin Zores (`lossless_audiodsp.c`, based upon libdemac from Dave Chapman); LGPL-2.1-or-later.
 - `tests/fixtures/wmalossless/make.py`: writes the bitstream `libavcodec/wmalosslessdec.c` reads; Copyright (c) 2007 Baptiste Coudurier, Benjamin Larsson, Ulion, Copyright (c) 2008-2011 Sascha Sommer, Benjamin Larsson, Copyright (c) 2011 Andreas Öman, Copyright (c) 2011-2012 Mashiat Sarker Shakkhar; LGPL-2.1-or-later.
-- `src/h263.h`, `src/h263.cpp`: libavcodec/mpegvideo.c, mpegvideo_dec.c, mpegvideo_motion.c, mpegvideo_unquantize.c, h263.c, h263dsp.c, ituh263dec.c, mpeg4video.c, mpeg4videodec.c, msmpeg4.c, rl.c; Copyright (c) 2000, 2001 Fabrice Bellard; Copyright (c) 2001 Juan J. Sierralta P; Copyright (c) 2002-2010 Michael Niedermayer; the FFmpeg project (h263dsp.c, rl.c name no holder). LGPL-2.1-or-later.
+- `src/h263.h`, `src/h263.cpp`: libavcodec/mpegvideo.c, mpegvideo_dec.c, mpegvideo_motion.c, mpegvideo_unquantize.c, h263.c, h263dsp.c, ituh263dec.c, mpeg4video.c, mpeg4videodec.c, msmpeg4.c, rl.c, x86/hpeldsp.asm (the approximate no-rounding half-pel averages); Copyright (c) 2000, 2001 Fabrice Bellard; Copyright (c) 2001 Juan J. Sierralta P; Copyright (c) 2002-2010 Michael Niedermayer; Copyright (c) Nick Kurshev; Copyright (c) 2002 Zdenek Kabelac; Copyright (c) 2013 Daniel Kang; the FFmpeg project (h263dsp.c, rl.c name no holder). LGPL-2.1-or-later.
 - `src/msmpeg4.cpp`: libavcodec/msmpeg4dec.c, msmpeg4.c, wmv2dec.c, wmv2.h, h263dec.c, qpeldsp.c, mathtables.c; Copyright (c) 2001 Fabrice Bellard; Copyright (c) 2002-2013 Michael Niedermayer; Copyright (c) 2002 The FFmpeg Project. LGPL-2.1-or-later.
 - `src/msmpeg4_tables.cpp`: libavcodec/h263data.c, h263dsp.c, mpeg4data.h, mpegvideodata.c, mathtables.c, msmpeg4data.c, intrax8huf.h; Copyright (c) 2000, 2001 Fabrice Bellard; Copyright (c) 2002-2004 Michael Niedermayer; the FFmpeg project (h263data.c, h263dsp.c, mpegvideodata.c, intrax8huf.h name no holder). LGPL-2.1-or-later.
 - `src/intrax8.h`, `src/intrax8.cpp`: libavcodec/intrax8.c, intrax8.h, intrax8dsp.c, wmv2dsp.c; the FFmpeg project (these files name no holder). LGPL-2.1-or-later.
@@ -179,6 +179,13 @@ copyright holders. Those FFmpeg files are licensed LGPL-2.1-or-later.
 - `src/linux/vaapi_hevc.cpp`: `libavcodec/vaapi_hevc.c`, `libavcodec/hevc/ps.c`, `libavcodec/hevc/refs.c`, `libavcodec/hevc/hevcdec.c`; Copyright (C) 2015 Timo Rothenpieler, Copyright (C) 2012 - 2013 Guillaume Martres, Mickael Raulet, Gildas Cocherel, Wassim Hamidouche, Copyright (C) 2013 Vittorio Giovara; LGPL-2.1-or-later.
 - `src/linux/vaapi_vp9.cpp`: `libavcodec/vaapi_vp9.c`, `libavcodec/vp9.c` (frame header); Copyright (C) 2015 Timo Rothenpieler, Copyright (C) 2013 Ronald S. Bultje, Clément Bœsch; LGPL-2.1-or-later.
 - `src/linux/vaapi_av1.cpp`: `libavcodec/vaapi_av1.c`, `libavcodec/cbs_av1.c`, `libavcodec/cbs_av1_syntax_template.c`, `libavcodec/av1dec.c`; the FFmpeg project (these files name no holder); LGPL-2.1-or-later.
+- `src/raw_video.cpp`: `libavcodec/v210dec.c` (the line stride rules of v210); Copyright (C) 2009 Michael Niedermayer, Copyright (c) 2009 Baptiste Coudurier; LGPL-2.1-or-later.
+- `src/qtrle_decode.cpp`: `libavcodec/qtrle.c`; Copyright (C) 2004 The FFmpeg project; LGPL-2.1-or-later.
+- `src/dnxhd_decode.cpp`: `libavcodec/dnxhddec.c`, `libavcodec/simple_idct_template.c`; Copyright (c) 2007 SmartJog S.A., Baptiste Coudurier, Copyright (c) 2011 MirriAd Ltd, Copyright (c) 2015 Christophe Gisquet, Copyright (c) 2001 Michael Niedermayer; LGPL-2.1-or-later.
+- `src/dnxhd_tables.h`, `src/dnxhd_tables.cpp`: `libavcodec/dnxhddata.c`, `libavcodec/dnxhddata.h` (converted by script); Copyright (c) 2007 SmartJog S.A., Baptiste Coudurier; LGPL-2.1-or-later.
+- `src/hap_decode.cpp`: `libavcodec/hapdec.c`, `libavcodec/hap.c`, `libavcodec/hap.h` (LGPL-2.1-or-later; Copyright (C) 2015 Vittorio Giovara, Copyright (C) 2015 Tom Butterworth) and `libavcodec/texturedsp.c`, `libavcodec/texturedsp_template.c` (the DXT1, DXT5, YCoCg and RGTC1 block formulas; texturedsp.c is under the MIT licence below; Copyright (C) 2009 Benjamin Dobell, Glass Echidna, Copyright (C) 2012 Matthäus G. "Anteru" Chajdas, Copyright (C) 2015 Vittorio Giovara).
+- `src/utvideo_decode.cpp`: `libavcodec/utvideodec.c`, `libavcodec/utvideodsp.c`, `libavcodec/lossless_videodsp.c`; Copyright (c) 2011 Konstantin Shishkov (`utvideodsp.c` and `lossless_videodsp.c` name no holder); LGPL-2.1-or-later.
+- `src/ffv1_decode.cpp`: `libavcodec/ffv1dec.c`, `libavcodec/ffv1dec_template.c`, `libavcodec/ffv1.c`, `libavcodec/ffv1.h`, `libavcodec/ffv1_parse.c`, `libavcodec/ffv1_template.c`, `libavcodec/rangecoder.c`, `libavcodec/rangecoder.h`, `libavcodec/golomb.h`, `libavcodec/mathtables.c` (`ff_log2_run`); Copyright (c) 2003-2016 Michael Niedermayer, Copyright (c) 2004 Michael Niedermayer, Copyright (c) 2004 Alex Beregszaszi, Copyright (c) 2002-2004 Michael Niedermayer (`ffv1_parse.c` names no holder); LGPL-2.1-or-later.
 
 The Bessel function of the KBD window in `src/mdct.cpp` (by way of `libavutil/mathematics.c`) comes from the Boost project's
 `bessel_i0` (Copyright (c) 2006 Xiaogang Zhang), under this licence:
@@ -198,3 +205,20 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR ANYONE
 DISTRIBUTING THE SOFTWARE BE LIABLE FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The DXT block formulas in `src/hap_decode.cpp` (by way of `libavcodec/texturedsp.c`) are under this licence:
+
+Copyright (C) 2009 Benjamin Dobell, Glass Echidna
+Copyright (C) 2012 Matthäus G. "Anteru" Chajdas (http://anteru.net)
+Copyright (C) 2015 Vittorio Giovara
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to
+the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

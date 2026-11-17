@@ -180,6 +180,13 @@ size_t pixelBytes(PixelLayout layout, int width, int height) {
 bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout, std::vector<uint8_t>& out) {
     if (width <= 0 || height <= 0 || p.width <= 0 || p.height <= 0 || p.chromaWidth <= 0 || p.chromaHeight <= 0 || p.bits < 8 || p.bits > 16 || layout == PixelLayout::Gray) return false;
     const bool planar = layout == PixelLayout::I420, same = width == p.width && height == p.height;
+    if (planar && !same && rgbPlanes(p)) {
+        std::vector<uint8_t> bgra;
+        if (!pictureToLayout(p, width, height, PixelLayout::Bgra, bgra)) return false;
+        out.resize(pixelBytes(layout, width, height));
+        bgraToI420(bgra.data(), size_t(width) * 4, width, height, out.data());
+        return true;
+    }
     out.resize(pixelBytes(layout, width, height));
     std::vector<uint8_t> bgra;
     auto finish = [&](const Picture& ready) {
@@ -213,7 +220,7 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
     ready.bits = p.bits;
     ready.color = p.color;
     const int matrix = p.color.known ? p.color.matrix : 2;
-    if (matrix != 1 && matrix != 5 && matrix != 6 && matrix != 9 && matrix != 10 && p.color.transfer != 16 && p.color.transfer != 18) {
+    if (matrix != 0 && matrix != 1 && matrix != 5 && matrix != 6 && matrix != 9 && matrix != 10 && p.color.transfer != 16 && p.color.transfer != 18) {
         ready.color.known = true;
         ready.color.matrix = p.height >= 720 ? 1 : 6;
     }

@@ -113,6 +113,7 @@ struct Lane {
     std::vector<uint8_t> prefix;
     bool frameAtom = false;
     bool usable = true;
+    uint32_t rawFourcc = 0;
     uint32_t fixedSamples = 0;
     std::vector<int64_t> times;
     std::vector<int64_t> spans;
@@ -224,10 +225,14 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
                 t.configType = 0;
                 t.config.clear();
             }
-            if (vc1Codec(t.codec) || msmpeg4Codec(t.codec)) {
+            if (vc1Codec(t.codec) || msmpeg4Codec(t.codec) || ownVideoName(t.codec)) {
                 t.configType = fourcc("bmih");
                 t.config = secret;
             }
+        } else if (id == "V_UNCOMPRESSED" && lane.rawFourcc) {
+            t.codec = lane.rawFourcc;
+        } else if (id == "V_FFV1") {
+            set("FFV1", fourcc("FFV1"), true);
         } else {
             char name[4] = {' ', ' ', ' ', ' '};
             for (size_t i = 0; i < 4 && i + 2 < id.size(); ++i) name[i] = id[i + 2];
@@ -379,6 +384,7 @@ public:
                         if (inner == kPixelWidth) t.width = int(std::min<uint64_t>(number(value), 65535));
                         else if (inner == kPixelHeight) t.height = int(std::min<uint64_t>(number(value), 65535));
                         else if (inner == kInterlaced) t.interlaced = number(value) == 1;
+                        else if (inner == 0x2EB524 && value.n == 4) lane.rawFourcc = be32(value.p);
                         else if (inner == kColour) {
                             children(value, [&](uint32_t part, View item) {
                                 int given = int(std::min<uint64_t>(number(item), 255));

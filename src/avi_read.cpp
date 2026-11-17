@@ -56,6 +56,8 @@ uint32_t videoFourcc(uint32_t handler, int height) {
     if (any({"MPG1", "MPEG", "MP1V"}) || handler == 0x01000010) return fourcc("mp1v");
     if (any({"MPG2", "MP2V", "MMES", "M2V1"}) || handler == 0x02000010) return fourcc("mp2v");
     if (any({"H263", "S263"})) return fourcc("h263");
+    if (any({"MPNG"})) return fourcc("png ");
+    if (!handler || any({"DIB ", "RGB ", "RAW "})) return fourcc("DIB ");
     return 0;
 }
 
@@ -575,7 +577,7 @@ public:
         Track& t = s.track;
         t.codec = videoFourcc(s.handler, t.height);
         if (!t.codec) t.codec = s.handler;
-        if (vc1Codec(t.codec) || msmpeg4Codec(t.codec)) {
+        if (vc1Codec(t.codec) || msmpeg4Codec(t.codec) || ownVideoName(t.codec)) {
             t.configType = fourcc("bmih");
             t.config = s.bitmap;
         }

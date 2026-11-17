@@ -225,7 +225,7 @@ void videoKind(Track& track) {
     const uint32_t family = c >> 8;
     if (c == fourcc("m1v ") || c == fourcc("mpg1") || c == fourcc("mpeg")) c = fourcc("mp1v");
     else if (c == fourcc("m2v1") || c == fourcc("mpg2") || family == 0x686476 || family == 0x786476 || family == 0x786435 || (c >> 16) == 0x6D78) c = fourcc("mp2v");
-    else if (c == fourcc("mjpg") || c == fourcc("MJPG") || c == fourcc("AVDJ") || c == fourcc("dmb1")) c = fourcc("jpeg");
+    else if (c == fourcc("mjpg") || c == fourcc("MJPG") || c == fourcc("mjpa") || c == fourcc("AVDJ") || c == fourcc("dmb1")) c = fourcc("jpeg");
     if (c == fourcc("s263") || c == fourcc("H263")) c = fourcc("h263");
     if (c != fourcc("mp4v") || track.configType != fourcc("esds")) return;
     ElementaryStream stream;
@@ -246,7 +246,10 @@ void entry(uint32_t format, View v, Track& track, SoundUnit& unit) {
         v.skip(16);
         track.width = v.u16();
         track.height = v.u16();
-        v.skip(50);
+        v.skip(46);
+        const int depth = v.u16();
+        v.skip(2);
+        if (format == fourcc("rle ") || format == fourcc("raw ")) track.bits = depth;
         boxes(v, [&](uint32_t type, View body) {
             if (type == fourcc("avcC") || type == fourcc("hvcC") || type == fourcc("vpcC") || type == fourcc("av1C") || type == fourcc("apvC") || type == fourcc("esds")) {
                 track.configType = type;

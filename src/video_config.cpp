@@ -262,6 +262,15 @@ bool av1Config(const uint8_t* unit, size_t size, std::vector<uint8_t>& config, S
     return false;
 }
 
+int mpegChroma(Reader& file, const Track& track) {
+    if (track.samples.empty() || track.samples[0].size > (64u << 20)) return 1;
+    std::vector<uint8_t> first(track.samples[0].size);
+    if (!file.read(track, 0, first.data())) return 1;
+    for (size_t i = 0; i + 6 <= first.size(); ++i)
+        if (first[i] == 0 && first[i + 1] == 0 && first[i + 2] == 1 && first[i + 3] == 0xB5 && (first[i + 4] >> 4) == 1) return (first[i + 5] >> 1) & 3;
+    return 1;
+}
+
 bool shapeFromConfig(uint32_t configType, const std::vector<uint8_t>& c, StreamShape& shape) {
     if (configType == fourcc("hvcC") && c.size() >= 23) {
         int chroma = c[16] & 3;

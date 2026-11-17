@@ -2,6 +2,7 @@
 #ifdef ABSENT_DE265
 #include "nal.h"
 #include <algorithm>
+#include <cstring>
 #include <libde265/de265.h>
 #include <thread>
 
@@ -15,6 +16,8 @@ struct De265Decoder : SoftDecoder {
     int lengthSize = 4;
     bool primed = false;
     Color color;
+    std::vector<uint8_t> grey;
+    int greyBits = 0;
 
     ~De265Decoder() override {
         if (context) de265_free_decoder(context);
@@ -38,18 +41,34 @@ struct De265Decoder : SoftDecoder {
 
     void pictures(const PictureSink& sink) {
         while (const de265_image* image = de265_get_next_picture(context)) {
-            const int format = de265_get_chroma_format(image);
-            if (format == de265_chroma_mono) continue;
+            const bool mono = de265_get_chroma_format(image) == de265_chroma_mono;
             Picture p;
             p.width = de265_get_image_width(image, 0);
             p.height = de265_get_image_height(image, 0);
-            p.chromaWidth = de265_get_image_width(image, 1);
-            p.chromaHeight = de265_get_image_height(image, 1);
             p.bits = de265_get_bits_per_pixel(image, 0);
-            for (int c = 0; c < 3; ++c) {
+            for (int c = 0; c < (mono ? 1 : 3); ++c) {
                 int stride = 0;
                 p.plane[c] = de265_get_image_plane(image, c, &stride);
                 p.stride[c] = size_t(stride);
+            }
+            if (mono) {
+                p.chromaWidth = (p.width + 1) / 2;
+                p.chromaHeight = (p.height + 1) / 2;
+                const size_t bytes = p.bits > 8 ? 2 : 1;
+                p.stride[1] = p.stride[2] = size_t(p.chromaWidth) * bytes;
+                if (grey.size() != p.stride[1] * size_t(p.chromaHeight) || greyBits != p.bits) {
+                    greyBits = p.bits;
+                    grey.resize(p.stride[1] * size_t(p.chromaHeight));
+                    const uint16_t middle = uint16_t(1 << (p.bits - 1));
+                    for (size_t i = 0; i < grey.size(); i += bytes) {
+                        if (bytes == 1) grey[i] = 128;
+                        else memcpy(&grey[i], &middle, 2);
+                    }
+                }
+                p.plane[1] = p.plane[2] = grey.data();
+            } else {
+                p.chromaWidth = de265_get_image_width(image, 1);
+                p.chromaHeight = de265_get_image_height(image, 1);
             }
             p.stamp = de265_get_image_PTS(image);
             p.color = color;

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace absent {
@@ -93,6 +94,18 @@ uint64_t statedLayout(const Track& t, int channels) {
     return 0;
 }
 
+}
+
+std::unique_ptr<PacketDecoder> openOwnAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error) {
+    const uint32_t c = track.codec;
+    if (c == fourcc("fLaC")) return openFlacAudio(track, error);
+    if (c == fourcc("alac")) return openAlacAudio(track, error);
+    if (c == fourcc("ac-3") || c == fourcc("ec-3")) return openAc3Audio(track, firstPacket, error);
+    if (c == fourcc("samr") || c == fourcc("sawb")) return openAmrAudio(track, error);
+    if (c == fourcc("mp4a")) return openAacAudio(track, firstPacket, error);
+    if (c == fourcc(".mp3") || c == fourcc(".mp2") || c == fourcc(".mp1")) return openMpg123Audio(track, firstPacket, error);
+    if (error) *error = "no decoder for this audio codec on this system yet";
+    return nullptr;
 }
 
 struct AudioDecoder::Impl {
@@ -369,10 +382,10 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
         else if (track.codec == fourcc("dts ")) a.codec = openDtsAudio(track, packet, error);
         else if (track.codec == fourcc("mlpa")) a.codec = openTruehdAudio(track, packet, error);
         else {
-#ifndef __ANDROID__
-            a.codec = openSystemAudio(track, packet, error);
+#ifdef __ANDROID__
+            a.codec = openOwnAudio(track, packet, error);
 #else
-            return fail("no decoder for this audio codec on this system");
+            a.codec = std::getenv("FFAMP_NO_SYSTEM_AUDIO") ? openOwnAudio(track, packet, error) : openSystemAudio(track, packet, error);
 #endif
         }
     }

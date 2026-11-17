@@ -44,6 +44,7 @@ std::unique_ptr<PacketDecoder> openAlacAudio(const Track& track, std::string* er
 std::unique_ptr<PacketDecoder> openAacAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openAmrAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openMpg123Audio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
+std::unique_ptr<PacketDecoder> openOwnAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::vector<uint8_t>& firstPacket, std::string* error);
 std::unique_ptr<PacketDecoder> openOpusAudio(const Track& track, std::string* error);
 std::unique_ptr<PacketDecoder> openVorbisAudio(const Track& track, std::string* error);

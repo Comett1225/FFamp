@@ -93,11 +93,22 @@ MPEG-2), VA-API on Linux (H.264, HEVC, VP9, AV1), MediaCodec on Android. On Wind
 on mid-stream or gives no picture for goes to the software decoder, which keeps it to the end. `VideoDecoder::backend()` names the
 decoder in use (`mediafoundation-gpu`, `mediafoundation`, `vaapi`, `h264`, `libde265`, ...).
 
+On Android the app asks MediaCodec first and hands FFamp only what MediaCodec has no decoder for. `AudioDecoder` then opens FFamp's
+own FLAC, ALAC, AC-3/E-AC-3 and AAC decoders (besides the WMA, DTS, TrueHD, WavPack, TTA, ADPCM and PCM ones every system has), and
+`android::SoftVideo` gives I420 pictures in presentation order from FFamp's own H.264 (every profile: 10-bit, 4:2:2, 4:4:4), ProRes,
+DNxHD/DNxHR, DV, VC-1, WMV 7/8, MS-MPEG4, H.263, Cinepak, QuickTime Animation, PNG, HAP, Ut Video, FFV1 and uncompressed decoders
+(MPEG-4 part 2 when xvidcore is built). It reads the track's first packets through the `Reader` it is opened with, so H.264 without
+reorder information in the stream keeps its first pictures. A picture with `SoftPicture::rgb` set was made from RGB and holds
+limited-range BT.709 I420; every other picture keeps the stream's own matrix and range. The Android build has no decoder for MP1/MP2 or AMR sound (mpg123 and opencore-amr are not
+built for it), Opus, Vorbis, MPEG-1/2, HEVC, VP8, VP9, AV1, APV or Motion JPEG; MediaCodec has to take those. `ffamp softvideo <file>`
+runs SoftVideo on the desktop and writes its pictures to standard output.
+
 Environment variables for tests:
 
 | Variable | Effect |
 |---|---|
 | `FFAMP_OWN_H264` | FFamp's own H.264 decoder first, the system decoder behind it (Windows and Linux) |
+| `FFAMP_NO_SYSTEM_AUDIO` | no system sound decoder: FFamp's own decoders, the route Android takes (every desktop system) |
 | `FFAMP_FAIL_SYSTEM_VIDEO=N` | the system video decoder fails from its Nth sample, so the hand-over to the software decoder can be watched |
 | `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_GPU_DECODE`, `FFAMP_NO_VAAPI` | no Media Foundation (as on Windows N), Media Foundation without the GPU, no VA-API |
 

@@ -195,10 +195,11 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
         return true;
     }
     const int bytes = p.bits > 8 ? 2 : 1, top = (1 << p.bits) - 1;
-    const int chromaWidth = planar ? (width + 1) / 2 : width, chromaHeight = planar ? (height + 1) / 2 : height;
+    const bool gbr = gbrPicture(p);
+    const int chromaWidth = planar && !gbr ? (width + 1) / 2 : width, chromaHeight = planar && !gbr ? (height + 1) / 2 : height;
     const size_t luma = size_t(width) * size_t(height) * size_t(bytes), chroma = size_t(chromaWidth) * size_t(chromaHeight) * size_t(bytes);
     static thread_local std::vector<uint8_t> wide;
-    std::vector<uint8_t>& scaled = planar && bytes == 1 ? out : wide;
+    std::vector<uint8_t>& scaled = planar && bytes == 1 && !gbr ? out : wide;
     scaled.resize(luma + 2 * chroma);
     Picture ready;
     ready.plane[0] = scaled.data();
@@ -213,7 +214,7 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
     ready.bits = p.bits;
     ready.color = p.color;
     const int matrix = p.color.known ? p.color.matrix : 2;
-    if (matrix != 1 && matrix != 5 && matrix != 6 && matrix != 9 && matrix != 10 && p.color.transfer != 16 && p.color.transfer != 18) {
+    if (!gbr && matrix != 1 && matrix != 5 && matrix != 6 && matrix != 9 && matrix != 10 && p.color.transfer != 16 && p.color.transfer != 18) {
         ready.color.known = true;
         ready.color.matrix = p.height >= 720 ? 1 : 6;
     }
@@ -243,6 +244,10 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
     });
     if (direct) return true;
     if (!planar) return finish(ready);
+    if (gbr) {
+        pictureToI420(ready, out);
+        return true;
+    }
     if (bytes == 2) pictureToPlanar(ready, out, true);
     return true;
 }

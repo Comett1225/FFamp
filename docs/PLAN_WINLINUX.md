@@ -62,6 +62,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | DV | VideoToolbox | own decoder based on FFmpeg's (round 2) | same | own, LGPL-derived |
 | H.263 | VideoToolbox | own decoder on the H.263 core FFamp has for WMV and MS-MPEG4, based on FFmpeg's (round 2) | same | own, LGPL-derived (NOTICE) |
 | Lossless video and the rest of the gaps rounds | own | own | own | own |
+| Raw video in AVI (RGB, palettes, YUV layouts), Cinepak | own | own | own | own, LGPL-derived (NOTICE) |
 | AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
 | MP3, MP2, MP1 | AudioToolbox | mpg123 (Media Foundation's MP3 decoder was tried: it places the sound 624 frames later than FFmpeg's) | mpg123 | LGPL-2.1-or-later (already in the Mac dependency list) |
 | Opus, Vorbis | libopus, libvorbis | same | same | BSD-3-Clause (already in FFamp) |

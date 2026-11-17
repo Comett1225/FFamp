@@ -21,6 +21,8 @@ This is a prototype. It proves the riskiest part on macOS; nothing here is used 
 - A-law, mu-law, IMA ADPCM (WAV, QuickTime, DK3, DK4), Microsoft and Yamaha ADPCM, G.722, G.726 and TTA through FFamp's own decoders,
   based on FFmpeg's, in WAV, AIFF-C, CAF, AVI, Matroska, QuickTime and ASF; FLAC, AAC, MP3, AC-3 and E-AC-3 in the WAV, AVI and CAF
   layouts FFmpeg writes.
+- AVI as FFmpeg reads it (OpenDML over 4 GB, idx1, no or broken index, odd chunks and JUNK, DV type-1 with its sound, avc1 H.264,
+  ADTS AAC); raw video (RGB, palettes, YUV layouts) and Cinepak through FFamp's own decoders, based on FFmpeg's.
 - `ffamp`, a command-line tool: `probe`, `decode`, `frames`, `bench`, `encode`, `transcode`, `remux`.
 - File tools (`docs/TOOLS.md`): `compress`, `trim`, `extract-audio`, `reverse`, `gif-video`, `merge`, `strip-audio`, `rewrap`, with progress
   lines and a clean stop; `docs/YTDLP.md` describes the downloader without FFmpeg.

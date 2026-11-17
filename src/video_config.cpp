@@ -345,6 +345,26 @@ bool h264Layout(const std::vector<uint8_t>& c, H264Layout& layout) {
     return b.ok && layout.frameNumBits <= 16;
 }
 
+bool h264Intra(const H264Layout& layout, const uint8_t* sample, size_t size) {
+    size_t at = 0;
+    while (size - at > size_t(layout.lengthSize)) {
+        size_t length = 0;
+        for (int i = 0; i < layout.lengthSize; ++i) length = (length << 8) | sample[at++];
+        if (length > size - at) break;
+        const int type = length ? sample[at] & 31 : 0;
+        if (type == 5) return true;
+        if (type == 1) {
+            const std::vector<uint8_t> header = unescaped(sample + at + 1, length - 1, 16);
+            Bits b{header.data(), header.size()};
+            b.ue();
+            const uint32_t kind = b.ue() % 5;
+            return b.ok && (kind == 2 || kind == 4);
+        }
+        at += length;
+    }
+    return false;
+}
+
 int h264FieldOf(const H264Layout& layout, const uint8_t* sample, size_t size, uint32_t& frameNumber) {
     bool top = false, bottom = false, whole = false;
     size_t at = 0;

@@ -169,6 +169,7 @@ struct VideoDecoder::Impl {
     uint32_t ahead = 8;
     uint32_t next = kNone;
     uint32_t last = kNone;
+    uint32_t from = kNone;
     int64_t kept = INT64_MIN;
     struct Job {
         std::vector<uint8_t> bytes;
@@ -609,9 +610,10 @@ Frame VideoDecoder::frame(uint32_t index) {
     if (!present() && d.next != kNone && d.next > target && d.floor >= d.kept) d.settle(pts, later);
     if (!present()) {
         const uint32_t key = d.keyFor(item.first);
-        if (d.next == kNone || d.next < key || d.next > item.first) {
+        if (d.next == kNone || d.next < key || d.next > item.first || key < d.from) {
             d.restart();
             d.next = key;
+            d.from = key;
             ++d.restarts;
         }
         while (d.next <= target) {

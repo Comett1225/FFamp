@@ -285,6 +285,19 @@ list; `Sample.offset` is then free for the reader's use.
   (not premultiplied), scaled with the picture. I420 and RGB24 output have no alpha.
 - A sample the decoder rejects does not end the stream: `VideoDecoder::frame` returns the nearest earlier frame that decoded, with the
   asked frame's time, as FFmpeg's concealment shows a repeat.
+- H.264 jumps with VideoToolbox: when the key frame the jump starts at is an IDR or I picture, its sample carries
+  `kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding`, so the decoder drops the references it held (FFmpeg starts a new hardware
+  decoder after every flush), and the pictures that follow the key frame in the file, up to the next key frame, but are shown before it
+  (the leading pictures of an open GOP) are not fed. VideoToolbox answers such a picture, whose references lie before the key frame,
+  with `kVTVideoDecoderBadDataErr` and then refuses every later picture up to the next key frame that is an I picture (FFmpeg's
+  `-hwaccel videotoolbox` fails the same way after a seek); no shown picture refers to them. A key frame that is a P picture (a
+  recovery point, as x264's intra refresh marks them) cannot start with an empty picture buffer: the jump starts up to two key frames
+  earlier, at the first I picture on the way, so the refresh is complete before the asked frame (x264's recovery count can be longer
+  than one key interval: 31 pictures at keyint 30), and when that start is a P picture too it gets no reset and the file's first key frame, an I
+  picture, is fed before it, so VideoToolbox has a picture to refer to until the refresh replaces it.
+- A jump restarts the decoder when the asked frame's key frame lies before the key frame the running decode started at (VideoToolbox,
+  Media Foundation, VA-API and the software decoders alike): the frame just before an open-GOP key frame is that key frame's leading
+  picture, after it in the file, and continuing from the key frame would decode it without its references.
 - Microsoft MPEG-4 v1 to v3, WMV7 and WMV8 in AVI and in Matroska (`V_MS/VFW/FOURCC`) get the names above with configType `bmih`, as
   in ASF. In AVI their key frames are the I-pictures, read from each chunk's picture header (the index's key flags are not used: old
   DivX 3 files often have no index or mark every chunk). These codecs have no B-pictures, so shown order is stored order. `DIV5` and
@@ -635,7 +648,12 @@ list; `Sample.offset` is then free for the reader's use.
   nothing is linked. H.264 (8-bit 4:2:0, progressive, MBAFF and field pairs woven into one frame), HEVC Main and Main 10, VP9 profiles
   0 and 2 and AV1 Main (8 and 10-bit) are parsed by FFamp and sent as VA-API picture and slice buffers; pictures are copied out as
   NV12 or P010 after `vaSyncSurface2` (2 s at most), and a failed submit or copy-out stops the GPU path for that decoder, whose stream
-  then goes to the software decoder (above). Under the
+  then goes to the software decoder (above). An H.264 jump to a key frame that is not an IDR picture gets a new VA context first
+  (`VaSession::renew`, as FFmpeg makes a new one after every flush: the d3d12 driver otherwise keeps state from before the jump and
+  gets inter pictures wrong; about 40 ms at 1080p under WSL), and its first picture is not given made-up references for the
+  frame-number gap from nothing (the d3d12 driver turns a picture whose reference list names a surface that was never decoded into
+  a copy of the key picture). A size change at an IDR picture opens the new session there, which needs no second context (the d3d12
+  driver loses the IDR's references when the context is replaced right after it, and every following picture comes out wrong). Under the
   d3d12 driver four cases stay on the software decoders (H.264 on FFamp's own decoder) because the driver gets them wrong: H.264 with non-flat scaling matrices
   (it ignores them), 10-bit VP9 and AV1 whose height % 16 is 2 to 9 (wrong chroma and inter pictures), VP9 and AV1 with an odd width
   or height (the driver crashes the process in `vaEndPicture`; `d3d12Wrong`), and AV1 film grain. NVIDIA's
@@ -651,7 +669,9 @@ list; `Sample.offset` is then free for the reader's use.
   encoded at 160 kbit/s. AudioToolbox on the Mac gets the highest applicable bitrate at or below the asked one (mono stops at 256).
   `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_SYSTEM_AUDIO`, `FFAMP_NO_SYSTEM_ENCODER` and `FFAMP_NO_GPU_DECODE` force the
   software paths for testing; `VideoDecoder::open(..., software = true)` skips the system decoder.
-- `bgraToI420` (every BGRA and RGBA frame handed to `VideoEncoder::encodeBGRA` off the Mac, and the Mac's software path) takes the
+- `bgraToI420` (every BGRA and RGBA frame handed to `VideoEncoder::encodeBGRA`, and BGRA pixel buffers and surfaces handed to the
+  Mac's `encodePixelBuffer` and `encodeSurface`, which reach VideoToolbox as NV12; VideoToolbox's own conversion took one pixel per
+  2x2 block) takes the
   chroma of each 2x2 block as the average of its four pixels; a 1-pixel coloured line keeps half its colour, as swscale's
   `rgb0` to `yuv420p` gives it (within 16 levels on the fixes suite's test frame, mean under 2).
 - Before draining, the decoder feeds up to 16 more samples until the asked frame arrives, so decoders with an output delay (Media

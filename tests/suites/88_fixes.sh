@@ -73,9 +73,12 @@ import sys
 ours = open(sys.argv[1], 'rb').read()[4096:]
 theirs = open(sys.argv[2], 'rb').read()[4096:]
 gaps = [abs(a - b) for a, b in zip(ours, theirs)]
-sys.exit(0 if len(ours) == len(theirs) == 2048 and max(gaps) <= 16 and sum(gaps) / len(gaps) <= 2 else 1)" $FX/chroma.yuv $FX/chroma_ff.yuv
+sys.exit(0 if len(ours) == len(theirs) == 2048 and max(gaps) <= 16 and sum(gaps) / len(gaps) <= 2 else 1)" "$1" $FX/chroma_ff.yuv
     }
-    check "fixes: RGB to 4:2:0 keeps the colour of 1-pixel lines like swscale (chroma within 16 levels)" chroma_like_ffmpeg
+    check "fixes: RGB to 4:2:0 keeps the colour of 1-pixel lines like swscale (chroma within 16 levels)" chroma_like_ffmpeg $FX/chroma.yuv
+    for k in 1 2 3 4 5 6 7 8; do cat $FX/chroma.bgra; done > $FX/chroma8.bgra
+    encoded_chroma() { $A frames-in $FX/chroma.mp4 --size 64x64 --fps 30 --format bgra --bitrate 20000000 --in $FX/chroma8.bgra > /dev/null 2>&1 && $F -i $FX/chroma.mp4 -frames:v 1 -pix_fmt yuv420p -f rawvideo $FX/chroma_enc.yuv && chroma_like_ffmpeg $FX/chroma_enc.yuv; }
+    check "fixes: BGRA frames encoded at 20 Mbit/s keep the colour of 1-pixel lines (chroma within 16 levels of swscale's)" encoded_chroma
     $F -f lavfi -i sine=r=48000:d=3 -ac 1 -f f32le $FX/mono.f32
     mono_rate() { $A aencode $FX/mono_$1.m4a --pcm $FX/mono.f32 --rate 48000 --channels 1 --format aac --bitrate $1 > /dev/null 2>&1 && [ "$($FFPROBE -v error -show_entries stream=bit_rate -of csv=p=0 $FX/mono_$1.m4a)" -ge 120000 ]; }
     for rate in 192000 256000 320000; do check "fixes: mono AAC at $((rate / 1000)) kbit/s is not cut to 64 kbit/s" mono_rate $rate; done

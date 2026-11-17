@@ -22,7 +22,7 @@ std::string fixtures;
 std::string scratch(const std::string& name) { return folder + "/" + name; }
 
 bool save(const std::string& path, const std::vector<uint8_t>& data) {
-    FILE* file = fopen(path.c_str(), "wb");
+    FILE* file = openFile(path.c_str(), "wb");
     if (!file) return false;
     bool ok = fwrite(data.data(), 1, data.size(), file) == data.size();
     return fclose(file) == 0 && ok;
@@ -30,7 +30,7 @@ bool save(const std::string& path, const std::vector<uint8_t>& data) {
 
 std::vector<uint8_t> load(const std::string& path) {
     std::vector<uint8_t> data;
-    FILE* file = fopen(path.c_str(), "rb");
+    FILE* file = openFile(path.c_str(), "rb");
     if (!file) return data;
     uint8_t block[65536];
     while (size_t got = fread(block, 1, sizeof block, file)) data.insert(data.end(), block, block + got);
@@ -1302,6 +1302,17 @@ bool mkvRotation() {
     }
     return true;
 }
+#ifdef _WIN32
+bool manyReaders() {
+    std::vector<std::unique_ptr<Reader>> held;
+    for (int i = 0; i < 1000; ++i) {
+        auto reader = Reader::open(fixtures + (i % 2 ? "/audio/aac_stereo_44k.m4a" : "/readers/f32.wav"));
+        if (!reader) return false;
+        held.push_back(std::move(reader));
+    }
+    return save(scratch("after_readers.bin"), {1, 2, 3}) && load(scratch("after_readers.bin")).size() == 3;
+}
+#endif
 
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre},
@@ -1313,6 +1324,9 @@ const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"first-sync", firstSync}, 
 #ifdef __APPLE__
     {"scaler-labels", scalerLabels},
+#endif
+#ifdef _WIN32
+    {"many-readers", manyReaders},
 #endif
     {"finish-twice", finishTwice}, {"many-tracks", manyTracks}, {"long-gap", longGap}, {"wma-block-align", wmaBlockAlign},
     {"interleave", interleave}, {"colour-unknown", colourUnknown}, {"copy-codecs", copyCodecs}, {"mkv-frame-rate", mkvFrameRate}, {"gif-hold", gifHold},

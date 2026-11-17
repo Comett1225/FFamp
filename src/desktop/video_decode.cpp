@@ -493,7 +493,9 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.shape.chromaX = codec == fourcc("dvc ") || codec == fourcc("dvpp") ? 2 : 1;
         d.shape.chromaY = codec == fourcc("dvcp") ? 1 : 0;
     } else if (part2 || jpeg || mpeg) {
-        d.shape.chromaY = 1;
+        const int chroma = mpeg ? mpegChroma(file, track) : 1;
+        d.shape.chromaY = chroma >= 2 ? 0 : 1;
+        if (chroma == 3) d.shape.chromaX = 0;
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
         config.clear();
     }
@@ -548,7 +550,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.soft = openOwnVideo(track, error);
     } else {
         const VideoInfo info = h264 || hevc ? videoInfo(track.configType, config) : VideoInfo();
-        const bool systemProfile = mpeg ? mpegChroma(file, track) == 1 : !(h264 || hevc) || (info.chroma == 1 && info.bitDepth <= (h264 ? 8 : 10) && info.bitDepthChroma <= (h264 ? 8 : 10));
+        const bool systemProfile = mpeg ? d.shape.chromaX == 1 && d.shape.chromaY == 1 : !(h264 || hevc) || (info.chroma == 1 && info.bitDepth <= (h264 ? 8 : 10) && info.bitDepthChroma <= (h264 ? 8 : 10));
         const bool system = !software && !vp8 && systemProfile;
         const bool ownFirst = h264 && std::getenv("FFAMP_OWN_H264");
         if (track.alpha && (vp8 || vp9)) d.softMask = openVpxDecoder(vp8, nullptr);

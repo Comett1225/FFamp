@@ -21,6 +21,8 @@ std::wstring wide(const std::string& text) {
 }
 
 FILE* openFile(const std::string& path, const char* mode) {
+    static const int streams = _getmaxstdio() < 8192 ? _setmaxstdio(8192) : _getmaxstdio();
+    (void)streams;
     const std::wstring how = wide(mode);
     return _wfopen(wide(path).c_str(), how.c_str());
 }

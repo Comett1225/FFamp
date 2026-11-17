@@ -22,7 +22,7 @@ int aencode(const Args& args) {
     const int given = int(args.number("source-channels", channels));
     if (given != channels && !(given == 2 && channels == 1) && !(given == 1 && channels == 2)) return fail("only mono and stereo sources can be remixed");
     const std::string source = args.get("pcm");
-    FILE* in = source == "-" ? stdin : fopen(source.c_str(), "rb");
+    FILE* in = source == "-" ? stdin : openFile(source.c_str(), "rb");
     if (!in) return fail("cannot open " + source);
     std::string error;
     auto writer = AudioFileWriter::open(args.plain[0], format->second, int(args.number("rate", 48000)), channels, int(args.number("bitrate", 0)), &error);
@@ -88,7 +88,7 @@ struct Cursor {
 };
 
 bool load(const std::string& path, std::vector<Stored>& tracks) {
-    FILE* file = fopen(path.c_str(), "rb");
+    FILE* file = openFile(path.c_str(), "rb");
     if (!file) return false;
     std::vector<uint8_t> all;
     uint8_t block[65536];

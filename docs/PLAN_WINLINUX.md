@@ -33,7 +33,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | Thumbnail (`still`) | ffmpeg decode, scale, PNG | `FrameReader` over the decoders below | same |
 | Sound for the mix and viewer (`pcm`, `playback`) | ffmpeg decode + aresample | `PcmReader` (own resampler) over the audio decoders below | same |
 | I420 frames (`yuv`), RGBA frames (`play`, `videoSource`, `steadyFrames`) | ffmpeg rawvideo pipes | `FrameReader` (own scaler) | same |
-| Preview decoder (`video.cpp`, D3D11VA or VA-API, copied to memory) | libav linked | `VideoDecoder`: Media Foundation with DXVA for H.264, HEVC and MPEG-2 first; FFamp's own H.264 decoder and libde265 for what it refuses or fails on; else software | `VideoDecoder`: VA-API for H.264, HEVC, VP9 and AV1 where a driver loads (round 2), else software libraries |
+| Preview decoder (`video.cpp`, D3D11VA or VA-API, copied to memory) | libav linked | `VideoDecoder`: Media Foundation with DXVA first for H.264, HEVC Main and Main 10 at 4:2:0 and 4:2:0 MPEG-2; FFamp's own H.264 decoder, libde265 and libmpeg2 for what it refuses or fails on; else software | `VideoDecoder`: VA-API for H.264, HEVC, VP9 and AV1 where a driver loads (round 2), else software libraries |
 | Encoder list and trial (`encoders`, `encoderWorks`) | `ffmpeg -encoders`, 2-frame trial | `encoders()`, `encoderWorks()` | same |
 | Video export (H.264, HEVC, AV1, VP9, APV; AAC, Opus; MP4, MOV, WebM, MKV) | `h264_nvenc/qsv/amf/mf`, `libx264`, `libx265`, `libsvtav1`, `libvpx-vp9`, `liboapv`, `aac_mf`, `aac`, `libopus` | Media Foundation H.264/HEVC (hardware encoder MFT first, then Microsoft's software H.264 MFT), x264 / x265 when Media Foundation cannot; SVT-AV1, libvpx, liboapv, libopus; AAC: Media Foundation (96 to 192 kbit/s), else vo-aacenc | x264, x265, SVT-AV1, libvpx, liboapv, libopus, vo-aacenc (VA-API encode later) |
 | Audio export (WAV 16/24, FLAC, M4A, Ogg Opus, MP3) | pcm, flac, aac, libopus, libmp3lame | own WAV and FLAC, AAC as above, libopus, LAME | own, vo-aacenc, libopus, LAME |
@@ -50,7 +50,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | Codec | Mac today | Windows | Linux | Licence of the added part |
 |---|---|---|---|---|
 | H.264 | VideoToolbox | Media Foundation (DXVA when the GPU has it) first (owner decision 2026-11-17: system decoders first); FFamp's own decoder (FFmpeg's, ported) for streams Media Foundation refuses or fails on, and without Media Foundation | VA-API for 8-bit 4:2:0 (round 2); FFamp's own decoder based on FFmpeg's, with its assembly and frame threads, otherwise | own, LGPL-derived (NOTICE) |
-| HEVC | VideoToolbox | Media Foundation for Main and Main 10 4:2:0 when the HEVC Video Extensions are installed (DXVA); libde265 for 4:2:2, 4:4:4, monochrome and more than 10 bits, and without the extensions | VA-API (round 2); libde265 otherwise | LGPL-3.0-or-later |
+| HEVC | VideoToolbox | Media Foundation for Main and Main 10 at 4:2:0 up to level 6.2 when the HEVC Video Extensions are installed (DXVA); libde265 for the rest (4:2:2, 4:4:4, 12-bit, larger pictures) and otherwise | VA-API (round 2); libde265 otherwise | LGPL-3.0-or-later |
 | VP8, VP9 | libvpx / system | libvpx | VA-API for VP9 (round 2); libvpx | BSD-3-Clause (already in FFamp) |
 | AV1 | dav1d / system | dav1d | VA-API (round 2); dav1d | BSD-2-Clause (already in FFamp) |
 | APV | liboapv | liboapv | liboapv | BSD-3-Clause (already in FFamp) |
@@ -65,7 +65,7 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | Raw video in AVI (RGB, palettes, YUV layouts), Cinepak | own | own | own | own, LGPL-derived (NOTICE) |
 | DNxHD/DNxHR, QuickTime Animation, HAP, Ut Video, FFV1 (based on FFmpeg's), PNG, v210, uncompressed | own | own | own | own, LGPL-derived (NOTICE; HAP's DXT formulas MIT) |
 | CineForm | not decoded yet | not decoded yet | not decoded yet | |
-| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing, for program config elements and when Media Foundation would change the rate or channels (LC at 24 kHz or less, HE-AAC without SBR signalled) | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
+| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing, for program config elements, 6.1 and 7.1 (Media Foundation refuses them) and when Media Foundation would change the rate or channels (LC at 24 kHz or less, HE-AAC without SBR signalled) | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
 | MP3, MP2, MP1 | AudioToolbox | mpg123 (Media Foundation's MP3 decoder was tried: it places the sound 624 frames later than FFmpeg's) | mpg123 | LGPL-2.1-or-later (already in the Mac dependency list) |
 | Opus, Vorbis | libopus, libvorbis | same | same | BSD-3-Clause (already in FFamp) |
 | FLAC | AudioToolbox | own decoder written from RFC 9639 (round 1) | same | own |

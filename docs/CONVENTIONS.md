@@ -591,10 +591,10 @@ list; `Sample.offset` is then free for the reader's use.
 - `SoftDecoder::wanted(stamp)` is set by `VideoDecoder`: false for pictures it will not keep (before the asked frame after a jump, or
   everything in `run()`). Media Foundation and VA-API then skip the copy from the GPU and hand a picture with only its stamp and colour
   (no planes), which `store` counts and drops; software decoders ignore it.
-- Platform hooks, picked at run time with the software libraries behind them: `openPlatformVideo` (Media Foundation H.264 and HEVC, through
+- Platform hooks, picked at run time with the software libraries behind them: `openPlatformVideo` (Media Foundation H.264, HEVC and MPEG-1/2, through
   the GPU when the MFT takes a D3D11 device manager: backend `mediafoundation-gpu`, else `mediafoundation`), `openPlatformEncoder` (the
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
-  out one frame late: `lead` is one frame; refused for a program config element and whenever Media Foundation would give another rate
+  out one frame late: `lead` is one frame; refused for a program config element (channel configuration 0: it gave silence for 2.1 and its own element order, unlabelled, for the rest) and whenever Media Foundation would give another rate
   or channel count than the configuration states, such as LC at 24 kHz or less and HE-AAC whose configuration does not signal SBR, which
   Media Foundation takes for double rate: those go to FFamp's own decoder; a stream change it announces is renegotiated, and one that
   changes the format ends that decoder's sound), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
@@ -609,9 +609,10 @@ list; `Sample.offset` is then free for the reader's use.
   H.264 decoder first (Windows and Linux; for tests and speed comparisons); `FFAMP_FAIL_SYSTEM_VIDEO=N` makes the system video
   decoder fail from its Nth sample, to test that hand-over.
 - Media Foundation and VA-API only get the profiles they decode: H.264 8-bit 4:2:0, HEVC Main and Main 10 4:2:0 and MPEG-1/2 4:2:0
-  (the chroma format of the first sample's sequence extension, `mpegChroma`). Media Foundation accepts every HEVC and MPEG-2 stream and
-  then hangs (GPU) or gives no pictures (software) on HEVC 4:2:2, 4:4:4, monochrome and MPEG-2 4:2:2, so those go to libde265 and
-  libmpeg2 from the start.
+  (the chroma format of the first sample's sequence extension, `mpegChroma`); Media Foundation only HEVC no larger than level 6.2
+  allows (35,651,584 samples, 16,888 a side; the profile, chroma format and bit depths come from `hvcC`). Media Foundation accepts
+  every HEVC and MPEG-2 stream and then hangs (GPU), waits forever in its drain or gives no pictures (software) on HEVC 4:2:2, 4:4:4,
+  monochrome, 12-bit and larger pictures and on MPEG-2 4:2:2, so those go to libde265 and libmpeg2 from the start.
 - `encoders()` names the encoders `VideoEncoder` and `AacEncoder` really use, under FFmpeg's names for the same job: `h264_mf`,
   `hevc_mf` and `aac_mf` on Windows (x264, x265 and vo-aacenc behind them where Media Foundation cannot), `libx264` and `libx265` on
   Linux, and `aac` for vo-aacenc on both.
@@ -709,7 +710,8 @@ list; `Sample.offset` is then free for the reader's use.
   next start code, so pictures come out one sample late; the drain (a sequence end code) ends the stream. B-pictures that lead an
   open GOP with no earlier reference (a file cut there, the first pictures after a jump) are handed out as the key picture they lead
   to, where FFmpeg drops them. Colour comes from the sequence display extension; the range is always limited. libmpeg2's x86 IDCT
-  (SSE2) rounds differently from its C IDCT and from FFmpeg's: 60 to 65 dB against ffmpeg.
+  (SSE2) rounds differently from its C IDCT and from FFmpeg's: 60 to 65 dB against ffmpeg. The Windows build is libmpeg2's C code
+  only (MSVC takes none of its inline assembly).
 - Motion JPEG and JPEG pictures on Linux: libjpeg-turbo (backend `libjpeg-turbo`, `openStillDecoder`), as WIC on Windows: the
   picture's own YCbCr planes (4:2:0, 4:2:2, 4:4:4, 4:1:1; greyscale with neutral 4:2:0 chroma) from `jpeg_read_raw_data`, full
   range, BT.601; RGB and other layouts through BGRX into limited BT.709 4:4:4, as WIC's fallback. libjpeg-turbo fills in the standard
@@ -722,7 +724,10 @@ list; `Sample.offset` is then free for the reader's use.
   portable zip of nasm.us on PATH, so x264, x265, dav1d, SVT-AV1, libvpx (x86-64 Windows target) and FFamp's own H.264 decoder build their assembly;
   NASM is a build tool only and never ships). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so
   the CLI's import library cannot overwrite it; clang's builtins library is linked for 128-bit division). Paths given to FFamp are UTF-8
-  on every system (`openFile`, `removeFile`, `fileBytes` in `src/portable.h`).
+  on every system (`openFile`, `removeFile`, `renameFile`, `fileBytes` in `src/portable.h`); on Windows the `ffamp` command rebuilds
+  its arguments as UTF-8 from the wide command line, as FFmpeg's programs do, and its commands open files only through `openFile`.
+  On Windows `openFile` raises the C runtime's limit of open stdio streams from 512 to 8,192 (the limit of the low-level handles
+  FFmpeg's file protocol uses), since every open reader holds one: a process can keep more than 509 files open.
 
 ## DTS, TrueHD and WavPack (`src/dts_decode.cpp`, `src/truehd_decode.cpp`, `src/wavpack_decode.cpp`, every system)
 

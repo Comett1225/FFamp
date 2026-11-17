@@ -3,6 +3,12 @@ FX=$O/fixes
 rm -rf $FX
 mkdir -p $FX
 for name in $($A fixcheck); do check "fixes: $name" $A fixcheck $name $FX fixtures; done
+fx_named() {
+    mkdir -p "$FX/$1" && cp fixtures/audio/aac_stereo_44k.m4a "$FX/$1/clip $1.m4a" && cp fixtures/audio/mp3_stereo_44k.mp4 "$FX/$1/clip $1.mp4" || return 1
+    $A probe --json "$FX/$1/clip $1.m4a" | grep -q '"codec_name":"aac"' && $A extract-audio "$FX/$1/clip $1.mp4" "$FX/$1/sound $1.mp3" > /dev/null &&
+        $A extract-audio "$FX/$1/clip $1.m4a" "$FX/$1/sound $1.m4a" > /dev/null && $A adecode "$FX/$1/sound $1.mp3" > /dev/null 2>&1 && $A adecode "$FX/$1/sound $1.m4a" > /dev/null 2>&1
+}
+for name in Café Привет 動画; do check "fixes: a folder and file named $name open, probe and extract-audio into it" fx_named $name; done
 if have_ffmpeg; then
     decoded_bytes() { [ "$($FFMPEG -nostdin -v error -i "$1" -f s16le - | wc -c | tr -d ' ')" = "$2" ]; }
     stated_length() { [ "$($FFPROBE -v error -show_entries format=duration -of csv=p=0 "$1" 2> /dev/null)" = "$2" ]; }

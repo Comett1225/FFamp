@@ -100,6 +100,7 @@ bool parseAacConfig(View specific, AacConfig& out) {
     uint32_t layout = b.take(4);
     out.channelConfig = int(layout);
     out.channels = kChannels[layout];
+    
     out.outputRate = out.rate;
     int core = out.objectType;
     if (core == 5 || core == 29) {

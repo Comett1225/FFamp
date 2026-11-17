@@ -258,7 +258,7 @@ struct Vp9Decoder : SoftDecoder {
         if (!session.ready() || width != session.width() || height != session.height() || deep != session.tenBit()) {
             if (!key && session.ready()) return false;
             reset();
-            if (d3d12WrongTenBit(deep, height) || !session.open(deep ? VAProfileVP9Profile2 : VAProfileVP9Profile0, width, height, deep, 10)) return false;
+            if (d3d12Wrong(deep, width, height) || !session.open(deep ? VAProfileVP9Profile2 : VAProfileVP9Profile0, width, height, deep, 10)) return false;
         }
         const VASurfaceID target = session.spare(std::vector<VASurfaceID>(std::begin(refs), std::end(refs)));
         if (target == VA_INVALID_SURFACE) return false;
@@ -370,8 +370,8 @@ std::unique_ptr<SoftDecoder> openVaapiVp9(const StreamShape& shape, int width, i
         return nullptr;
     }
     const bool deep = shape.bits > 8;
-    if (d3d12WrongTenBit(deep, height)) {
-        if (error) *error = "the GPU decodes this 10-bit VP9 frame height wrongly";
+    if (d3d12Wrong(deep, width, height)) {
+        if (error) *error = "the GPU driver decodes this VP9 frame size wrongly or crashes on it";
         return nullptr;
     }
     const VAProfile profile = deep ? VAProfileVP9Profile2 : VAProfileVP9Profile0;

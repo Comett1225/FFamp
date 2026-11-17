@@ -67,6 +67,14 @@ constexpr uint32_t kMbSkip = 1;
 using IdctOp = void (*)(uint8_t* dest, ptrdiff_t stride, int16_t* block);
 using PixelsOp = vc1::PixelsOp;
 
+struct PixelOps {
+    PixelsOp put[2][4];
+    PixelsOp noRnd[2][4];
+};
+const PixelOps& pixelOps();
+void cIdctPut(uint8_t* dst, ptrdiff_t stride, int16_t* block);
+void cIdctAdd(uint8_t* dst, ptrdiff_t stride, int16_t* block);
+
 struct RlTable {
     Vlc vlc;
     int n = 0, last = 0;
@@ -124,8 +132,13 @@ struct Mpv {
     std::vector<uint8_t> mbIntraTable;
     uint8_t intraScan[64] = {}, interScan[64] = {}, intraHScan[64] = {}, intraVScan[64] = {}, intraRasterEnd[64] = {};
     std::vector<uint8_t> edgeEmu;
+#if defined(__ARM_NEON)
     IdctOp idctPut = vc1::neonSimpleIdctPut;
     IdctOp idctAdd = vc1::neonSimpleIdctAdd;
+#else
+    IdctOp idctPut = cIdctPut;
+    IdctOp idctAdd = cIdctAdd;
+#endif
     const vc1::Dsp* dsp = &vc1::dsp();
 
     bool allocate(int w, int h);

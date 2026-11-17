@@ -82,7 +82,6 @@ std::unique_ptr<SoftDecoder> openProRes(uint32_t codec, std::string* error);
 std::unique_ptr<SoftDecoder> openDv();
 std::unique_ptr<SoftDecoder> openRawVideo(const Track& track, std::string* error);
 std::unique_ptr<SoftDecoder> openCinepak(const Track& track, std::string* error);
-inline bool gbrPicture(const Picture& p) { return p.color.known && p.color.matrix == 0 && p.chromaWidth == p.width && p.chromaHeight == p.height; }
 
 bool vp9Shape(const uint8_t* frame, size_t size, StreamShape& shape);
 std::vector<uint8_t> vp9Config(const StreamShape& shape, double fps, int bitrate);
@@ -90,14 +89,15 @@ bool av1Config(const uint8_t* unit, size_t size, std::vector<uint8_t>& config, S
 bool h264Layout(const std::vector<uint8_t>& config, H264Layout& layout);
 int h264FieldOf(const H264Layout& layout, const uint8_t* sample, size_t size, uint32_t& frameNumber);
 bool shapeFromConfig(uint32_t configType, const std::vector<uint8_t>& config, StreamShape& shape);
+int mpegChroma(Reader& file, const Track& track);
 
+bool rgbPlanes(const Picture& picture);
 bool pictureToBGRA(const Picture& picture, uint8_t* out, size_t stride, bool redFirst = false);
 void rowsToBGRA(const Picture& picture, uint8_t* out, size_t stride, bool redFirst, int from, int to);
 void pictureRow(const Picture& picture, int plane, int y, float* out);
 void inParallel(int rows, const std::function<void(int, int)>& work);
 void pictureToPlanar(const Picture& picture, std::vector<uint8_t>& out, bool narrow = false);
 void pictureToI420(const Picture& picture, std::vector<uint8_t>& out);
-Picture gbrToYuv(const Picture& picture, std::vector<uint8_t>& storage);
 bool withPixelBuffer(void* pixelBuffer, const std::function<bool(const Picture&)>& use);
 
 }

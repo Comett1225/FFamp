@@ -851,7 +851,7 @@ struct Msmpeg4 : Mpv {
         uint8_t* y = dest[0];
         const int offsets[4] = {0, 8, 8 * linesize, 8 * linesize + 8};
         if (!mbIntra) {
-            PixelsOp const (*ops)[4] = noRounding ? dsp->putNoRndPixelsTab : dsp->putPixelsTab;
+            PixelsOp const (*ops)[4] = noRounding ? pixelOps().noRnd : pixelOps().put;
             if (mspel && version == kWmv2) mspelMotion(ops);
             else mpegMotion(last.data, ops, mv[0], mv[1]);
             if (version == kWmv2) {

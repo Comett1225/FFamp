@@ -54,6 +54,7 @@ uint32_t videoFourcc(uint32_t handler, int height) {
     if (any({"WMV1"})) return fourcc("WMV1");
     if (any({"WMV2", "GXVE"})) return fourcc("WMV2");
     if (any({"H264", "X264", "AVC1", "VSSH", "DAVC", "SMV2", "Q264", "V264", "GAVC", "UMSV", "TSHD", "INMC"})) return fourcc("avc1");
+    if (any({"HEVC", "H265", "HEV1", "HVC1", "DVHE"})) return fourcc("hvc1");
     if (any({"MJPG", "JPEG", "IJPG", "AVRN", "DMB1", "MSC2", "LJPG", "MJPA", "JR24", "JPGL", "ACDV", "QIVG", "SLMJ", "CJPG", "IJLV", "MVJP", "AVI1", "AVI2",
             "MTSJ", "ZJPG", "MMJP"}))
         return fourcc("jpeg");
@@ -65,6 +66,8 @@ uint32_t videoFourcc(uint32_t handler, int height) {
         return fourcc("mp2v");
     if (any({"H263", "S263", "X263", "T263", "L263", "VX1K", "ZYGO", "M263", "LSVM", "U263"})) return fourcc("h263");
     if (any({"CVID"})) return fourcc("cvid");
+    if (any({"MPNG"})) return fourcc("png ");
+    if (!handler || any({"DIB ", "RGB ", "RAW "})) return fourcc("DIB ");
     return 0;
 }
 
@@ -1000,9 +1003,9 @@ public:
     void picture(Stream& s) {
         Track& t = s.track;
         const bool plain = !s.tape && (s.compression == 0 || s.compression == 0x03000000);
-        t.codec = plain ? fourcc("raw ") : videoFourcc(s.handler, t.height);
+        t.codec = plain ? fourcc("DIB ") : videoFourcc(s.handler, t.height);
         if (!t.codec) t.codec = s.handler;
-        if (vc1Codec(t.codec) || msmpeg4Codec(t.codec) || rawVideoCodec(t.codec) || t.codec == fourcc("cvid")) {
+        if (vc1Codec(t.codec) || msmpeg4Codec(t.codec) || ownVideoName(t.codec)) {
             t.configType = fourcc("bmih");
             t.config = s.bitmap;
         }

@@ -32,7 +32,7 @@ struct Va {
 
 const Va* vaapi();
 bool vaDecodes(VAProfile profile);
-inline bool d3d12WrongTenBit(bool deep, int height) { return deep && vaapi() && vaapi()->d3d12 && height % 16 >= 2 && height % 16 <= 9; }
+inline bool d3d12Wrong(bool deep, int width, int height) { return vaapi() && vaapi()->d3d12 && (((width | height) & 1) || (deep && height % 16 >= 2 && height % 16 <= 9)); }
 
 class VaSession {
 public:

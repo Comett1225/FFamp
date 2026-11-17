@@ -1,4 +1,5 @@
 #include "image.h"
+#include "../own_video.h"
 #include "../readers.h"
 #include "../nal.h"
 #include "absent/media.h"
@@ -112,6 +113,7 @@ void fillImage(Image& image, const Picture& from) {
 }
 
 const Image* imageOf(const void* native) { return static_cast<const Image*>(native); }
+
 
 bool withPixelBuffer(void* pixelBuffer, const std::function<bool(const Picture&)>& use) {
     const Image* image = imageOf(pixelBuffer);
@@ -463,8 +465,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool prores = twelve || codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco");
     const bool dv = (codec >> 16) == 0x6476;
     const bool h263 = codec == fourcc("h263");
-    const bool raw = rawVideoCodec(codec), cinepak = codec == fourcc("cvid");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv && !h263 && !raw && !cinepak) return fail("video codec not supported by this decoder");
+    const bool ownCodec = ownVideoName(codec) != nullptr;
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv && !h263 && !ownCodec) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -542,17 +544,12 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.soft = openProRes(codec, error);
     } else if (dv) {
         d.soft = openDv();
-    } else if (raw || cinepak) {
-        d.soft = raw ? openRawVideo(track, error) : openCinepak(track, error);
-        if (cinepak || codec == fourcc("raw ")) {
-            d.shape.color = Color();
-            d.shape.color.known = true;
-            d.shape.color.matrix = 0;
-            d.shape.color.full = true;
-        }
+    } else if (ownCodec) {
+        d.soft = openOwnVideo(track, error);
     } else {
-        const VideoInfo info = h264 ? videoInfo(track.configType, config) : VideoInfo();
-        const bool system = !software && !vp8 && (!h264 || (info.bitDepth == 8 && info.chroma == 1));
+        const VideoInfo info = h264 || hevc ? videoInfo(track.configType, config) : VideoInfo();
+        const bool systemProfile = mpeg ? mpegChroma(file, track) == 1 : !(h264 || hevc) || (info.chroma == 1 && info.bitDepth <= (h264 ? 8 : 10) && info.bitDepthChroma <= (h264 ? 8 : 10));
+        const bool system = !software && !vp8 && systemProfile;
         const bool ownFirst = h264 && std::getenv("FFAMP_OWN_H264");
         if (track.alpha && (vp8 || vp9)) d.softMask = openVpxDecoder(vp8, nullptr);
         auto own = [&d, config, vp8, vp9, av1, mpeg, h264](std::string* why) -> std::unique_ptr<SoftDecoder> {
@@ -664,7 +661,7 @@ Frame VideoDecoder::frame(uint32_t index) {
         std::lock_guard<std::mutex> hold(d.lock);
         frame.color = d.shape.color;
     }
-    if (!frame.color.known && p.color.known) frame.color = p.color;
+    if (p.color.known && (!frame.color.known || p.color.matrix == 0)) frame.color = p.color;
     if (!frame.color.known) {
         const bool high = frame.height >= 720;
         frame.color.known = true;

@@ -170,4 +170,13 @@ ninja -C out -j "$JOBS" >/dev/null
 ninja -C out install >/dev/null
 fi
 
+if step mpeg2; then
+fetch https://download.videolan.org/contrib/libmpeg2/libmpeg2-0.5.1.tar.gz dee22e893cb5fc2b2b6ebd60b88478ab8556cb3b93f9a0d7ce8f3b61851871d4 mpeg2 libmpeg2-0.5.1.tar.gz
+sed -e '/#define ARCH_X86/d' -e '/#define ACCEL_DETECT/d' vc++/config.h > include/config.h
+plain_library mpeg2 libmpeg2/alloc.c libmpeg2/cpu_accel.c libmpeg2/cpu_state.c libmpeg2/decode.c libmpeg2/header.c libmpeg2/idct.c libmpeg2/motion_comp.c libmpeg2/slice.c
+with_cmake "-DINCLUDES=include;libmpeg2"
+mkdir -p "$PREFIX/include/mpeg2dec"
+cp include/mpeg2.h "$PREFIX/include/mpeg2dec/"
+fi
+
 ls -l "$PREFIX/lib"

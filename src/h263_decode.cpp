@@ -54,58 +54,6 @@ const RlTable& aicTable() {
 
 int signExtend(int value, int bits) { return int(unsigned(value) << (32 - bits)) >> (32 - bits); }
 
-#if defined(__x86_64__) || defined(_M_X64)
-void putNoRnd8X2Approx(uint8_t* dst, const uint8_t* src, ptrdiff_t stride, int h) {
-    for (int y = 0; y < h; y++, dst += stride, src += stride)
-        for (int x = 0; x < 8; x++) dst[x] = uint8_t((std::max(src[x] - 1, 0) + src[x + 1] + 1) >> 1);
-}
-
-void putNoRnd8Y2Approx(uint8_t* dst, const uint8_t* src, ptrdiff_t stride, int h) {
-    for (int y = 0; y < h; y++, dst += stride, src += stride) {
-        const uint8_t* odd = (y & 1) ? src : src + stride;
-        const uint8_t* even = (y & 1) ? src + stride : src;
-        for (int x = 0; x < 8; x++) dst[x] = uint8_t((std::max(odd[x] - 1, 0) + even[x] + 1) >> 1);
-    }
-}
-#endif
-
-struct PixelOps {
-    PixelsOp put[2][4];
-    PixelsOp noRnd[2][4];
-};
-
-const PixelOps& pixelOps() {
-    static const PixelOps made = [] {
-        PixelOps o;
-        const vc1::Dsp& d = vc1::dsp();
-        memcpy(o.put, d.putPixelsTab, sizeof o.put);
-        memcpy(o.noRnd, d.putNoRndPixelsTab, sizeof o.noRnd);
-#if defined(__x86_64__) || defined(_M_X64)
-        o.noRnd[1][1] = putNoRnd8X2Approx;
-        o.noRnd[1][2] = putNoRnd8Y2Approx;
-#endif
-        return o;
-    }();
-    return made;
-}
-
-#if !defined(__ARM_NEON)
-const vc1::Dsp& cIdct() {
-    static const vc1::Dsp made = [] {
-        vc1::Dsp d{};
-        vc1::simpleIdct(d);
-        return d;
-    }();
-    return made;
-}
-
-void cIdctPut(uint8_t* dst, ptrdiff_t stride, int16_t* block) {
-    cIdct().invTrans8x8(block);
-    vc1::putPixelsClamped(block, dst, stride);
-}
-
-void cIdctAdd(uint8_t* dst, ptrdiff_t stride, int16_t* block) { cIdct().invTrans8x8Dc(dst, stride, block); }
-#endif
 
 void putObmc(uint8_t* dst, uint8_t* const src[5], int stride) {
     const uint8_t* top = src[1];
@@ -169,10 +117,6 @@ struct H263 : Mpv {
     H263() {
         setScans(kZigzagDirect, kZigzagDirect, kAlternateHorizontalScan, kAlternateVerticalScan);
         yDcScaleTable = cDcScaleTable = kMpeg1DcScale;
-#if !defined(__ARM_NEON)
-        idctPut = cIdctPut;
-        idctAdd = cIdctAdd;
-#endif
     }
 
     int decodeMba() {

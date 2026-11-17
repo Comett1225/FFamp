@@ -21,6 +21,7 @@ int vc1PictureType(uint32_t codec, const std::vector<uint8_t>& config, const uin
 inline bool msmpeg4Codec(uint32_t codec) {
     return codec == fourcc("MPG4") || codec == fourcc("MP42") || codec == fourcc("MP43") || codec == fourcc("WMV1") || codec == fourcc("WMV2");
 }
+const char* ownVideoName(uint32_t codec);
 inline bool vc1Codec(uint32_t codec) { return codec == fourcc("WMV3") || codec == fourcc("WVC1") || codec == fourcc("WMVA"); }
 uint32_t waveAudio(uint32_t tag);
 uint32_t extensibleTag(const uint8_t* format, size_t size);

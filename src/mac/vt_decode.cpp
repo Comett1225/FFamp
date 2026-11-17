@@ -1,6 +1,7 @@
 #include "absent/media.h"
 #include "readers.h"
 #include "soft_video.h"
+#include "own_video.h"
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>
 #include <VideoToolbox/VideoToolbox.h>
@@ -166,9 +167,11 @@ void fill(const Picture& p, CVPixelBufferRef buffer) {
     }
     uint8_t* chroma = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 1));
     const size_t chromaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
-    for (int y = 0; y < p.chromaHeight; ++y) {
-        const uint8_t* u = p.plane[1] + size_t(y) * p.stride[1];
-        const uint8_t* v = p.plane[2] + size_t(y) * p.stride[2];
+    const int rows = int(CVPixelBufferGetHeightOfPlane(buffer, 1));
+    for (int y = 0; y < rows; ++y) {
+        const int from = int(int64_t(y) * p.chromaHeight / rows);
+        const uint8_t* u = p.plane[1] + size_t(from) * p.stride[1];
+        const uint8_t* v = p.plane[2] + size_t(from) * p.stride[2];
         uint8_t* to = chroma + size_t(y) * chromaStride;
         if (wide) weaveRow(reinterpret_cast<const uint16_t*>(u), reinterpret_cast<const uint16_t*>(v), reinterpret_cast<uint16_t*>(to), p.chromaWidth, lift);
         else weaveRow(u, v, to, p.chromaWidth, 0);
@@ -272,7 +275,6 @@ struct VideoDecoder::Impl {
     };
     std::unique_ptr<SoftDecoder> softMask;
     std::vector<uint8_t> veil;
-    std::vector<uint8_t> converted;
     int64_t veilStamp = INT64_MIN;
 
     bool decodeSoft(const Job& job) {
@@ -286,7 +288,7 @@ struct VideoDecoder::Impl {
             });
         }
         return soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) {
-            Picture seen = gbrPicture(p) ? gbrToYuv(p, converted) : p;
+            Picture seen = p;
             if (veilStamp == p.stamp && veil.size() == size_t(p.width) * size_t(p.height)) {
                 seen.alpha = veil.data();
                 seen.alphaStride = size_t(p.width);
@@ -519,7 +521,7 @@ struct VideoDecoder::Impl {
         ++shown;
         if (p.color.known) {
             std::lock_guard<std::mutex> hold(lock);
-            if (!shape.color.known) shape.color = p.color;
+            if (!shape.color.known || p.color.matrix == 0) shape.color = p.color;
         }
         if (!keep || p.stamp < floor) return;
         CVPixelBufferRef buffer = surfaceFor(p);
@@ -595,7 +597,7 @@ struct VideoDecoder::Impl {
         }
         CVPixelBufferRef buffer = nullptr;
         if (!pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return nullptr;
-        if (int(CVPixelBufferGetWidthOfPlane(buffer, 1)) != p.chromaWidth || int(CVPixelBufferGetHeightOfPlane(buffer, 1)) != p.chromaHeight) {
+        if (int(CVPixelBufferGetWidthOfPlane(buffer, 1)) != p.chromaWidth || int(CVPixelBufferGetHeightOfPlane(buffer, 1)) != (p.chromaWidth < p.width ? p.chromaHeight : p.height)) {
             CFRelease(buffer);
             return nullptr;
         }
@@ -720,8 +722,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool jpeg = codec == fourcc("jpeg");
     const bool tape = (codec >> 16) == 0x6476;
     const bool older = jpeg || tape || codec == fourcc("mp1v") || codec == fourcc("mp2v") || codec == fourcc("h263");
-    const bool raw = rawVideoCodec(codec), cinepak = codec == fourcc("cvid");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv && !part2 && !older && !vc1 && !msmpeg4 && !raw && !cinepak) return fail("video codec not supported by this decoder");
+    const bool own = ownVideoName(codec) != nullptr;
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv && !part2 && !older && !vc1 && !msmpeg4 && !own) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -760,7 +762,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
             i += 2 + length;
         }
     } else if (part2 || older) {
-        d.shape.chromaY = tape && codec != fourcc("dvcp") ? 0 : 1;
+        d.shape.chromaY = (tape && codec != fourcc("dvcp")) || ((codec == fourcc("mp1v") || codec == fourcc("mp2v")) && mpegChroma(file, track) != 1) ? 0 : 1;
     } else if (!shapeFromConfig(track.configType, config, d.shape) && (vp9 || av1)) {
         config.clear();
     }
@@ -795,7 +797,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
 
     auto softly = [&]() -> std::unique_ptr<VideoDecoder> {
         if (track.alpha && (vp8 || vp9)) d.softMask = openVpxDecoder(vp8, nullptr);
-        d.soft = jpeg ? openStillDecoder(error) : apv ? openApvDecoder(error) : av1 ? openDav1d(int(d.ahead), error) : openVpxDecoder(vp8, error);
+        d.soft = own ? openOwnVideo(track, error) : jpeg ? openStillDecoder(error) : apv ? openApvDecoder(error) : av1 ? openDav1d(int(d.ahead), error) : openVpxDecoder(vp8, error);
         if (!d.soft) return nullptr;
         if (av1) d.ahead += d.ahead / 2;
         if (jpeg) {
@@ -805,18 +807,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.backend = d.soft->name();
         return std::move(decoder);
     };
-    if (vp8 || apv || (vp9 && track.alpha) || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
-    if (raw || cinepak) {
-        d.soft = raw ? openRawVideo(track, error) : openCinepak(track, error);
-        if (!d.soft) return nullptr;
-        if (cinepak || codec == fourcc("raw ")) {
-            d.shape.color = Color();
-            d.shape.color.known = true;
-            d.shape.color.full = true;
-        }
-        d.backend = d.soft->name();
-        return decoder;
-    }
+    if (own || vp8 || apv || (vp9 && track.alpha) || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
     if (vc1 || msmpeg4) {
         d.soft = vc1 ? openVc1(codec, config, track.width, track.height, error) : openMsmpeg4(codec, config, track.width, track.height, error);
         if (!d.soft) return nullptr;

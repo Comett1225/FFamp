@@ -88,8 +88,8 @@ table=pictures
 on_mac || table=pictures_desktop
 check "bad_sample.mp4 decodes to the checked checksum" listed $table bad_sample.mp4 $A decode $FX/bad_sample.mp4
 names_unknown() { $A probe --json $FX/unknown_codec.mkv | grep -q '"codec_name":"ffv1".*"start_time":"0.000000".*"duration":"0.400000"'; }
-check "a video codec nothing here decodes is still named and timed by probe" names_unknown
-check "and its decoder says it is not supported" refuses_with $FX/unknown_codec.mkv "video codec not supported"
+check "FFV1 in Matroska (once a codec nothing here decoded) is named and timed by probe" names_unknown
+check "and decodes with FFamp's own FFV1 decoder" bash -c "$A videoinfo $FX/unknown_codec.mkv | grep -q 'backend ffv1 '"
 
 echo "== formats: damaged files never crash (no FFmpeg)"
 FX_FUZZ=30

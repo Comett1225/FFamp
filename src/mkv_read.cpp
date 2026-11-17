@@ -96,6 +96,24 @@ double real(View v) {
     return 0;
 }
 
+int projectionTurn(View projection) {
+    uint64_t type = 0;
+    double yaw = 0, pitch = 0, roll = 0;
+    bool plain = true;
+    children(projection, [&](uint32_t id, View value) {
+        if (id == 0x7671) type = number(value);
+        else if (id == 0x7672) plain = !value.n || value.p[0] == 0;
+        else if (id == 0x7673) yaw = real(value);
+        else if (id == 0x7674) pitch = real(value);
+        else if (id == 0x7675) roll = real(value);
+    });
+    if (type != 0 || !plain || pitch != 0 || (yaw != 0 && yaw != 180 && yaw != -180) || !std::isfinite(roll)) return 0;
+    const double radians = roll * 3.14159265358979323846 / 180.0;
+    const bool flip = yaw != 0;
+    const double angle = std::atan2(flip ? std::sin(radians) : -std::sin(radians), flip ? -std::cos(radians) : std::cos(radians)) * 180.0 / 3.14159265358979323846;
+    return ((int(std::lround(angle / 90.0)) * 90) % 360 + 360) % 360;
+}
+
 std::string text(View v) {
     return std::string(reinterpret_cast<const char*>(v.p), strnlen(reinterpret_cast<const char*>(v.p), v.n));
 }
@@ -219,7 +237,7 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
                 t.configType = fourcc("esds");
                 t.config = mpeg4Descriptor(secret.data() + 40, secret.size() - 40);
             }
-            if (!t.codec || t.codec == fourcc("avc1")) {
+            if (!t.codec || t.codec == fourcc("avc1") || t.codec == fourcc("hvc1")) {
                 t.codec = be32(secret.data() + 16);
                 t.configType = 0;
                 t.config.clear();
@@ -379,6 +397,7 @@ public:
                         if (inner == kPixelWidth) t.width = int(std::min<uint64_t>(number(value), 65535));
                         else if (inner == kPixelHeight) t.height = int(std::min<uint64_t>(number(value), 65535));
                         else if (inner == kInterlaced) t.interlaced = number(value) == 1;
+                        else if (inner == 0x7670) t.rotation = projectionTurn(value);
                         else if (inner == kColour) {
                             children(value, [&](uint32_t part, View item) {
                                 int given = int(std::min<uint64_t>(number(item), 255));

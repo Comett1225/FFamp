@@ -18,6 +18,7 @@ const uint32_t kTracks = 0x1654AE6B, kTrackEntry = 0xAE, kTrackNumber = 0xD7, kT
 const uint32_t kCodecId = 0x86, kCodecPrivate = 0x63A2, kCodecDelay = 0x56AA, kSeekPreRoll = 0x56BB;
 const uint32_t kVideo = 0xE0, kPixelWidth = 0xB0, kPixelHeight = 0xBA, kAudio = 0xE1, kSamplingFrequency = 0xB5, kChannels = 0x9F, kBitDepth = 0x6264;
 const uint32_t kColour = 0x55B0, kMatrix = 0x55B1, kRange = 0x55B9, kTransfer = 0x55BA, kPrimaries = 0x55BB;
+const uint32_t kProjection = 0x7670, kProjectionRoll = 0x7675;
 const uint32_t kCluster = 0x1F43B675, kTimestamp = 0xE7, kSimpleBlock = 0xA3, kBlockGroup = 0xA0, kBlock = 0xA1, kDiscardPadding = 0x75A2;
 const uint32_t kCues = 0x1C53BB6B, kCuePoint = 0xBB, kCueTime = 0xB3, kCueTrackPositions = 0xB7, kCueTrack = 0xF7, kCueClusterPosition = 0xF1;
 
@@ -324,6 +325,12 @@ bool MkvWriter::finish(std::string* error) {
             number(tracks, kTransfer, uint64_t(spec.color.transfer));
             number(tracks, kPrimaries, uint64_t(spec.color.primaries));
             stop(tracks, colour);
+            static const double rolls[4] = {0, -90, 180, 90};
+            if (const double roll = rolls[((spec.rotation / 90) % 4 + 4) % 4]) {
+                size_t projection = start(tracks, kProjection);
+                real(tracks, kProjectionRoll, roll);
+                stop(tracks, projection);
+            }
             stop(tracks, video);
         } else {
             if (spec.skip > 0) number(tracks, kCodecDelay, uint64_t(std::llround(double(spec.skip) * 1e9 / spec.timescale)));

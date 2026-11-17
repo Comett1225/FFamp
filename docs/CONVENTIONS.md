@@ -77,8 +77,18 @@ list; `Sample.offset` is then free for the reader's use.
   `pts - mediaStart + delay`. Tracks of one file are kept in sync by their difference in `delay`; a consumer that wants the file to start
   at zero subtracts the smallest `delay` of all tracks (what the app does with ffprobe's format `start_time`).
 - MP4/MOV: leading empty edits (media_time -1) add up to `delay`. The first media edit sets `mediaStart` and, when it has a duration,
-  `mediaEnd`; edits that continue exactly where the previous one ended are joined to it. Later, separate segments are not played.
-  Samples at or after `mediaEnd` are left out of `order`.
+  `mediaEnd`; edits that continue exactly where the previous one ended are joined to it. Samples at or after `mediaEnd` are left out of
+  `order`. In a video track `mediaStart` is the first composition time inside the edit, so an edit at media time 0 on a track whose
+  first picture is shown later starts that picture at the edit's start, as FFmpeg does (with no edit list the picture keeps its time).
+- MP4/MOV with several separate media edits: the segments are joined into one timeline, each one starting where the one before it
+  ends (`mediaEnd` is the end of the last). Video keeps, for each segment, the samples from the key frame before it up to its last
+  shown sample; the samples among them that the segment does not show are decoded but not shown: their `pts` are moved below
+  `mediaStart` (unique, rising in decode order, never a shown time). Sound keeps the packets that start inside each segment (the
+  first segment also its run-in), as FFmpeg does. A segment's first shown sample is placed at the segment's start. A stream copy
+  keeps those samples before the start of its edit, where readers that go by time (FFamp, AVFoundation) do not show them; FFmpeg
+  goes by its index and shows fewer frames of such a copy (its own copy of the source is no better).
+- Fragmented MP4: every fragment sample's `pts` gets the track's largest negative composition offset added (FFmpeg's `dts_shift`),
+  so negative offsets show the video when FFmpeg shows it.
 - MPEG-TS: timescale 90000 for every track. Each track's `dts` starts at 0; `mediaStart` is the pts of its first sample (the first key
   frame for video) and `delay` is that sample's time on the stream clock (33-bit wrap-around undone). A stream that starts less than a
   minute before the wrap gets negative times before it, as ffprobe shows it. `Track.id` is the PID.
@@ -161,9 +171,15 @@ list; `Sample.offset` is then free for the reader's use.
 - `Reader::format()` is `avi`, `caf`, `amr`, `ac3` or `eac3` for the new readers.
 - AVI video: timescale and frame step come from the stream header (`dwRate`/`dwScale`, reduced). Chunks are found through the OpenDML
   indexes when there are any, else `idx1`, else by walking the `movi` lists. Empty chunks are not samples; the picture before them
-  lasts longer. MPEG-1, MPEG-2 and MPEG-4 pictures get their shown order from their picture types, H.264 from its picture order
-  count; `dts` is moved back so it never passes `pts`. A DivX packed bitstream (marked by the `DivX...p` user data) is split into one
-  sample per picture and its placeholder chunks are dropped. H.264 samples are converted from start codes to 4-byte lengths.
+  lasts longer (the last picture too). MPEG-1, MPEG-2 and MPEG-4 pictures get their shown order from their picture types, H.264 and
+  HEVC from their picture order counts, sorted between IDR (and HEVC BLA) pictures; empty chunks between pictures do not split them.
+  `dts` is moved back so it never passes `pts`. A DivX packed bitstream (marked by the `DivX...p` user data) is split into one
+  sample per picture and its placeholder chunks are dropped.
+- AVI H.264 (`H264`, `X264`, `AVC1`, ...) and HEVC (`HEVC`, `H265`, `HEV1`, `HVC1`, `DVHE`, as FFmpeg maps them) stored with start codes
+  are converted to 4-byte lengths (delimiters and filler dropped) with an `avcC` / `hvcC` built from the parameter sets. Stored with
+  lengths and an `avcC` / `hvcC` record behind the BITMAPINFOHEADER (what `ffmpeg -c copy` writes from MP4), the chunks are kept as
+  they are and the record is the config. Key frames: H.264 IDR pictures and the I pictures the index marks as key frames (open GOP,
+  from `idx1` `AVIIF_KEYFRAME` or the OpenDML key bit); HEVC every IRAP picture.
 - AVI sound: MP3, MP2, AC-3 and PCM are read as one byte stream across the chunks and cut into their own frames, so chunk borders
   and AVI block timing do not matter. `Sample.offset` is the place in that stream.
 - AC-3 and E-AC-3 decode to the channel order above. Layouts that have no place in it (2.1, 2/1, 2/2 and any other layout with a
@@ -190,6 +206,12 @@ list; `Sample.offset` is then free for the reader's use.
 - VC-1 in AVI and in Matroska (`V_MS/VFW/FOURCC`) keeps its fourcc (`WMV3`, `WVC1`, `WMVA`) with configType `bmih`, as in ASF. In
   AVI its key frames (I pictures and field pairs that start with an I field) and its shown order (a B or BI picture is shown before
   the anchor stored ahead of it) come from the picture types, as for MPEG-4; the index's key flags are not used.
+- Matroska and WebM rotation: Video > Projection with the rectangular type, pitch 0 and yaw 0 or 180 gives `rotation` from its pose
+  roll as FFmpeg's display matrix does (roll 90, counter-clockwise, is `rotation` 270, as in MP4; with yaw 180, a mirror, `rotation` is
+  the angle FFmpeg reports for that matrix). `MkvWriter` writes ProjectionPoseRoll for a rotated track (`TrackSpec::rotation`).
+- Raw MP3 (and MP2, MP1): after junk of any length (a tag with large cover art in the middle of joined files) the reader finds the
+  frames again. Frames of the same layer at another sample rate are kept, with durations counted in the first frame's rate; mpg123
+  resamples them to that rate, and on the Mac the AudioToolbox converter is rebuilt for their rate with the first rate as its output.
 - A Matroska video codec no decoder here knows is kept as a track named by its VFW fourcc or the first letters of its codec ID, so
   probe reports its name, start and length; `VideoDecoder::open` fails with `video codec not supported by this decoder`.
 

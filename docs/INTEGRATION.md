@@ -106,7 +106,9 @@ Deliberate differences from ffprobe (all checked in `tests/suites/40_probe.sh`):
   has negative composition offsets (`pts` is the same).
 - `r_frame_rate` of a file with uneven frame times is the lowest common rate that fits every time stamp; ffprobe's guess can differ
   (2 of 26 real files tried). `avg_frame_rate` matched on all of them.
-- MP4 with several separate edits: the first segment only (ffprobe plays them all).
+- MP4 with several separate edits: the segments are joined with each one starting where the one before ends; FFmpeg's joined times
+  can leave out one frame step at a join. A single edit at media time 0 on a B-frame track: the video starts at 0 as in ffprobe, and
+  its `duration` is the span of the shown frames (ffprobe gives the edit's length).
 - Not written: `codec_long_name`, `codec_tag`, `level`, `has_b_frames`, aspect ratios, `disposition`, `handler_name`, per-stream
   `creation_time`, the `displaymatrix` text, `probe_score`, programs and chapters. The app reads none of them.
 - AV1: colour names come from the container only (the sequence header is not parsed). VP9 without a first key frame falls back to

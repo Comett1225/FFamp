@@ -87,6 +87,8 @@ struct Pending {
     std::vector<Edit> edits;
     Defaults defaults;
     int64_t fragmentTime = 0;
+    int64_t dtsShift = 0;
+    size_t placed = 0;
 };
 
 void pcm(Track& track, int bits, bool floating, bool bigEndian) {
@@ -289,6 +291,7 @@ void table(uint32_t type, View v, Pending& p) {
         for (uint32_t i = 0; i < count; ++i) {
             uint32_t n = v.u32();
             p.ctts.push_back({n, int32_t(v.u32())});
+            p.dtsShift = std::max<int64_t>(p.dtsShift, -int64_t(p.ctts.back().second));
         }
     } else if (type == fourcc("stss")) {
         uint32_t count = v.u32();
@@ -384,6 +387,59 @@ int64_t movieToTrack(uint64_t ticks, uint32_t movieScale, uint32_t trackScale) {
     return scaled > static_cast<unsigned __int128>(INT64_MAX / 2) ? INT64_MAX / 2 : int64_t(scaled);
 }
 
+struct Segment {
+    int64_t time = 0;
+    int64_t length = 0;
+};
+
+void joinSegments(Track& track, const std::vector<Segment>& parts) {
+    const bool video = track.kind == Kind::Video;
+    int64_t low = track.mediaStart;
+    for (const Sample& s : track.samples) low = std::min(low, s.pts);
+    std::vector<Sample> joined;
+    std::vector<size_t> away;
+    int64_t place = 0, start = 0, lastDts = INT64_MIN;
+    for (size_t j = 0; j < parts.size(); ++j) {
+        const Segment& part = parts[j];
+        const int64_t end = part.time + part.length;
+        int64_t lowest = INT64_MAX;
+        size_t lo = track.samples.size(), hi = 0;
+        for (size_t i = 0; i < track.samples.size(); ++i) {
+            const int64_t pts = track.samples[i].pts;
+            if (pts < part.time || pts >= end) continue;
+            lowest = std::min(lowest, pts);
+            lo = std::min(lo, i);
+            hi = i;
+        }
+        if (j == 0) start = video && lowest != INT64_MAX ? lowest : part.time;
+        if (lowest != INT64_MAX) {
+            size_t from = lo;
+            if (video) while (from > 0 && !track.samples[from].sync) --from;
+            else if (j == 0) from = 0;
+            const int64_t shift = place + start - (j == 0 ? start : lowest);
+            for (size_t i = from; i <= hi; ++i) {
+                Sample s = track.samples[i];
+                const bool inside = s.pts >= part.time && s.pts < end;
+                if (inside || j > 0 || s.pts >= end) s.dts += shift;
+                if (inside) {
+                    s.pts += shift;
+                } else if (j > 0 || s.pts >= end) {
+                    away.push_back(joined.size());
+                }
+                if (s.dts <= lastDts) s.dts = lastDts + 1;
+                lastDts = s.dts;
+                joined.push_back(s);
+            }
+        }
+        if (part.length > INT64_MAX / 4 - place) break;
+        place += part.length;
+    }
+    for (size_t k = 0; k < away.size(); ++k) joined[away[k]].pts = low - int64_t(away.size() - k);
+    track.samples = std::move(joined);
+    track.mediaStart = start;
+    track.mediaEnd = start + place;
+}
+
 void applyEdits(Pending& p, uint32_t movieScale) {
     Track& track = p.track;
     uint64_t wait = 0;
@@ -401,6 +457,24 @@ void applyEdits(Pending& p, uint32_t movieScale) {
         end += length;
     }
     if (end > track.mediaStart) track.mediaEnd = end;
+    std::vector<Segment> parts;
+    if (end > track.mediaStart) parts.push_back({track.mediaStart, end - track.mediaStart});
+    for (; at < p.edits.size() && !parts.empty(); ++at) {
+        const Edit& edit = p.edits[at];
+        if (edit.time < 0 || edit.duration == 0) continue;
+        const int64_t length = movieToTrack(edit.duration, movieScale, track.timescale);
+        Segment& last = parts.back();
+        if (std::llabs(edit.time - (last.time + last.length)) <= 1 && length <= INT64_MAX / 4 - last.length) last.length += length;
+        else parts.push_back({edit.time, length});
+    }
+    if (parts.size() > 1 && !track.samples.empty()) {
+        joinSegments(track, parts);
+        return;
+    }
+    if (track.kind != Kind::Video) return;
+    int64_t first = INT64_MAX;
+    for (const Sample& s : track.samples) if (s.pts >= track.mediaStart && (track.mediaEnd < 0 || s.pts < track.mediaEnd)) first = std::min(first, s.pts);
+    if (first != INT64_MAX) track.mediaStart = first;
 }
 
 std::string languageName(uint32_t code) {
@@ -732,6 +806,7 @@ void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks, uint6
                     s.size = (flags & 0x200) ? body.u32() : d.size;
                     uint32_t sampleFlags = (flags & 0x400) ? body.u32() : (i == 0 && hasFirst) ? firstFlags : d.flags;
                     int32_t shift = (flags & 0x800) ? int32_t(body.u32()) : 0;
+                    p->dtsShift = std::max<int64_t>(p->dtsShift, -int64_t(shift));
                     s.offset = offset;
                     s.dts = p->fragmentTime;
                     s.pts = s.dts + shift;
@@ -827,6 +902,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
                     Pending p;
                     trak(content, p);
                     place(p, total);
+                    p.placed = p.track.samples.size();
                     applyEdits(p, movieScale);
                     if (p.track.id && !pending.count(p.track.id)) {
                         ids.push_back(p.track.id);
@@ -856,7 +932,9 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
     if (!seen) return fail("no movie header: not an MP4 or MOV file");
     for (uint32_t id : ids) {
         edited[id] = std::any_of(pending.at(id).edits.begin(), pending.at(id).edits.end(), [](const Edit& e) { return e.time >= 0; });
-        Track track = std::move(pending.at(id).track);
+        Pending& from = pending.at(id);
+        for (size_t i = from.placed; i < from.track.samples.size(); ++i) from.track.samples[i].pts += from.dtsShift;
+        Track track = std::move(from.track);
         size_t keep = 0;
         while (keep < track.samples.size() && track.samples[keep].offset <= total && track.samples[keep].size <= total - track.samples[keep].offset) ++keep;
         track.samples.resize(keep);

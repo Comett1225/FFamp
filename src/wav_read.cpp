@@ -106,8 +106,8 @@ void riff(Source& source, Layout& w, Tags& tags) {
             if (tag == 0xF1AC) {
                 w.codec = fourcc("fLaC");
                 w.unitBytes = 1;
-            } else if (tag == 0x55 || tag == 0x50 || tag == 0x2000) {
-                w.codec = tag == 0x2000 ? fourcc("ac-3") : fourcc(".mp3");
+            } else if (tag == 0x55 || tag == 0x50 || tag == 0x2000 || tag == 0x2001) {
+                w.codec = tag == 0x2000 ? fourcc("ac-3") : tag == 0x2001 ? fourcc("dts ") : fourcc(".mp3");
                 w.unitBytes = 1;
             } else if (tag != 1 && tag != 3) {
                 w.codec = waveAudio(tag);
@@ -266,14 +266,16 @@ std::unique_ptr<Reader> openWave(const std::string& path, std::string* error) {
             reader->list.push_back(std::move(track));
             return reader;
         }
-        if (track.codec == fourcc("ac-3") || track.codec == fourcc(".mp3")) {
+        if (track.codec == fourcc("ac-3") || track.codec == fourcc(".mp3") || track.codec == fourcc("dts ")) {
             const bool mpeg = track.codec == fourcc(".mp3");
+            const bool dts = track.codec == fourcc("dts ");
             track.configType = 0;
             track.config.clear();
             uint64_t at = 0, lost = 0;
             int64_t time = 0;
-            while (w.dataSize - at >= 8 && lost < (1u << 20)) {
-                const uint8_t* head = source.view(w.dataAt + at, 8);
+            const size_t need = dts ? 16 : 8;
+            while (w.dataSize - at >= need && lost < (1u << 20)) {
+                const uint8_t* head = source.view(w.dataAt + at, need);
                 if (!head) break;
                 MpegAudio m;
                 DolbyFrame d;
@@ -282,10 +284,10 @@ std::unique_ptr<Reader> openWave(const std::string& path, std::string* error) {
                 if (mpeg && mpegAudio(head, m)) {
                     size = uint32_t(m.size), samples = uint32_t(m.samples), rate = m.sampleRate, channels = m.channels;
                     codec = m.layer == 3 ? fourcc(".mp3") : m.layer == 2 ? fourcc(".mp2") : fourcc(".mp1");
-                } else if (!mpeg && dolbyFrame(head, d) && !d.dependent) {
+                } else if (!mpeg && (dts ? dtsFrame(head, d) : dolbyFrame(head, d) && !d.dependent)) {
                     size = d.bytes, samples = d.samples, rate = d.rate, channels = d.channels, codec = d.codec;
                 }
-                if (size < 8 || size > w.dataSize - at || rate < 1 || (!track.samples.empty() && (codec != track.codec || rate != track.sampleRate))) {
+                if (size < need || size > w.dataSize - at || rate < 1 || (!track.samples.empty() && (codec != track.codec || rate != track.sampleRate))) {
                     ++at;
                     ++lost;
                     continue;

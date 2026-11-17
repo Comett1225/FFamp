@@ -1,4 +1,11 @@
 echo "== audio fixes: sound read as the app reads it, against ffmpeg (system decoders on, as the app runs)"
+FS=fixtures/audiofix
+nf_frames() { [ "$($A adecode $FS/$1 --frames 0 2>&1)" = "$2" ]; }
+nf_sum() { [ "$($A adecode $FS/$1 2> /dev/null | md5)" = "$2" ]; }
+check "dts_51.mkv decodes without FFmpeg: 48000 Hz, 6 channels, 12288 frames" nf_frames dts_51.mkv "48000 Hz, 6 channels, 12288 frames"
+check "dts_stereo.avi decodes without FFmpeg: 48000 Hz, 2 channels, 12288 frames" nf_frames dts_stereo.avi "48000 Hz, 2 channels, 12288 frames"
+check "truehd_51.mkv decodes without FFmpeg to the checked checksum" nf_sum truehd_51.mkv a3049bb4fc42793e3a474f336fa36e73
+check "wavpack_stereo.mkv decodes without FFmpeg to the checked checksum" nf_sum wavpack_stereo.mkv 5da1e8f47f1e605e403a0a677352c6b7
 have_ffmpeg || { skip "audio fixes against ffmpeg"; return 0; }
 QX=$O/audiofix
 rm -rf $QX
@@ -47,7 +54,7 @@ $F -i $QX/quad.wav -c:a pcm_s16le $QX/quad.mov
 $F -i $QX/quad.wav -c:a pcm_s16le $QX/quad.avi
 $F -i $QX/quad.wav -c:a flac $QX/quad_flac.mkv
 $F -i $QX/quad.wav -c:a libopus -b:a 256k $QX/quad.opus 2> /dev/null
-$F -i $QX/quad.wav -c:a libvorbis $QX/quad.ogg 2> /dev/null || $F -i $QX/quad.wav -c:a vorbis -strict -2 $QX/quad.ogg 2> /dev/null
+$F -i $QX/quad.wav -c:a libvorbis $QX/quad.ogg 2> /dev/null || rm -f $QX/quad.ogg
 $F -f lavfi -i "aevalsrc=0.2*sin(2*PI*300*t)|0.2*sin(2*PI*500*t)|0.2*sin(2*PI*700*t):c=2.1:s=48000:d=2" -c:a pcm_s16le $QX/c21.wav
 $F -i $QX/c21.wav -c:a flac $QX/c21.flac
 $F -i $QX/c21.wav -c:a flac $QX/c21_flac.mkv
@@ -94,8 +101,31 @@ $F -f lavfi -i "aevalsrc=0.3+0.2*sin(2*PI*440*t)|0.3-0.2*sin(2*PI*660*t):s=48000
 $F -f lavfi -i "aevalsrc=0.3+0.2*sin(2*PI*440*t)|0.3-0.2*sin(2*PI*660*t):s=44100:d=3.3" -c:a pcm_s16le $QX/dc44.wav
 for rate in 48 44; do
     for container in webm mkv; do
-        $F -i $QX/dc$rate.wav -c:a libvorbis -q:a 4 $QX/v$rate.$container 2> /dev/null || $F -i $QX/dc$rate.wav -c:a vorbis -strict -2 $QX/v$rate.$container
+        $F -i $QX/dc$rate.wav -c:a libvorbis -q:a 4 $QX/v$rate.$container 2> /dev/null || { skip "Vorbis in $container (this ffmpeg has no libvorbis)"; continue; }
         check "Vorbis in $container at ${rate}.x kHz starts at its first sample, same length as ffmpeg" python3 audio.py against $QX/v$rate.$container 100 0 0
     done
 done
+python3 audio.py signal 48000 6 3.072 $QX/d6.wav
+python3 audio.py signal 48000 2 3.072 $QX/d2.wav
+$F -f lavfi -i testsrc2=size=320x240:rate=25 -t 3 -c:v libx264 -pix_fmt yuv420p $QX/picture.mp4 2> /dev/null || $F -f lavfi -i testsrc2=size=320x240:rate=25 -t 3 -c:v mpeg4 $QX/picture.mp4
+for entry in dca:mkv:d6 dca:mp4:d2 dca:avi:d2 dca:wav:d2 dca:mkv:d2 truehd:mkv:d6 truehd:mkv:d2 truehd:mp4:d6 wavpack:mkv:d6 wavpack:mkv:d2 wavpack:mka:d6:fltp wavpack:mka:d6:s32p; do
+    IFS=: read codec container source format <<< "$entry"
+    out=$QX/${codec}_$source$format.$container
+    $F -i $QX/$source.wav -c:a $codec ${format:+-sample_fmt $format} -strict -2 $out 2> /dev/null || { skip "$codec in $container (this ffmpeg cannot write it)"; continue; }
+    if [ $codec = dca ]; then least=120; else least=250; fi
+    check "$codec ($source) in $container decodes, same length and timing as ffmpeg" python3 audio.py against $out $least 0 0
+    check "$codec ($source) in $container: random reads equal the straight decode" python3 audio.py chunks adecode $out 20 3
+    mkdir -p $QX/fz && cp $out $QX/fz/
+done
+for entry in dca:mkv dca:avi dca:mp4 truehd:mkv; do
+    IFS=: read codec container <<< "$entry"
+    out=$QX/movie_$codec.$container
+    $F -i $QX/picture.mp4 -i $QX/d6.wav -map 0:v -map 1:a -c:v copy -c:a $codec -strict -2 -shortest $out 2> /dev/null || { skip "film with $codec in $container (this ffmpeg cannot write it)"; continue; }
+    if [ $codec = dca ]; then least=120; else least=250; fi
+    check "film with $codec sound in $container: the sound decodes as ffmpeg decodes it" python3 audio.py against $out $least 0 0
+    [ $container = avi ] || check "film with $codec sound in $container: mixed to stereo as the app reads it" $Q app $out 48000 2 100
+done
+QROUNDS=12
+[ -n "${QUICK:-}" ] && QROUNDS=4
+[ -d $QX/fz ] && check "damaged DTS, TrueHD and WavPack files decode or fail cleanly" python3 audio.py fuzz $QX/fz $QROUNDS 9 .mkv,.mka,.mp4,.avi,.wav
 rm -rf $QX

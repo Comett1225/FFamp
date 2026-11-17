@@ -151,7 +151,7 @@ struct AudioDecoder::Impl {
         }
         for (size_t i = 1; i <= n; ++i) starts[i] = std::max(starts[i], starts[i - 1]);
         int64_t wantedFirst = std::clamp(scaled(t.mediaStart, rate, t.timescale), starts[0], starts[n]);
-        int64_t wantedLast = t.mediaEnd < 0 ? starts[n] : std::clamp(scaled(t.mediaEnd, rate, t.timescale), wantedFirst, starts[n]);
+        int64_t wantedLast = t.mediaEnd < 0 ? std::max(wantedFirst, starts[n] - codec->endTrim(*file, t)) : std::clamp(scaled(t.mediaEnd, rate, t.timescale), wantedFirst, starts[n]);
         const int64_t frameBytes = std::max(1, track->channels * (track->bits / 8));
         const bool pcm = t.codec == fourcc("lpcm");
         int64_t closed = 0;
@@ -365,11 +365,16 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
         std::vector<uint8_t> packet(track.samples[0].size);
         if (!file.read(track, 0, packet.data())) return fail("cannot read the first audio packet");
         if (track.codec == fourcc("ac-3") || track.codec == fourcc("ec-3")) dolbyMixLevels(packet.data(), packet.size(), a.levels);
+        if (track.codec == fourcc("wvpk")) a.codec = openWavpackAudio(track, packet, error);
+        else if (track.codec == fourcc("dts ")) a.codec = openDtsAudio(track, packet, error);
+        else if (track.codec == fourcc("mlpa")) a.codec = openTruehdAudio(track, packet, error);
+        else {
 #ifndef __ANDROID__
-        a.codec = openSystemAudio(track, packet, error);
+            a.codec = openSystemAudio(track, packet, error);
 #else
-        return fail("no decoder for this audio codec on this system");
+            return fail("no decoder for this audio codec on this system");
 #endif
+        }
     }
     if (!a.codec) return fail("audio codec not supported");
     if (!a.codec->layout) a.codec->layout = statedLayout(track, a.codec->channels);

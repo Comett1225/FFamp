@@ -521,13 +521,14 @@ public:
         const bool mpeg = s.tag == 0x55 || s.tag == 0x50;
         uint8_t sync[2] = {0, 0};
         const bool sniffed = s.tag == 0 && fetch(s, 0, sync, 2) && sync[0] == 0x0B && sync[1] == 0x77;
-        if (!mpeg && s.tag != 0x2000 && !sniffed) return;
+        const bool dts = s.tag == 0x2001;
+        if (!mpeg && !dts && s.tag != 0x2000 && !sniffed) return;
         t.bits = 0;
         uint64_t at = 0;
         int64_t time = 0;
         uint64_t lost = 0;
-        uint8_t head[8];
-        const size_t need = mpeg ? 4 : 8;
+        uint8_t head[16];
+        const size_t need = mpeg ? 4 : dts ? 16 : 8;
         while (total - at >= need && lost < (1u << 20)) {
             if (!fetch(s, at, head, need)) break;
             uint32_t size = 0, samples = 0, codec = 0;
@@ -540,7 +541,7 @@ public:
                 rate = m.sampleRate;
                 channels = m.channels;
                 codec = m.layer == 3 ? fourcc(".mp3") : m.layer == 2 ? fourcc(".mp2") : fourcc(".mp1");
-            } else if (!mpeg && dolbyFrame(head, d) && !d.dependent) {
+            } else if (!mpeg && (dts ? dtsFrame(head, d) : dolbyFrame(head, d) && !d.dependent)) {
                 size = d.bytes;
                 samples = d.samples;
                 rate = d.rate;

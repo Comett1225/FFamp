@@ -129,6 +129,10 @@ void audioConfig(uint32_t type, View body, Track& track) {
             track.codec = fourcc(".mp3");
             return;
         }
+        if (kind >= 0xA9 && kind <= 0xAC) {
+            track.codec = fourcc("dts ");
+            return;
+        }
         track.configType = type;
         track.config.assign(body.p, body.p + body.n);
         AacConfig aac;
@@ -232,6 +236,7 @@ void audioEntry(uint32_t format, View v, Track& track, SoundUnit& unit) {
     else if (format == fourcc("lpcm") && version == 2 && (bits == 8) != bool(flags & 5)) pcm(track, bits, flags & 1, flags & 2);
     else if (format == fourcc(".mp3") || format == 0x6D730055) track.codec = fourcc(".mp3");
     else if (format == fourcc("fLaC")) track.bits = bits;
+    else if (format == fourcc("dtsc") || format == fourcc("dtsh") || format == fourcc("dtsl") || format == fourcc("dtse")) track.codec = fourcc("dts ");
     else if (format == fourcc("samr") || format == fourcc("sawb")) {
         track.channels = 1;
         track.sampleRate = format == fourcc("sawb") ? 16000 : 8000;

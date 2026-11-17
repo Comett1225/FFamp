@@ -254,16 +254,16 @@ def fuzz(folder, rounds, seed, kinds=(".m4a", ".mp4", ".mov")):
     return crashed == 0 and hung == 0
 
 
-def mixing(path, rate, channels):
+def mixing(path, rate, channels, c=numpy.sqrt(0.5), s=numpy.sqrt(0.5)):
     native, native_rate, native_channels = ours(["adecode", path])
     got, _, _ = ours(["pcm", path, "--rate", str(native_rate), "--channels", str(channels)])
     side = numpy.sqrt(0.5)
     rows = {
         (1, 2): [[side], [side]],
         (2, 1): [[side, side]],
-        (6, 2): [[1, 0, side, 0, side, 0], [0, 1, side, 0, 0, side]],
-        (6, 1): [[side, side, 1, 0, 0.5, 0.5]],
-        (8, 2): [[1, 0, side, 0, side, 0, side, 0], [0, 1, side, 0, 0, side, 0, side]],
+        (6, 2): [[1, 0, c, 0, s, 0], [0, 1, c, 0, 0, s]],
+        (6, 1): [[side, side, 2 * c * side, 0, s * side, s * side]],
+        (8, 2): [[1, 0, c, 0, s, 0, s, 0], [0, 1, c, 0, 0, s, 0, s]],
     }[(native_channels, channels)]
     want = native.astype(numpy.float64) @ numpy.array(rows).T
     ratio = snr(got, want)
@@ -305,7 +305,7 @@ if __name__ == "__main__":
     elif kind == "fuzz":
         ok = fuzz(a[0], int(a[1]), int(a[2]), tuple(a[3].split(",")) if len(a) > 3 else (".m4a", ".mp4", ".mov"))
     elif kind == "mixing":
-        ok = mixing(a[0], 0, int(a[1]))
+        ok = mixing(a[0], 0, int(a[1]), *[float(x) for x in a[2:4]])
     elif kind == "reader":
         ok = reader(a[0], int(a[1]), int(a[2]), a[3], float(a[4]), int(a[5]), float(a[6]) if len(a) > 6 else 0)
     else:

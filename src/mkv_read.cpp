@@ -285,6 +285,9 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
     else if (starts(id, "A_AC3")) set("ac-3", 0, false);
     else if (id == "A_ALAC") set("alac", fourcc("alac"), true);
     else if (id == "A_TTA1") set("TTA1", fourcc("TTA1"), false);
+    else if (id == "A_WAVPACK4") set("wvpk", fourcc("wvpk"), true);
+    else if (starts(id, "A_DTS")) set("dts ", 0, false);
+    else if (id == "A_TRUEHD" || id == "A_MLP") set("mlpa", 0, false);
     else if (id == "A_MS/ACM" && secret.size() >= 18) {
         uint32_t tag = extensibleTag(secret.data(), secret.size());
         t.codec = waveAudio(tag);
@@ -320,6 +323,9 @@ uint32_t samplesIn(Lane& lane, const uint8_t* p, size_t have, uint32_t size) {
         return (first && !m.large.empty() ? (m.blocks[m.large[0] ? 1 : 0] + m.previous) / 4 : frames) + 1;
     }
     if (waveDecoded(t.codec)) return uint32_t(std::min<int64_t>(waveFrames(t, size), 0x7FFFFFFF));
+    if (t.codec == fourcc("wvpk")) return have >= 4 ? std::min<uint32_t>(le32(p), 150000) : 0;
+    if (t.codec == fourcc("dts ")) return dtsFrameSamples(p, have);
+    if (t.codec == fourcc("mlpa")) return mlpUnitSamples(p, have, size, t.sampleRate);
     return 0;
 }
 

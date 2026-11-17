@@ -37,7 +37,7 @@ TABLE
 for f in ac3_51.ac3 eac3_51.eac3 ac3_stereo.mp4 eac3_51.mp4 ac3_21.ac3 amr_nb.amr amr_wb.3gp caf_s24le.caf caf_aac.caf caf_he_aac.caf caf_alac.caf caf_flac.caf caf_opus.caf caf_ac3.caf caf_mp3.caf avi_mpeg4_mp3.avi avi_asp_ac3.avi avi_mjpeg422_pcm.avi avi_mpeg2_mp2.avi; do
     check "random reads $f" python3 audio.py chunks adecode $FX/$f 30 3
 done
-check "AC-3 5.1 to stereo levels" python3 audio.py mixing $FX/ac3_51.ac3 2
+check "AC-3 5.1 to stereo with the stream's levels (centre -4.5 dB, surround -6 dB)" python3 audio.py mixing $FX/ac3_51.ac3 2 0.59460356 0.5
 check "AC-3 5.1 as 44.1 kHz stereo: random reads" python3 audio.py chunks pcm $FX/ac3_51.ac3 30 4 --rate 44100 --channels 2
 for f in $FA_VIDEO; do check "random frames of $f equal the straight decode" python3 comparex.py selfseek $FX/$f 16 5; done
 fx_columns() { $A packets $FX/$1 --track ${3:-0} | grep -E '^-?[0-9]' | cut -d' ' -f"$2" | md5; }

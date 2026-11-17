@@ -39,6 +39,9 @@ struct DolbyFrame {
 };
 
 bool dolbyFrame(const uint8_t* header, DolbyFrame& out);
+uint32_t dtsFrameSamples(const uint8_t* p, size_t have);
+bool dtsFrame(const uint8_t* header, DolbyFrame& out);
+uint32_t mlpUnitSamples(const uint8_t* p, size_t have, size_t size, int rate);
 uint32_t amrFrameBytes(bool wide, uint8_t first);
 std::vector<uint8_t> mpeg4Descriptor(const uint8_t* headers, size_t size);
 uint32_t videoFourcc(uint32_t handler, int height);

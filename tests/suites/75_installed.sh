@@ -11,7 +11,9 @@ check "Vorbis 5.1 as 44.1 kHz stereo: random reads" $IP chunks pcm $IA/vorbis_51
 check "Vorbis from WebM to AAC in M4A" $A extract-audio $IA/vorbis_stereo_44k.webm $O/in_vorbis.m4a --aac --bitrate 128000 > /dev/null
 check "the AAC made from Vorbis plays in AVFoundation" ../build/avcheck $O/in_vorbis.m4a > /dev/null
 if have_ffmpeg; then
-    for f in vorbis_stereo_44k.ogg vorbis_51_48k.ogg vorbis_mono_44k.mka vorbis_stereo_44k.webm; do check "$f against ffmpeg: same length, no offset, over 100 dB" $IP against $IA/$f 100 0 0; done
+    for f in vorbis_stereo_44k.ogg vorbis_51_48k.ogg; do check "$f against ffmpeg: same length, no offset, over 100 dB" $IP against $IA/$f 100 0 0; done
+    check "vorbis_mono_44k.mka (mkvmerge, no CodecDelay) as the app reads it: ffmpeg's timeline and length, over 100 dB" python3 audiofix.py app $IA/vorbis_mono_44k.mka 44100 1 100
+    check "vorbis_stereo_44k.webm (mkvmerge, no CodecDelay) as the app reads it: ffmpeg's timeline and length, over 100 dB" python3 audiofix.py app $IA/vorbis_stereo_44k.webm 44100 2 100
 fi
 
 echo "== installed: fast sound paths stay exact"

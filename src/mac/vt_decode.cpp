@@ -272,6 +272,7 @@ struct VideoDecoder::Impl {
     };
     std::unique_ptr<SoftDecoder> softMask;
     std::vector<uint8_t> veil;
+    std::vector<uint8_t> converted;
     int64_t veilStamp = INT64_MIN;
 
     bool decodeSoft(const Job& job) {
@@ -285,7 +286,7 @@ struct VideoDecoder::Impl {
             });
         }
         return soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) {
-            Picture seen = p;
+            Picture seen = gbrPicture(p) ? gbrToYuv(p, converted) : p;
             if (veilStamp == p.stamp && veil.size() == size_t(p.width) * size_t(p.height)) {
                 seen.alpha = veil.data();
                 seen.alphaStride = size_t(p.width);
@@ -719,7 +720,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool jpeg = codec == fourcc("jpeg");
     const bool tape = (codec >> 16) == 0x6476;
     const bool older = jpeg || tape || codec == fourcc("mp1v") || codec == fourcc("mp2v") || codec == fourcc("h263");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv && !part2 && !older && !vc1 && !msmpeg4) return fail("video codec not supported by this decoder");
+    const bool raw = rawVideoCodec(codec), cinepak = codec == fourcc("cvid");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !prores && !apv && !part2 && !older && !vc1 && !msmpeg4 && !raw && !cinepak) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -804,6 +806,17 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         return std::move(decoder);
     };
     if (vp8 || apv || (vp9 && track.alpha) || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
+    if (raw || cinepak) {
+        d.soft = raw ? openRawVideo(track, error) : openCinepak(track, error);
+        if (!d.soft) return nullptr;
+        if (cinepak || codec == fourcc("raw ")) {
+            d.shape.color = Color();
+            d.shape.color.known = true;
+            d.shape.color.full = true;
+        }
+        d.backend = d.soft->name();
+        return decoder;
+    }
     if (vc1 || msmpeg4) {
         d.soft = vc1 ? openVc1(codec, config, track.width, track.height, error) : openMsmpeg4(codec, config, track.width, track.height, error);
         if (!d.soft) return nullptr;

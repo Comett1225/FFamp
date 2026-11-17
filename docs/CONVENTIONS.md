@@ -159,13 +159,44 @@ list; `Sample.offset` is then free for the reader's use.
 ## AVI, CAF, AC-3, AMR and older video (formats round)
 
 - `Reader::format()` is `avi`, `caf`, `amr`, `ac3` or `eac3` for the new readers.
-- AVI video: timescale and frame step come from the stream header (`dwRate`/`dwScale`, reduced). Chunks are found through the OpenDML
-  indexes when there are any, else `idx1`, else by walking the `movi` lists. Empty chunks are not samples; the picture before them
-  lasts longer. MPEG-1, MPEG-2 and MPEG-4 pictures get their shown order from their picture types, H.264 from its picture order
-  count; `dts` is moved back so it never passes `pts`. A DivX packed bitstream (marked by the `DivX...p` user data) is split into one
-  sample per picture and its placeholder chunks are dropped. H.264 samples are converted from start codes to 4-byte lengths.
+- AVI video: timescale and frame step come from the stream header (`dwRate`/`dwScale`, reduced); a header without them takes the main
+  header's frame period, else 25 frames a second, as FFmpeg does. Chunks are found through the OpenDML indexes when there are any
+  (super indexes, nested ones too, and standard indexes; a base offset that repeats its low 32 bits in the high ones is cut to 32 bits,
+  as FFmpeg does), else `idx1`, else by walking the `movi` lists. The `idx1` base is the `movi` list, the file start or the distance
+  between the first entry and the first chunk the walk finds (FFmpeg's rule), whichever makes the first entry, up to 64 others spread
+  over the index and the last one land on their chunk ids; an index that fits none of them is not used. After an index the data
+  past the last indexed chunk is walked as well, so an `idx1` that only covers the first RIFF part (a file over 1 GB written without
+  OpenDML) or that was cut short still gives every chunk. The walk skips `JUNK`, `ix##`/`##ix`, `idx1` and `indx` chunks, enters
+  `LIST rec` groups, takes an odd-sized chunk as padded unless only the unpadded position holds a chunk header, and after bytes that
+  are no chunk header searches for the next header whose size fits (FFmpeg's `avi_sync`). A chunk cut off by the end of the file
+  keeps the part that is there.
+- AVI key frames: MPEG-1/2/4, H.264, VC-1, Microsoft MPEG-4, H.263 and Cinepak from their pictures (Cinepak: every strip intra, no
+  partial codebook update, no skip vectors); Motion JPEG, DV and raw video on every chunk; any other codec from the index flags
+  (`idx1` flag 0x10, OpenDML bit 31 clear), only the first chunk when an `idx1` marks none (FFmpeg), every chunk when there is no
+  index.
+- Empty chunks are not samples; the picture before them lasts longer. MPEG-1, MPEG-2 and MPEG-4 pictures get their shown order from
+  their picture types, H.264 from its picture order count, with empty chunks in between taking no part in the order (each shown
+  picture gets one of the places its group of pictures holds); `dts` is moved back so it never passes `pts`. A DivX packed bitstream
+  (marked by the `DivX...p` user data) is split into one sample per picture and its placeholder chunks are dropped. H.264 with start
+  codes is converted to 4-byte lengths; H.264 whose format block carries an `avcC` record (an `avc1` stream copied from MP4) is kept
+  as stored with that record as its config.
+- AVI fourccs: every video fourcc FFmpeg's `riff.c` maps to MPEG-4 part 2, H.264, H.263, Motion JPEG, DV, MPEG-1 and MPEG-2 (`dvhd`,
+  `dvh1` and `CDVH` give `dvh6`, or `dvhp` at 720 lines). `BI_RGB` gives codec `raw `, a raw YUV fourcc keeps its own name (`YUY2`,
+  `YUYV`, `YUNV`, `V422`, `VYUY`, `Y422`, `YVYU`, `UYVY`, `UYNV`, `UYNY`, `HDYC`, `uyv1`, `2Vu1`, `VDTZ`, `auv2`, `cyuv`, `I420`,
+  `IYUV`, `yv12`, `YV12`, `YV16`, `Y42B`, `P422`, `Y41B`, `YUV9`, `YVU9`, `Y800`, `Y8  `, `GREY`, `NV12`, `NV21`), Cinepak is `cvid`;
+  all of these get configType `bmih` (the whole format block: BITMAPINFOHEADER and palette) and `Track.bits` = biBitCount.
 - AVI sound: MP3, MP2, AC-3 and PCM are read as one byte stream across the chunks and cut into their own frames, so chunk borders
-  and AVI block timing do not matter. `Sample.offset` is the place in that stream.
+  and AVI block timing do not matter. `Sample.offset` is the place in that stream. A dependent E-AC-3 frame joins the packet of the
+  frame before it. AAC (tags 0x00FF, 0x1600, 0x1610, 0x706D, 0x4143, 0xA106) takes its AudioSpecificConfig from the codec data
+  (0x1610: after the 12-byte HEAACWAVEINFO when its payload type is raw); without one, or with ADTS as the 0x1610 payload, the ADTS
+  frames are cut into raw AAC samples (`Sample.offset` past the header) with an AudioSpecificConfig made from the first header.
+- DV type-1 files (one `iavs` stream, picture and sound in the same DV frames, chunks with any two-letter suffix such as `00__`): the
+  frames are the video track (`dvc ` or `dvcp` by the frame's 525/625 flag, 720 wide) and the sound in their AAUX blocks is a second
+  track, 16-bit PCM in two channels at the frame's rate, one sample per frame with the frame's own sample count; reading a sample
+  takes the sound out of its DV frame as FFmpeg's DV demuxer does (16-bit, or 12-bit nonlinear widened to 16 bits; 0x8000 and
+  0x800 silenced; frames at another rate than the first are left out). Only the first channel pair is read: with 12-bit sound at
+  32 kHz FFmpeg gives a second stereo stream from the other half of each frame.
+- Not read: palette changes inside the stream (`##pc` chunks), subtitle and data streams.
 - AC-3 and E-AC-3 decode to the channel order above. Layouts that have no place in it (2.1, 2/1, 2/2 and any other layout with a
   low-frequency channel short of 5.1) are decoded as 5.1 with silent channels where the stream has none; a lone surround channel
   (2/1, 3/1 with LFE) plays from both back channels at -3 dB, as AudioToolbox and FFmpeg's resampler place it.
@@ -192,6 +223,25 @@ list; `Sample.offset` is then free for the reader's use.
   the anchor stored ahead of it) come from the picture types, as for MPEG-4; the index's key flags are not used.
 - A Matroska video codec no decoder here knows is kept as a track named by its VFW fourcc or the first letters of its codec ID, so
   probe reports its name, start and length; `VideoDecoder::open` fails with `video codec not supported by this decoder`.
+
+## Raw video and Cinepak (`src/raw_video.cpp`, `src/cinepak_decode.cpp`, backends `rawvideo` and `cinepak`)
+
+- FFamp's own decoders on every system, the Mac and the Android build included, based on FFmpeg's rawvideo and Cinepak decoders
+  (`docs/NOTICE.md`). Both need configType `bmih`; every picture comes out with its own sample's time.
+- `raw ` (`BI_RGB`): 1, 2, 4 and 8 bits through the palette at the end of the format block (FFmpeg's rule; 1 bit without a palette
+  is white and black), 15 and 16 bits as RGB 5:5:5 widened by repeating the top bits (`v << 3 | v >> 2`), 24 bits BGR, 32 bits BGRX.
+  Rows are padded to 4 bytes when the packet holds the padding (else packed); a picture whose `biHeight` is positive is bottom-up and
+  is turned over. `BI_BITFIELDS` is refused.
+- Raw YUV: the planar fourccs hand their planes out as they are (`YV12`, `YV16` and `YVU9` with the chroma planes swapped), the
+  packed 4:2:2 ones and NV12/NV21 are split into planes, grey (`Y800`, `GREY`) comes out full range with neutral chroma. `cyuv` is
+  bottom-up.
+- Cinepak: V1 and V4 codebooks per strip kept from picture to picture, strips sharing codebooks within a picture unless the frame
+  flags say otherwise, selective codebook and vector updates, pictures whose size is no multiple of 4, the 8-bit paletted form (the
+  palette from the format block) and FFmpeg's checks for damaged and Sega FILM data.
+- RGB pictures (raw RGB, palettes, Cinepak) are three planes G, B, R at 4:4:4 with `Color.matrix` 0 (identity) and full range, as an
+  H.264 or HEVC stream with matrix coefficients 0 would be. `pictureToBGRA` copies them straight, `pictureToI420` and the scaler's
+  I420 output go through BGRA and `bgraToI420`, `ffamp decode` writes the G, B, R planes (ffmpeg's `gbrp`). The Mac's pixel buffers
+  are YCbCr: there the pictures are converted to BT.709 full-range 4:4:4 (`gbrToYuv`) before they are stored.
 
 ## MPEG-4 part 2 through Xvid (`ABSENT_XVID`, `src/opt/xvid_decode.cpp`)
 

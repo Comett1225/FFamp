@@ -228,6 +228,10 @@ std::unique_ptr<SoftVideo> SoftVideo::open(const Track& t, std::string* error) {
     std::unique_ptr<Soft> soft(new Soft);
     if (vc1Codec(t.codec) && t.configType == fourcc("bmih")) soft->codec = openVc1(t.codec, t.config, t.width, t.height, error);
     else if (msmpeg4Codec(t.codec)) soft->codec = openMsmpeg4(t.codec, t.config, t.width, t.height, error);
+    else if (rawVideoCodec(t.codec)) soft->codec = openRawVideo(t, error);
+    else if (t.codec == fourcc("cvid")) soft->codec = openCinepak(t, error);
+    else if (t.codec == fourcc("h263")) soft->codec = openH263(error);
+    else if ((t.codec >> 16) == 0x6476) soft->codec = openDv();
 #ifdef ABSENT_XVID
     else if (t.codec == fourcc("mp4v") && t.configType == fourcc("esds")) soft->codec = openXvid(t.config, t.width, t.height);
 #endif

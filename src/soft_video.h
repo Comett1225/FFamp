@@ -80,6 +80,9 @@ std::unique_ptr<SoftEncoder> openX265(const EncodeSpec& spec, std::string* error
 std::unique_ptr<SoftDecoder> openXvid(const std::vector<uint8_t>& esds, int width, int height);
 std::unique_ptr<SoftDecoder> openProRes(uint32_t codec, std::string* error);
 std::unique_ptr<SoftDecoder> openDv();
+std::unique_ptr<SoftDecoder> openRawVideo(const Track& track, std::string* error);
+std::unique_ptr<SoftDecoder> openCinepak(const Track& track, std::string* error);
+inline bool gbrPicture(const Picture& p) { return p.color.known && p.color.matrix == 0 && p.chromaWidth == p.width && p.chromaHeight == p.height; }
 
 bool vp9Shape(const uint8_t* frame, size_t size, StreamShape& shape);
 std::vector<uint8_t> vp9Config(const StreamShape& shape, double fps, int bitrate);
@@ -94,6 +97,7 @@ void pictureRow(const Picture& picture, int plane, int y, float* out);
 void inParallel(int rows, const std::function<void(int, int)>& work);
 void pictureToPlanar(const Picture& picture, std::vector<uint8_t>& out, bool narrow = false);
 void pictureToI420(const Picture& picture, std::vector<uint8_t>& out);
+Picture gbrToYuv(const Picture& picture, std::vector<uint8_t>& storage);
 bool withPixelBuffer(void* pixelBuffer, const std::function<bool(const Picture&)>& use);
 
 }

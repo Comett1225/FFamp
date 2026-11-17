@@ -1544,3 +1544,86 @@ setup and a check against FFmpeg (PLAN, `mf-first` item 4):
 | FLAC, ALAC, Opus, AMR-NB, WMA family | Microsoft's decoders | own, libopus, opencore-amr |
 | MP3 | Microsoft's decoder | mpg123 (Media Foundation's places the sound 624 frames late, decided earlier) |
 | AC-3, E-AC-3 | only an IEC 61937 pass-through converter, no decoder | own |
+
+# AVI as FFmpeg reads it (branch `avi-517`)
+
+FFamp's AVI reader audited against FFmpeg 9.0.2's `libavformat/avidec.c` and checked with a corpus that `tests/avi_make.py` makes with
+the installed ffmpeg at test time (nothing large is stored in the repository): 33 files written by ffmpeg, 2 hand-built DV type-1 files, 22 copies of
+them rebuilt with other chunk layouts and indexes, and, outside quick runs and off the Mac, a 4.3 GB file. Suite `57_avi` judges every
+file against ffmpeg: pictures frame by frame, frame times against ffprobe's, random frames against ffmpeg's (bit-exact decoders) or
+the straight decode, sound sample by sample, packets of each rebuilt copy against the plain one, and damaged copies.
+
+## What main got wrong (WSL, before this branch)
+
+| Case | Main | Now |
+|---|---|---|
+| Raw video: BGR24 (odd width, row padding), BGRA, RGB 5:5:5, 8-bit palette, YUY2, UYVY, I420, YV12, grey | not decoded | bit-exact |
+| Cinepak (RGB, odd sizes) | not decoded | bit-exact |
+| H.264 copied from MP4 (length-prefixed, `avcC` in `strf`) | no picture opens | bit-exact |
+| Bytes that are no chunk between chunks, no index | 2 of 50 pictures, 1,152 of 89,856 sound frames | every packet |
+| Odd chunks without padding, no index | 1 of 50 pictures, sound cut | every packet |
+| `idx1` cut to 40 % (also a file over 1 GB written without OpenDML: its `idx1` covers the first RIFF part only) | 20 of 50 pictures | every packet; the 4.3 GB file with only its `idx1` gives all 2,500 pictures |
+| AAC with ADTS headers (tag 0x1610, as ffmpeg 9 writes it) | track dropped | raw AAC frames, within 100 dB on Linux |
+| DV type-1 (`iavs`, picture and sound in one stream) | file refused | picture bit-exact, 16-bit 48 kHz and 12-bit 32 kHz sound bit-exact |
+| Key frames of a codec FFamp does not parse (Cinepak) | every chunk a key frame, so jumps landed on inter pictures | from the pictures (Cinepak) or the index flags |
+| H.264 with B-frames and empty chunks between pictures (ffmpeg's AVI writer fills time gaps with them, e.g. a stream copied from MP4 at a 1/600 time base) | shown in decode order, 21 dB | shown order from the picture order counts, bit-exact |
+| Stream header without `dwScale`/`dwRate` | no track | the main header's frame period, else 25 fps |
+
+Also fixed while reading `avidec.c`: nested OpenDML super indexes, the OpenDML base offset that repeats its low 32 bits, `idx1` bases that
+are neither `movi`-relative nor absolute (FFmpeg's first-chunk rule) with up to 64 entries and the last checked, an `idx1` with no key
+flag at all (first chunk only), a dependent E-AC-3 frame joining its packet, and FFmpeg's whole list of AVI fourccs for MPEG-4 part 2,
+H.264, H.263, Motion JPEG, DV and MPEG-1/2.
+
+## Suite 57_avi
+
+| System | Pass / fail / skip |
+|---|---|
+| Linux (WSL, gcc 13) | 153 / 0 / 3 |
+| Windows (clang-cl) | 153 / 0 / 3 |
+| Mac (quick run, no files over 4 GB) | 148 / 0 / 4 |
+
+The three skips are HuffYUV, Ut Video and MagicYUV: their packets are checked against ffmpeg's here, their decoders are on the `gaps2`
+branch (not merged). Floors that are not bit-exact are the decoders', not the reader's (same length and no offset everywhere):
+
+| Stream | Linux | Windows | Mac |
+|---|---|---|---|
+| MPEG-4 part 2 (Xvid's IDCT) | 63 to 69 dB | same | 45 dB floor |
+| Microsoft MPEG-4 v2, v3 | 87 dB (FFmpeg's x86 IDCT) | same | bit-exact |
+| MPEG-1, MPEG-2 | 65 to 67 dB (libmpeg2) | 66 dB (Media Foundation) | 48 dB floor (VideoToolbox) |
+| Motion JPEG 4:2:0 / 4:2:2 | 71 / 71 dB (libjpeg-turbo) | 71 dB / 41 dB as BGRA (WIC spreads 4:2:2 to 4:4:4) | VideoToolbox / ImageIO |
+| DV (own decoder) | bit-exact | bit-exact | VideoToolbox 35 dB |
+| Raw RGB and Cinepak | bit-exact | bit-exact | BGRA within 40 to 45 dB (stored as BT.709 YCbCr in the Mac's pixel buffers) |
+| MP3 (mpg123 / AudioToolbox) | 124 dB | 124 dB | 61 dB |
+| MP2 (mpg123 / AudioToolbox) | 74.6 dB | 74.6 dB | 70 dB floor |
+| AAC | 139 dB (own) | 47.5 dB through Media Foundation, 138.8 dB through the own decoder | 47.4 dB (AudioToolbox) |
+| AC-3, E-AC-3 | 140 dB | 140 dB | 70 to 75 dB |
+| PCM 8/16/24/32-bit float, A-law, mu-law, IMA and Microsoft ADPCM, DV sound | bit-exact | bit-exact | bit-exact |
+
+Media Foundation's and AudioToolbox's AAC decoders give the same 47.5 dB against ffmpeg on the corpus's beeping sine in MP4 as in
+AVI; it is their decode, not the reader.
+
+## Full suites
+
+| System | This branch | Last round |
+|---|---|---|
+| Linux (WSL, gcc 13, VA-API through d3d12) | 3,408 / 7 / 204 | 3,260 / 7 / 201 |
+| Windows (clang-cl, libraries with NASM) | 3,255 / 8 / 225 | 3,105 / 5 / 222 |
+| Mac (quick runs of `57_avi` and `45_formats`) | 148 / 0 / 4 and 346 / 0 / 0 | |
+
+The Linux run is of the branch before DV type-1 and a wider Cinepak key-frame scan; `57_avi`, `45_formats`, `30_readers`, `46_mpeg4`
+and `85_fuzz` ran again on the final code (153 / 0 / 3, 353 / 0 / 18, 202 / 1 / 26, 77 / 0 / 0, 23 / 0 / 0; the one failure is
+`rd_vorbis.ogg` as before). Linux fails what it failed last round. Windows fails last round's five and three speed checks
+(1080p RGBA frames over 450 and 350 per second, AV1 software decode over 400 per second): the PC was shared with other jobs (load average
+13 to 18 in WSL), and under the same load last round's build gave the same rates (RGBA 454 and 471 against this branch's 422 and 485,
+AV1 325 and 286 against 334 and 338). One `57_avi` run under that load had VA-API list 2 frame times for `avi_h264_avc1.avi`; four
+later runs did not repeat it.
+
+## Android build
+
+Built with NDK 30 for arm64-v8a (`-DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=26`, no optional libraries): `libffamp.a` holds the AVI
+reader and, behind `absent::android::SoftVideo`, the own decoders for VC-1, WMV7/8, Microsoft MPEG-4 v1 to v3 (DivX 3), and now raw
+video, Cinepak, DV and H.263; MPEG-4 part 2 (DivX, Xvid) through Xvid when `third_party/build_android.sh` built it. H.264 (both forms
+give an `avcC`), MPEG-4 part 2 Simple Profile, H.263 and MPEG-2 have MediaCodec MIME types (`mime()`), MPEG-2 only where the device has a
+decoder. Sound: the own AAC, AC-3/E-AC-3, FLAC, ALAC, WMA, ADPCM, G.711 and PCM decoders are in the library; MP3/MP2 go to MediaCodec.
+Missing on Android: Motion JPEG (no own JPEG decoder and no MediaCodec type), an own MPEG-1/2 decoder (libmpeg2 is not built there),
+FFamp's own H.264 decoder (left out of the Android build; MediaCodec decodes H.264), and HuffYUV, Ut Video and MagicYUV (on `gaps2`).

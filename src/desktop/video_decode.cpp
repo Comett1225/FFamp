@@ -463,7 +463,8 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     const bool prores = twelve || codec == fourcc("apch") || codec == fourcc("apcn") || codec == fourcc("apcs") || codec == fourcc("apco");
     const bool dv = (codec >> 16) == 0x6476;
     const bool h263 = codec == fourcc("h263");
-    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv && !h263) return fail("video codec not supported by this decoder");
+    const bool raw = rawVideoCodec(codec), cinepak = codec == fourcc("cvid");
+    if (!h264 && !hevc && !vp9 && !vp8 && !av1 && !apv && !part2 && !jpeg && !vc1 && !msmpeg4 && !mpeg && !prores && !dv && !h263 && !raw && !cinepak) return fail("video codec not supported by this decoder");
     if ((h264 || hevc) && track.config.empty()) return fail("track is empty");
 
     std::unique_ptr<VideoDecoder> decoder(new VideoDecoder);
@@ -541,6 +542,14 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.soft = openProRes(codec, error);
     } else if (dv) {
         d.soft = openDv();
+    } else if (raw || cinepak) {
+        d.soft = raw ? openRawVideo(track, error) : openCinepak(track, error);
+        if (cinepak || codec == fourcc("raw ")) {
+            d.shape.color = Color();
+            d.shape.color.known = true;
+            d.shape.color.matrix = 0;
+            d.shape.color.full = true;
+        }
     } else {
         const VideoInfo info = h264 ? videoInfo(track.configType, config) : VideoInfo();
         const bool system = !software && !vp8 && (!h264 || (info.bitDepth == 8 && info.chroma == 1));

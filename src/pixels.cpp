@@ -179,6 +179,13 @@ void pictureToPlanar(const Picture& p, std::vector<uint8_t>& out, bool narrow) {
 
 void pictureToI420(const Picture& p, std::vector<uint8_t>& out) {
     const int cw = (p.width + 1) / 2, ch = (p.height + 1) / 2;
+    if (gbrPicture(p)) {
+        std::vector<uint8_t> bgra(size_t(p.width) * size_t(p.height) * 4);
+        pictureToBGRA(p, bgra.data(), size_t(p.width) * 4);
+        out.resize(size_t(p.width) * size_t(p.height) + 2 * size_t(cw) * size_t(ch));
+        bgraToI420(bgra.data(), size_t(p.width) * 4, p.width, p.height, out.data());
+        return;
+    }
     if (p.chromaWidth == cw && p.chromaHeight == ch) {
         pictureToPlanar(p, out, true);
         return;
@@ -212,7 +219,69 @@ void pictureRow(const Picture& p, int plane, int y, float* out) {
     rowOf(p, plane, y, out);
 }
 
+Picture gbrToYuv(const Picture& p, std::vector<uint8_t>& storage) {
+    const size_t w = size_t(p.width), h = size_t(p.height), area = w * h;
+    storage.resize(area * 3);
+    std::vector<uint16_t> g(w), b(w), r(w);
+    const int drop = p.bits - 8;
+    for (size_t y = 0; y < h; ++y) {
+        rowOf(p, 0, int(y), g.data());
+        rowOf(p, 1, int(y), b.data());
+        rowOf(p, 2, int(y), r.data());
+        uint8_t* luma = storage.data() + y * w;
+        uint8_t* cb = luma + area;
+        uint8_t* cr = cb + area;
+        for (size_t x = 0; x < w; ++x) {
+            const int R = r[x] >> drop, G = g[x] >> drop, B = b[x] >> drop;
+            luma[x] = uint8_t(std::clamp((13933 * R + 46871 * G + 4732 * B + 32768) >> 16, 0, 255));
+            cb[x] = uint8_t(std::clamp((-7509 * R - 25259 * G + 32768 * B + (128 << 16) + 32768) >> 16, 0, 255));
+            cr[x] = uint8_t(std::clamp((32768 * R - 29763 * G - 3005 * B + (128 << 16) + 32768) >> 16, 0, 255));
+        }
+    }
+    Picture out = p;
+    out.bits = 8;
+    out.shift = 0;
+    out.interleaved = false;
+    for (int i = 0; i < 3; ++i) {
+        out.plane[i] = storage.data() + size_t(i) * area;
+        out.stride[i] = w;
+    }
+    out.color = Color();
+    out.color.known = true;
+    out.color.full = true;
+    return out;
+}
+
+void gbrRows(const Picture& p, uint8_t* out, size_t stride, bool redFirst, int from, int to) {
+    const size_t w = size_t(p.width);
+    std::vector<uint16_t> g(w), b(w), r(w);
+    const int ri = redFirst ? 0 : 2, bi = redFirst ? 2 : 0;
+    const int drop = p.bits - 8;
+    auto narrow = [&](uint16_t v) { return uint8_t(drop ? std::min((v + (1 << (drop - 1))) >> drop, 255) : v); };
+    for (int y = from; y < to; ++y) {
+        rowOf(p, 0, y, g.data());
+        rowOf(p, 1, y, b.data());
+        rowOf(p, 2, y, r.data());
+        uint8_t* row = out + size_t(y) * stride;
+        for (size_t x = 0; x < w; ++x, row += 4) {
+            row[bi] = narrow(b[x]);
+            row[1] = narrow(g[x]);
+            row[ri] = narrow(r[x]);
+            row[3] = 255;
+        }
+    }
+}
+
 void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, int from, int to) {
+    if (gbrPicture(p)) {
+        gbrRows(p, out, stride, redFirst, from, to);
+        for (int y = from; p.alpha && y < to; ++y) {
+            const uint8_t* mask = p.alpha + size_t(y) * p.alphaStride;
+            uint8_t* row = out + size_t(y) * stride;
+            for (int x = 0; x < p.width; ++x) row[4 * x + 3] = mask[x];
+        }
+        return;
+    }
     static const Levels levels;
     const bool hlg = p.color.transfer == 18, hdr = hlg || p.color.transfer == 16;
     int matrix = p.color.known ? p.color.matrix : 2;

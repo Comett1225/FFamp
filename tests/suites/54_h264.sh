@@ -20,10 +20,12 @@ h4_names() {
     [ -f $lib ] && [ -z "$($nm -g --defined-only $lib 2> /dev/null | awk 'NF == 3 {print $3}' | grep -E '^_?(av|avpriv|ff)_')" ]
 }
 check "the library defines no av_, avpriv_ or ff_ symbol, so it links next to FFmpeg without standing in for it" h4_names
-h4_default() { [ "$(env ${2:+FFAMP_SYSTEM_H264=1} $A videoinfo "$1" | sed -n 's/.*backend \([^ ]*\).*/\1/p')" = "$3" ]; }
+h4_default() { [ "$(env $2 $A videoinfo "$1" | sed -n 's/.*backend \([^ ]*\).*/\1/p')" = "$3" ]; }
 if [ "$SYSTEM" = Windows ]; then
-    check "H.264 decodes with FFamp's own decoder first on Windows" h4_default $HV/h264_270p.mp4 "" h264
-    check "FFAMP_SYSTEM_H264 puts Media Foundation first again" h4_default $HV/h264_270p.mp4 1 mediafoundation-gpu
+    check "H.264 decodes with Media Foundation first on Windows" h4_default $HV/h264_270p.mp4 "" mediafoundation-gpu
+    check "FFAMP_OWN_H264 puts FFamp's own decoder first" h4_default $HV/h264_270p.mp4 FFAMP_OWN_H264=1 h264
+    check "without Media Foundation (Windows N) H.264 goes to FFamp's own decoder" h4_default $HV/h264_270p.mp4 FFAMP_NO_MEDIA_FOUNDATION=1 h264
+    check "Media Foundation failing at the first sample hands H.264 to FFamp's own decoder" h4_default $HV/h264_270p.mp4 FFAMP_FAIL_SYSTEM_VIDEO=1 h264
 fi
 if ! on_mac; then
     check "H.264 fixtures decode with FFamp's own decoder when the system decoder is not used" h4_backend $HV/h264_270p.mp4
@@ -117,6 +119,12 @@ mref multiple reference frames and MMCO
 frext8 FRExt High profile, 8 bits
 frext10 FRExt High 10 and High 4:2:2
 TABLE
+    if [ "$SYSTEM" = Windows ]; then
+        for g in baseline cavlc cabac field mref frext8 frext10; do
+            check "FATE h264 conformance through VideoDecoder, $g, Media Foundation first: every frame's md5 equals ffmpeg's" python3 h264_check.py fate "$H4_FATE" $O $g --decode
+            check "FATE h264 conformance through VideoDecoder, $g, own decoder first (FFAMP_OWN_H264)" env FFAMP_OWN_H264=1 python3 h264_check.py fate "$H4_FATE" $O $g --decode
+        done
+    fi
 else
     skip "FATE h264 conformance bitstreams (set H264_CONFORMANCE to FFmpeg's fate-suite/h264-conformance folder, or FATE_SAMPLES to the fate-suite)"
 fi

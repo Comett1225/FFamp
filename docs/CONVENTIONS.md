@@ -438,10 +438,15 @@ list; `Sample.offset` is then free for the reader's use.
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
   out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
   `openStillDecoder` (WIC on Windows, libjpeg-turbo on Linux). On Linux `openPlatformVideo` is VA-API (below); the other hooks return
-  nothing there yet.
-- H.264 on Windows goes to FFamp's own decoder first; Media Foundation decodes it only when that decoder cannot open the stream
-  (`FFAMP_SYSTEM_H264` puts Media Foundation first again, for tests and speed comparisons). HEVC and MPEG-2 stay on Media Foundation
-  first. On Linux VA-API stays first for H.264.
+  nothing there yet. Media Foundation pictures are cut to the output type's minimum display aperture, so left and top cropping is kept.
+- The system decoder comes first and the software decoder stands behind it, on every system: Media Foundation for H.264, HEVC and
+  MPEG-2 on Windows, VA-API for H.264, HEVC, VP9 and AV1 on Linux, FFamp's own H.264 decoder, libde265, libmpeg2, libvpx and dav1d
+  behind them. The software decoder takes a stream the system decoder refuses at open (Windows N without Media Foundation, H.264
+  above 8 bits or other than 4:2:0, pictures under 64 pixels, no driver), and also later: when the system decoder's `decode` fails, or
+  a frame does not come out of it even after the restarts at earlier key frames, `VideoDecoder` opens the software decoder once,
+  starts again at a key frame and keeps it for the rest of the stream (`backend()` then names it). `FFAMP_OWN_H264` puts FFamp's own
+  H.264 decoder first (Windows and Linux; for tests and speed comparisons); `FFAMP_FAIL_SYSTEM_VIDEO=N` makes the system video
+  decoder fail from its Nth sample, to test that hand-over.
 - `encoders()` names the encoders `VideoEncoder` and `AacEncoder` really use, under FFmpeg's names for the same job: `h264_mf`,
   `hevc_mf` and `aac_mf` on Windows (x264, x265 and vo-aacenc behind them where Media Foundation cannot), `libx264` and `libx265` on
   Linux, and `aac` for vo-aacenc on both.
@@ -457,7 +462,8 @@ list; `Sample.offset` is then free for the reader's use.
   back to the software decoders; `FFAMP_NO_VAAPI` turns it off. The libva 2.22.0 headers come from `build_linux.sh` (`ABSENT_VAAPI`);
   nothing is linked. H.264 (8-bit 4:2:0, progressive, MBAFF and field pairs woven into one frame), HEVC Main and Main 10, VP9 profiles
   0 and 2 and AV1 Main (8 and 10-bit) are parsed by FFamp and sent as VA-API picture and slice buffers; pictures are copied out as
-  NV12 or P010 after `vaSyncSurface2` (2 s at most), and a failed submit or copy-out stops the GPU path for that decoder. Under the
+  NV12 or P010 after `vaSyncSurface2` (2 s at most), and a failed submit or copy-out stops the GPU path for that decoder, whose stream
+  then goes to the software decoder (above). Under the
   d3d12 driver three cases stay on the software decoders (H.264 on FFamp's own decoder) because the driver gets them wrong: H.264 with non-flat scaling matrices
   (it ignores them), 10-bit VP9 and AV1 whose height % 16 is 2 to 9 (wrong chroma and inter pictures), and AV1 film grain. NVIDIA's
   driver has no VA-API; see `docs/PLAN_WINLINUX.md` for what NVDEC would take.

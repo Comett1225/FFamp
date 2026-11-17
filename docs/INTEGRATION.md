@@ -86,6 +86,21 @@ data class CaptureMode(val width: Int, val height: Int, val fps: Double)
 The object is added first with FFmpeg behind it on every platform, so callers move one at a time and nothing changes for users. Then
 each platform's back end is replaced when its tests pass. A setting keeps the old path for one release.
 
+## Which decoder a video gets
+
+The system decoder first, FFamp's own or library decoder behind it: VideoToolbox on the Mac, Media Foundation on Windows (H.264, HEVC,
+MPEG-2), VA-API on Linux (H.264, HEVC, VP9, AV1), MediaCodec on Android. On Windows and Linux a stream the system decoder refuses, fails
+on mid-stream or gives no picture for goes to the software decoder, which keeps it to the end. `VideoDecoder::backend()` names the
+decoder in use (`mediafoundation-gpu`, `mediafoundation`, `vaapi`, `h264`, `libde265`, ...).
+
+Environment variables for tests:
+
+| Variable | Effect |
+|---|---|
+| `FFAMP_OWN_H264` | FFamp's own H.264 decoder first, the system decoder behind it (Windows and Linux) |
+| `FFAMP_FAIL_SYSTEM_VIDEO=N` | the system video decoder fails from its Nth sample, so the hand-over to the software decoder can be watched |
+| `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_NO_GPU_DECODE`, `FFAMP_NO_VAAPI` | no Media Foundation (as on Windows N), Media Foundation without the GPU, no VA-API |
+
 ## Probe (stands in for ffprobe)
 
 `absent::probeJson(path, packets, &error)` (`include/absent/probe.h`) and `ffamp probe --json [--packets] <file>` give the JSON the app

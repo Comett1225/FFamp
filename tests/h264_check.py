@@ -8,6 +8,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 AMEDIA = os.environ.get("AMEDIA", os.path.join(HERE, "..", "build", "ffamp.exe" if os.name == "nt" else "ffamp"))
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 LAYOUTS = {"420": (1, 1), "422": (1, 0), "444": (0, 0)}
 
 
@@ -125,7 +126,51 @@ def md5s(data, size):
     return [hashlib.md5(data[i:i + size]).hexdigest() for i in range(0, len(data) // size * size, size)]
 
 
-def fate(folder, work, group):
+def vint(data, at, marker):
+    length = 9 - data[at].bit_length()
+    value = data[at] if marker else data[at] & ((1 << (8 - length)) - 1)
+    for i in range(1, length):
+        value = (value << 8) | data[at + i]
+    return value, at + length, length
+
+
+def blocks(data, start, end, found, cluster):
+    at = start
+    while at < end:
+        ident, at, _ = vint(data, at, True)
+        size, body, length = vint(data, at, False)
+        stop = end if size == (1 << (7 * length)) - 1 else min(body + size, end)
+        if ident == 0x1F43B675:
+            blocks(data, body, stop, found, [0])
+        elif ident in (0x18538067, 0xA0):
+            blocks(data, body, stop, found, cluster)
+        elif ident == 0xE7:
+            cluster[0] = int.from_bytes(data[body:stop], "big")
+        elif ident in (0xA3, 0xA1):
+            found.append((vint(data, body, False)[1], cluster[0]))
+        at = stop
+
+
+def retimed(wrapped):
+    shown = subprocess.run([FFPROBE, "-v", "quiet", "-select_streams", "v:0", "-show_entries", "frame=pts", "-of", "csv=p=0", wrapped],
+                           capture_output=True, text=True).stdout.split()
+    data = bytearray(open(wrapped, "rb").read())
+    found = []
+    blocks(data, 0, len(data), found, [0])
+    times = [None] * len(found)
+    for k, pts in enumerate(int(p.strip(",")) for p in shown if p.strip(",").isdigit()):
+        if pts // 40 < len(times):
+            times[pts // 40] = k * 40
+    for n, (at, cluster) in enumerate(found):
+        if times[n] is None:
+            times[n] = (times[n - 1] if n else 0) + 20
+        data[at:at + 2] = struct.pack(">h", max(-32768, min(32767, times[n] - cluster)))
+    path = wrapped[:-4] + "_shown.mkv"
+    open(path, "wb").write(data)
+    return path
+
+
+def fate(folder, work, group, through=False):
     rows = [line.strip().split("|") for line in open(os.path.join(HERE, "h264_fate.txt")) if line.strip()]
     passed, failed = 0, []
     for _, name, test in [r for r in rows if r[0] == group]:
@@ -136,12 +181,18 @@ def fate(folder, work, group):
             continue
         wrapped = os.path.join(work, "h264_fate.mkv")
         subprocess.run([FFMPEG, "-nostdin", "-v", "quiet", "-y", "-i", source, "-map", "0:v:0", "-c", "copy", "-bsf:v", "setts=pts=N/(25*TB):dts=N/(25*TB)", wrapped])
+        shown = retimed(wrapped) if through else None
         good, results = True, []
-        for extra in (["--threads", "1"], [], ["--threads", "4", "--slice"]):
-            code, data, shape = ours(wrapped, extra)
+        for extra in [None] if through else (["--threads", "1"], [], ["--threads", "4", "--slice"]):
+            code, data, shape = ours(wrapped, extra or ["--threads", "1"])
+            label = " ".join(extra or []) or "frame threads"
+            if through:
+                label = subprocess.run([AMEDIA, "videoinfo", shown], capture_output=True, text=True).stdout.partition("backend ")[2].split(" ")[0]
+                run = subprocess.run([AMEDIA, "decode", shown], capture_output=True)
+                code, data = run.returncode, run.stdout
             if not shape:
                 good = False
-                results.append(f"{' '.join(extra) or 'frame threads'}: no picture (exit {code})")
+                results.append(f"{label}: no picture (exit {code})")
                 break
             judge = subprocess.run([FFMPEG, "-nostdin", "-v", "quiet", "-threads", "1", "-i", source, "-map", "0:v:0", "-fps_mode", "passthrough",
                                     "-pix_fmt", shape[0], "-f", "framemd5", "-"], capture_output=True).stdout.decode().splitlines()
@@ -150,14 +201,16 @@ def fate(folder, work, group):
             bad = [i for i in range(min(len(mine), len(theirs_md5))) if mine[i] != theirs_md5[i]]
             ok = code == 0 and len(mine) == len(theirs_md5) and mine and not bad
             good &= bool(ok)
-            results.append(f"{' '.join(extra) or 'frame threads'} {len(mine)}/{len(theirs_md5)}" + ("" if ok else f" differing {bad[:6]}"))
+            results.append(f"{label} {len(mine)}/{len(theirs_md5)}" + ("" if ok else f" differing {bad[:6]}"))
         print(f"{test} [{shape[0] if shape else '?'}]: {'pass' if good else 'FAIL'}; " + "; ".join(results))
         if good:
             passed += 1
         else:
             failed.append(test)
         os.remove(wrapped)
-    print(f"FATE h264 conformance, {group}: {passed} pass, {len(failed)} fail" + (f" ({' '.join(failed)})" if failed else ""))
+        if shown:
+            os.remove(shown)
+    print(f"FATE h264 conformance{' through VideoDecoder' if through else ''}, {group}: {passed} pass, {len(failed)} fail" + (f" ({' '.join(failed)})" if failed else ""))
     return passed > 0 and not failed
 
 
@@ -231,7 +284,7 @@ if __name__ == "__main__":
     elif kind == "grain":
         good = grain(rest[0])
     elif kind == "fate":
-        good = fate(rest[0], rest[1], rest[2])
+        good = fate(rest[0], rest[1], rest[2], rest[3:] == ["--decode"])
     else:
         good = False
     sys.exit(0 if good else 1)

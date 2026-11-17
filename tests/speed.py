@@ -158,9 +158,9 @@ def realtime(folder):
                                 "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate, "-g", str(rate), "-pix_fmt", "yuv420p", clip], check=True)
         frames, seconds = 20 * rate, 20.0
         raw = ["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"]
-        runs = [("FFamp, own decoder", [AMEDIA, "decode", clip], None)]
+        runs = [("FFamp, Media Foundation" if WINDOWS else "FFamp", [AMEDIA, "decode", clip], None)]
         if WINDOWS:
-            runs.append(("FFamp, Media Foundation", [AMEDIA, "decode", clip], dict(os.environ, FFAMP_SYSTEM_H264="1")))
+            runs.append(("FFamp, own decoder", [AMEDIA, "decode", clip], dict(os.environ, FFAMP_OWN_H264="1")))
         runs.append(("FFmpeg software", [FFMPEG, "-v", "error", "-i", clip, *raw], None))
         if WINDOWS:
             runs.append(("FFmpeg -hwaccel d3d11va", [FFMPEG, "-v", "error", "-hwaccel", "d3d11va", "-i", clip, *raw], None))

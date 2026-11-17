@@ -175,6 +175,10 @@ struct VideoDecoder::Impl {
     };
     std::unique_ptr<SoftDecoder> soft;
     std::unique_ptr<SoftDecoder> softMask;
+    std::function<std::unique_ptr<SoftDecoder>(std::string*)> spare;
+    std::atomic<bool> failed{false};
+    uint64_t failAt = 0;
+    uint64_t decoded = 0;
     std::vector<uint8_t> veil;
     int64_t veilStamp = INT64_MIN;
     std::condition_variable arrived, queued;
@@ -209,6 +213,10 @@ struct VideoDecoder::Impl {
     }
 
     bool decodeSoft(const Job& job) {
+        if (spare && failAt && ++decoded >= failAt) {
+            failed = true;
+            return false;
+        }
         veilStamp = INT64_MIN;
         if (softMask && !job.mask.empty()) {
             softMask->decode(job.mask.data(), job.mask.size(), job.stamp, [&](const Picture& m) {
@@ -218,7 +226,7 @@ struct VideoDecoder::Impl {
                 veilStamp = m.stamp;
             });
         }
-        return soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) {
+        const bool ok = soft->decode(job.bytes.data(), job.bytes.size(), job.stamp, [&](const Picture& p) {
             Picture seen = p;
             if (veilStamp == p.stamp && veil.size() == size_t(p.width) * size_t(p.height)) {
                 seen.alpha = veil.data();
@@ -226,6 +234,23 @@ struct VideoDecoder::Impl {
             }
             store(seen);
         });
+        if (!ok && spare) failed = true;
+        return ok;
+    }
+
+    bool swap() {
+        if (!spare) return false;
+        restart();
+        auto replacement = spare(nullptr);
+        spare = nullptr;
+        failed = false;
+        next = kNone;
+        if (!replacement) return false;
+        soft = std::move(replacement);
+        soft->wanted = [this](int64_t stamp) { return keep && stamp >= floor; };
+        backend = soft->name();
+        lost.clear();
+        return true;
     }
 
     Frame concealed(VideoDecoder& owner, uint32_t index) {
@@ -516,35 +541,34 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.soft = openProRes(codec, error);
     } else if (dv) {
         d.soft = openDv();
-    } else if (av1) {
-        if (!software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft) {
-            d.soft = openDav1d(int(d.ahead), error);
-            if (d.soft) d.ahead += d.ahead / 2;
-        }
-    } else if (vp8 || vp9) {
-        if (track.alpha) d.softMask = openVpxDecoder(vp8, nullptr);
-        if (vp9 && !software) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft) d.soft = openVpxDecoder(vp8, error);
     } else {
-        std::string fallback;
         const VideoInfo info = h264 ? videoInfo(track.configType, config) : VideoInfo();
-        const bool systemProfile = !h264 || (info.bitDepth == 8 && info.chroma == 1);
-#ifdef _WIN32
-        const bool ownFirst = h264 && !std::getenv("FFAMP_SYSTEM_H264");
-#else
-        const bool ownFirst = false;
-#endif
-        uint32_t led = 0;
-        auto lead = [&](std::vector<uint8_t>& bytes) {
-            if (led >= track.samples.size()) return false;
-            bytes.resize(track.samples[led].size);
-            return file.read(track, led++, bytes.data());
+        const bool system = !software && !vp8 && (!h264 || (info.bitDepth == 8 && info.chroma == 1));
+        const bool ownFirst = h264 && std::getenv("FFAMP_OWN_H264");
+        if (track.alpha && (vp8 || vp9)) d.softMask = openVpxDecoder(vp8, nullptr);
+        auto own = [&d, config, vp8, vp9, av1, mpeg, h264](std::string* why) -> std::unique_ptr<SoftDecoder> {
+            if (av1) {
+                auto dav1d = openDav1d(int(d.ahead), why);
+                if (dav1d) d.ahead += d.ahead / 2;
+                return dav1d;
+            }
+            if (vp8 || vp9) return openVpxDecoder(vp8, why);
+            if (mpeg) return openMpeg2(config, why);
+            if (!h264) return openDe265(config, why);
+            uint32_t led = 0;
+            return openH264(config, why, [&d, &led](std::vector<uint8_t>& bytes) {
+                if (led >= d.track->samples.size()) return false;
+                bytes.resize(d.track->samples[led].size);
+                return d.file->read(*d.track, led++, bytes.data());
+            });
         };
-        if (ownFirst) d.soft = openH264(config, &fallback, lead);
-        if (!d.soft && !software && systemProfile) d.soft = openPlatformVideo(track, config, d.shape, &problem);
-        if (!d.soft && !ownFirst) d.soft = mpeg ? openMpeg2(config, &fallback) : h264 ? openH264(config, &fallback, lead) : openDe265(config, &fallback);
+        std::string fallback;
+        if (ownFirst) d.soft = own(&fallback);
+        if (!d.soft && system) d.soft = openPlatformVideo(track, config, d.shape, &problem);
+        if (!ownFirst && d.soft) d.spare = own;
+        else if (!ownFirst) d.soft = own(&fallback);
         if (!d.soft && error) *error = problem.empty() ? fallback : problem + "; " + fallback;
+        if (const char* at = std::getenv("FFAMP_FAIL_SYSTEM_VIDEO")) d.failAt = std::strtoull(at, nullptr, 10);
     }
     if (!d.soft) return nullptr;
     d.soft->wanted = [&d](int64_t stamp) { return d.keep && stamp >= d.floor; };
@@ -562,6 +586,7 @@ Frame VideoDecoder::frame(uint32_t index) {
     Impl& d = *impl;
     const Track& track = *d.track;
     if (index >= d.list.size()) return {};
+    if (d.failed) d.swap();
     if (index < d.lost.size() && d.lost[index]) return d.concealed(*this, index);
     const Impl::Shown item = d.list[index];
     const bool pair = item.second != kNone && !d.soft->weavesFields();
@@ -602,13 +627,14 @@ Frame VideoDecoder::frame(uint32_t index) {
     } else {
         image = d.take(pts);
     }
-    if (!image && d.backKeys < 3 && !d.keys.empty() && d.keyFor(item.first) != d.keys.front()) {
+    if (!image && !d.failed && d.backKeys < 3 && !d.keys.empty() && d.keyFor(item.first) != d.keys.front()) {
         const uint32_t saved = d.backKeys++;
         d.next = kNone;
         Frame retried = frame(index);
         d.backKeys = saved;
         return retried;
     }
+    if (!image && d.swap()) return frame(index);
     if (!image) {
         if (d.lost.size() < d.list.size()) d.lost.resize(d.list.size(), false);
         d.lost[index] = true;
@@ -641,7 +667,7 @@ Frame VideoDecoder::frame(uint32_t index) {
     return frame;
 }
 
-uint64_t VideoDecoder::run(bool) {
+uint64_t VideoDecoder::run(bool async) {
     Impl& d = *impl;
     d.restart();
     d.keep = false;
@@ -650,6 +676,7 @@ uint64_t VideoDecoder::run(bool) {
     d.soft->drain([&](const Picture& p) { d.store(p); });
     d.next = kNone;
     d.last = kNone;
+    if ((d.failed || !d.shown) && d.swap()) return run(async);
     return d.shown;
 }
 

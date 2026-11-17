@@ -1454,3 +1454,93 @@ of the 720p and 1080p clips bit-exact through Media Foundation, so the fallback 
 against ffmpeg and the encoder names. What still fails is what failed in the merged run: `rd_vorbis.ogg`'s trim (both), the WMA 2
 600 s speed checks and the 10-bit HEVC whole-program rate (Windows), `wv_speed_v3.avi`'s one-thread speed (both), and on Linux the
 100-frame AAC file (vo-aacenc's priming), the RGBA frame rates through WSL's d3d12 copy-out and dav1d's 400 fps.
+
+# Windows: Media Foundation first for H.264 again (branch `mf-first`)
+
+Owner decision 2026-11-17: system decoders first on every system, FFamp's own decoders behind them. On Windows H.264 goes to Media
+Foundation again (DXVA on the GPU where it has one) and FFamp's own decoder takes the stream when Media Foundation is missing (Windows N),
+refuses it at open (above 8 bits, other than 4:2:0, under 64 pixels), fails mid-stream (`decode` returns an error) or gives no picture for
+a frame even after the restarts at earlier key frames. The hand-over sits in `VideoDecoder`, so it serves every system decoder: Media
+Foundation HEVC hands over to libde265, and on Linux every VA-API codec to its software decoder (a failed VA-API submit used to leave the
+rest of the stream concealed). `FFAMP_OWN_H264` puts the own decoder first for tests and speed comparisons (it replaces
+`FFAMP_SYSTEM_H264`); `FFAMP_FAIL_SYSTEM_VIDEO=N` makes the system decoder fail from its Nth sample. Linux stays VA-API first, the Mac
+VideoToolbox first (its `VideoDecoder` is separate and unchanged).
+
+## FATE h264 conformance through `VideoDecoder`
+
+The conformance check so far ran `ffamp h264` (the own decoder alone). It now also runs every file through `VideoDecoder`, the path the
+app takes (`h264_check.py fate ... --decode`): the stream is wrapped in Matroska with its display times (from ffprobe's frame order, so
+B-frames and field pairs come out in display order) and each frame's md5 is compared with ffmpeg's framemd5. Windows, 185 files:
+
+| Order | Pass | Decoded by Media Foundation | Decoded by the own decoder | Fail |
+|---|---|---|---|---|
+| Own decoder first (`FFAMP_OWN_H264`) | 185 | 0 | 185 | 0 |
+| Media Foundation first, before the crop fix | 183 | 164 | 21 | 2 |
+| Media Foundation first (now) | 184 | 164 | 21 | 1 |
+
+The 21 on the own decoder: 16 files above 8 bits or 4:2:2 and 2 monochrome files (refused at open), 2 8-bit 4:2:2 files, and
+`FRExt_MMCO4_Sony_B`, for which Microsoft's decoder gives no first picture, so the no-picture rule handed it over; all 21 bit-exact.
+
+- Found and fixed: Media Foundation pictures ignored the stream's left and top cropping (`CVFC1_Sony_C`, cropped 26 pixels left and 60
+  top: every frame shifted). The decoder reports the cropping window as the minimum display aperture; FFamp now cuts the picture there
+  (H.264 and HEVC; MPEG-2's aperture is its pan-scan window, which FFmpeg does not apply, so it is left alone).
+- Left: `FRExt/HPCAMAPALQ_BRCM_B` (High, frame and field pictures mixed with MBAFF): Microsoft's decoder gets frame 10 of 300 wrong on the
+  GPU (7 dB) and on the processor (30 dB), and frame 28 slightly on the GPU (47.5 dB). FFmpeg's `-hwaccel d3d11va` on the same GPU is
+  bit-exact, so the difference is in Microsoft's decoder, not the hardware. No rule routes such streams away from Media Foundation: all
+  44 files of the field group (field pictures, PAFF, MBAFF) decode bit-exact through it.
+
+Linux (WSL, VA-API through the d3d12 driver, order unchanged), the same check run once by hand: 181 of 185 pass (132 on VA-API, 49
+on the own decoder, all bit-exact). The four that fail are on VA-API: `MR2_TANDBERG_E`, `MR3_TANDBERG_B`,
+`MR4_TANDBERG_C` and `MR5_TANDBERG_C` (multiple reference frames with reordering and MMCO) differ from frame 10 to 27 on; not looked into
+in this round (FFamp's VA-API reference lists or the d3d12 driver), the suite keeps the `--decode` groups to Windows.
+
+## Forced failure, seeks, backends
+
+| Check (Windows) | Result |
+|---|---|
+| `videoinfo` of the H.264 fixture: default, `FFAMP_OWN_H264`, `FFAMP_NO_MEDIA_FOUNDATION`, `FFAMP_FAIL_SYSTEM_VIDEO=1` | `mediafoundation-gpu`, `h264`, `h264`, `h264` |
+| `FFAMP_FAIL_SYSTEM_VIDEO=40`: 720p H.264 (Media Foundation, then the own decoder) and 720p HEVC (then libde265), every frame and 50 random frames | 300 of 300 and 50 of 50 identical to ffmpeg, both |
+| 50 random frames, Media Foundation first: 720p / 1080p H.264 | all exact; 28.0 / 30.7 ms per jump |
+| The same with `FFAMP_OWN_H264` (the PC busy with other builds) | all exact; 26.4 / 80.6 ms per jump |
+
+On Linux the defaults stay `vaapi` for H.264, HEVC, VP9 and AV1; with `FFAMP_FAIL_SYSTEM_VIDEO=1` they become `h264`, `libde265`,
+`libvpx` and `dav1d`, and the two forced-failure checks pass there as well.
+
+What the order costs was measured on 2026-11-16 ("Windows: FFamp's own H.264 decoder first" above): at 1080p Media Foundation decodes to
+memory in 1.70 s against the own decoder's 1.18 s, and 12 thumbnails, each a new program that starts a D3D11 device, take 2.05 s against
+0.70 s; at 4K it is up to 15 % faster and needs up to 0.7 of a core less. The app keeps one process, so the device start is paid once,
+not per thumbnail.
+
+## Suites
+
+| System | Pass / fail / skip | Follow-up round |
+|---|---|---|
+| Windows, full run | 3,121 / 9 / 222 | 3,105 / 5 / 222 |
+| Linux (WSL), `10_video`, `54_h264`, `60_videox`, `61_vaapi` | 438 / 0 / 15 | |
+
+New checks: the conformance groups through `VideoDecoder` in both orders (14), the Windows N and forced-failure backends in `54_h264`,
+and the forced failure on H.264 and HEVC in `10_video` (also on Linux). Besides the five failures of the last round, four failed on
+Windows: the Media Foundation `frext8` group (the Microsoft difference above); the two 1080p RGBA frame rates of `89_speedcheck` (247 and
+284 frames a second against 350 and 450 wanted; `FFAMP_OWN_H264` reaches 380 and 571 on the same busy PC, so this is the Media Foundation
+start and copy-back on 150-frame whole-program runs, which passed with Media Foundation first in round 2 on an idle PC); and once
+`delay.mp4 from 0.05 s for 0.9 s at 50 fps`, which did not fail again in 264 runs afterwards (120 one at a time, 144 twelve at a time)
+nor when `80_capture` ran again on the final build (208 / 0 / 12).
+
+## System decoders this Windows has that FFamp does not use yet
+
+Every other video codec with a Media Foundation path already follows "system first": HEVC (HEVC Video Extensions, then libde265) and
+MPEG-1/2 (Microsoft's decoder; nothing behind it until libmpeg2 is built for Windows); stills and Motion JPEG go to WIC, part of every
+edition. Listing the decoder MFTs on the Windows test machine shows more that FFamp does not ask yet, each needing its own input
+setup and a check against FFmpeg (PLAN, `mf-first` item 4):
+
+| Codec | System decoder found | FFamp today |
+|---|---|---|
+| VP9, VP8 | VP9 Video Extensions (one MFT for both) | libvpx |
+| AV1 | AV1 Video Extension | dav1d |
+| MPEG-4 part 2, H.263 | Microsoft's Mpeg4s decoder, the GPU driver's hardware MFT for part 2 | xvidcore, own H.263 |
+| MS-MPEG4 v2, v3 | Mpeg4 and Mpeg43 decoders | own |
+| WMV1, WMV2, WMV3, VC-1 | WMVideo decoder | own |
+| DV (dvsd, dvhd) | DV decoder | own |
+| FLAC, ALAC, Opus, AMR-NB, WMA family | Microsoft's decoders | own, libopus, opencore-amr |
+| MP3 | Microsoft's decoder | mpg123 (Media Foundation's places the sound 624 frames late, decided earlier) |
+| AC-3, E-AC-3 | only an IEC 61937 pass-through converter, no decoder | own |

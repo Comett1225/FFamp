@@ -84,7 +84,7 @@ struct MfVideoDecoder : SoftDecoder {
     ComPtr<IMFTransform> transform;
     Gpu gpu;
     bool hardware = false;
-    bool hevc = false;
+    bool mpeg = false;
     int lengthSize = 4;
     std::vector<uint8_t> headers;
     std::vector<uint8_t> bytes;
@@ -93,6 +93,8 @@ struct MfVideoDecoder : SoftDecoder {
     int height = 0;
     UINT32 frameWidth = 0;
     UINT32 frameHeight = 0;
+    UINT32 cropX = 0;
+    UINT32 cropY = 0;
     LONG pitch = 0;
     bool deep = false;
     bool providesSamples = false;
@@ -123,6 +125,10 @@ struct MfVideoDecoder : SoftDecoder {
                 if (FAILED(transform->SetOutputType(0, type.Get(), 0))) continue;
                 deep = subtype == MFVideoFormat_P010;
                 MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &frameWidth, &frameHeight);
+                MFVideoArea area{};
+                const bool cropped = !mpeg && SUCCEEDED(type->GetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, reinterpret_cast<UINT8*>(&area), sizeof(area), nullptr));
+                cropX = cropped ? std::min<UINT32>(UINT32(std::max<int>(0, area.OffsetX.value)), frameWidth) & ~1u : 0;
+                cropY = cropped ? std::min<UINT32>(UINT32(std::max<int>(0, area.OffsetY.value)), frameHeight) & ~1u : 0;
                 UINT32 stride = 0;
                 pitch = SUCCEEDED(type->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride)) ? LONG(int32_t(stride)) : LONG(frameWidth) * (deep ? 2 : 1);
                 MFT_OUTPUT_STREAM_INFO info{};
@@ -167,26 +173,35 @@ struct MfVideoDecoder : SoftDecoder {
         return true;
     }
 
-    void emit(const Pending& item, const PictureSink& sink) {
+    Picture shaped(LONGLONG time) const {
         Picture p;
-        p.stamp = item.time;
+        p.stamp = time;
         p.color = color;
-        p.width = std::min<int>(width, int(frameWidth));
-        p.height = std::min<int>(height, int(frameHeight));
+        p.width = std::min<int>(width, int(frameWidth - cropX));
+        p.height = std::min<int>(height, int(frameHeight - cropY));
         p.chromaWidth = (p.width + 1) / 2;
         p.chromaHeight = (p.height + 1) / 2;
         p.interleaved = true;
         p.bits = deep ? 10 : 8;
         p.shift = deep ? 6 : 0;
+        return p;
+    }
+
+    void place(Picture& p, const BYTE* scan, size_t stride, size_t rows) const {
+        const size_t left = size_t(cropX) * (deep ? 2 : 1);
+        p.plane[0] = scan + size_t(cropY) * stride + left;
+        p.plane[1] = scan + stride * rows + size_t(cropY / 2) * stride + left;
+        p.stride[0] = p.stride[1] = stride;
+    }
+
+    void emit(const Pending& item, const PictureSink& sink) {
+        Picture p = shaped(item.time);
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (item.slot < 0 || FAILED(context->Map(ring[item.slot].Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
             sink(p);
             return;
         }
-        const BYTE* scan = static_cast<const BYTE*>(mapped.pData);
-        p.plane[0] = scan;
-        p.plane[1] = scan + size_t(mapped.RowPitch) * ringShape.Height;
-        p.stride[0] = p.stride[1] = mapped.RowPitch;
+        place(p, static_cast<const BYTE*>(mapped.pData), mapped.RowPitch, ringShape.Height);
         sink(p);
         context->Unmap(ring[item.slot].Get(), 0);
     }
@@ -255,19 +270,8 @@ struct MfVideoDecoder : SoftDecoder {
         }
         UINT32 rows = std::max<UINT32>(frameHeight, UINT32(height));
         if (scan && stride > 0) {
-            Picture p;
-            p.width = std::min<int>(width, int(frameWidth));
-            p.height = std::min<int>(height, int(frameHeight));
-            p.chromaWidth = (p.width + 1) / 2;
-            p.chromaHeight = (p.height + 1) / 2;
-            p.interleaved = true;
-            p.bits = deep ? 10 : 8;
-            p.shift = deep ? 6 : 0;
-            p.plane[0] = scan;
-            p.plane[1] = scan + size_t(stride) * rows;
-            p.stride[0] = p.stride[1] = size_t(stride);
-            p.stamp = time;
-            p.color = color;
+            Picture p = shaped(time);
+            place(p, scan, size_t(stride), rows);
             if (twoD || size_t(stride) * rows * 3 / 2 <= length) sink(p);
         }
         if (twoD) flat->Unlock2D();
@@ -552,7 +556,7 @@ std::unique_ptr<SoftDecoder> openPlatformVideo(const Track& track, const std::ve
     if (track.width < 64 || track.height < 64) return nullptr;
     for (bool useGpu : {d3dEnabled(), false}) {
         auto decoder = std::make_unique<MfVideoDecoder>();
-        decoder->hevc = hevc;
+        decoder->mpeg = mpeg;
         decoder->width = track.width;
         decoder->height = track.height;
         decoder->lengthSize = mpeg ? 0 : hevc ? (config.size() > 21 ? (config[21] & 3) + 1 : 4) : (config.size() > 4 ? (config[4] & 3) + 1 : 4);

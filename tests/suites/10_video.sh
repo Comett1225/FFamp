@@ -17,8 +17,14 @@ echo "== seek: 50 random frames against ffmpeg"
 for f in h264_720.mp4 hevc_720.mp4 h264_1080_60s.mp4 hevc_1080_60s.mp4; do check "seek $f" python3 compare.py seek $O/$f 50 7; done
 if [ "$SYSTEM" = Windows ]; then
     for f in h264_720.mp4 h264_1080_60s.mp4; do
-        check "decode $f with Media Foundation first (FFAMP_SYSTEM_H264)" env FFAMP_SYSTEM_H264=1 python3 compare.py decode $O/$f
-        check "seek $f with Media Foundation first (FFAMP_SYSTEM_H264)" env FFAMP_SYSTEM_H264=1 python3 compare.py seek $O/$f 50 7
+        check "decode $f with FFamp's own decoder first (FFAMP_OWN_H264)" env FFAMP_OWN_H264=1 python3 compare.py decode $O/$f
+        check "seek $f with FFamp's own decoder first (FFAMP_OWN_H264)" env FFAMP_OWN_H264=1 python3 compare.py seek $O/$f 50 7
+    done
+fi
+if ! on_mac; then
+    for f in h264_720.mp4 hevc_720.mp4; do
+        check "decode $f with the system decoder failing at sample 40 (FFAMP_FAIL_SYSTEM_VIDEO): the software decoder takes over" env FFAMP_FAIL_SYSTEM_VIDEO=40 python3 compare.py decode $O/$f
+        check "seek $f with the system decoder failing at sample 40 (FFAMP_FAIL_SYSTEM_VIDEO)" env FFAMP_FAIL_SYSTEM_VIDEO=40 python3 compare.py seek $O/$f 50 7
     done
 fi
 python3 compare.py cliseek $O/h264_1080_60s.mp4 20 7

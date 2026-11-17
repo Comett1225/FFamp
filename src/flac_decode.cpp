@@ -48,6 +48,15 @@ bool utf8Number(BitReader& r) {
     return true;
 }
 
+uint8_t headerCrc(const uint8_t* p, size_t n) {
+    uint8_t crc = 0;
+    for (size_t i = 0; i < n; ++i) {
+        crc ^= p[i];
+        for (int k = 0; k < 8; ++k) crc = uint8_t(crc & 0x80 ? (crc << 1) ^ 0x07 : crc << 1);
+    }
+    return crc;
+}
+
 struct FlacAudio : PacketDecoder {
     int infoBits = 16;
     int infoRate = 0;
@@ -145,6 +154,7 @@ struct FlacAudio : PacketDecoder {
         if (rateCode == 12) r.read(8);
         else if (rateCode == 13 || rateCode == 14) r.read(16);
         r.read(8);
+        if (r.left() < 0 || headerCrc(packet.data(), size_t(r.position() / 8))) return false;
         static const int sizes[8] = {0, 8, 12, 0, 16, 20, 24, 32};
         const int bits = bitsCode ? sizes[bitsCode] : infoBits;
         const int count = assignment < 8 ? assignment + 1 : 2;
@@ -167,11 +177,12 @@ struct FlacAudio : PacketDecoder {
             }
         }
         const float scale = 1.0f / float(int64_t(1) << (bits - 1));
+        const int unused = 64 - bits;
         const size_t at = out.size();
         out.resize(at + size_t(blocksize) * size_t(count));
         float* to = out.data() + at;
         for (int i = 0; i < blocksize; ++i)
-            for (int c = 0; c < count; ++c) *to++ = float(samples[c][size_t(i)]) * scale;
+            for (int c = 0; c < count; ++c) *to++ = float(int64_t(uint64_t(samples[c][size_t(i)]) << unused) >> unused) * scale;
         return true;
     }
 

@@ -1696,3 +1696,48 @@ Full runs of `tests/run.sh` before the last test fixes, then the affected suites
 
 `62_videofix`: 98 checks on Windows, 93 on Linux, 76 on the Mac (HAP needs an ffmpeg with Snappy, which the Mac's lacks; 12 and 16-bit
 FFV1 skipped there).
+
+# Audio fixes (branch `fix-audio-517`)
+
+Nine reviewed findings in the sound path, each fixed at its root and checked by `tests/suites/56_audiofix.sh` (files made with ffmpeg
+at test time, read as the app reads them: `ffamp pcm` against `-af aresample=async=1:first_pts=0`, or `adecode` against `-f f32le`).
+Numbers are SNR against ffmpeg 9.0.2; "identical" means every sample equal.
+
+| Finding | Before | Now |
+|---|---|---|
+| Media Foundation AAC: LC at 8 to 24 kHz, 2.1 and hexagonal through a PCE (Windows) | silence, reported at double rate; hexagonal in MF's order | own decoder: 138 dB at the stream's own rate, PCE layouts 138.7 dB in FFmpeg's order |
+| HE-AAC without SBR signalled (ADTS, core-only configurations; Windows) | 2048 frames late | own decoder, lag 0, 134 to 135 dB |
+| Timestamp gaps longer than 2.7 s | closed, later sound early by the gap | kept: 5 s gap in PCM Matroska identical, in AAC MP4 138.8 dB, same length as ffmpeg (398,400 frames); also through Media Foundation, whose one-frame lag no longer puts the packet before a gap after it |
+| Quad, 2.1, 3.1 mixed to stereo (WAV/AVI/MOV masks, FLAC, FLAC comment, Opus, Vorbis) | placed by count (SNR 3 to 8 dB) | identical to ffmpeg for PCM and FLAC, Opus 134.9 dB, Vorbis 136.2 dB |
+| AC-3 and E-AC-3 centre and surround levels | always -3 dB (14.6 dB) | the stream's levels: stereo 138.4 dB, mono 137.8 dB, surround muted 138.6 dB |
+| 16-bit downmix (viewer playback) | no normalisation (+7.7 dB, clipping) | `PcmReader::mixPeak()`; the CLI's 16-bit output matches ffmpeg's `-ac 2 -f s16le` at 106.9 dB (AC-3 5.1) and 82.2 dB (5.1 WAV); the app's `pcmRead` still has to divide by it |
+| Damaged FLAC frames | values up to 2.5e9 | header CRC-8 checked, samples wrapped to the bit depth as FFmpeg's integer path: within full scale |
+| Opus channel mapping family 255 | refused | 139.1 dB (stereo), 136.5 dB (3 channels, FFmpeg's 2.1 guess) |
+| Vorbis in WebM/Matroska written by FFmpeg | 16 (48 kHz) or 4 (44.1 kHz) frames late | lag 0, same length, 139 dB |
+| DTS, TrueHD, WavPack | no sound | DTS core 147.8 dB (5.1) and 152.9 dB (stereo) in Matroska, MP4, AVI and WAV; TrueHD identical (stereo, 5.1, Matroska and MP4); WavPack identical (16, 24, 32-bit, float, mono to 5.1) |
+
+Damaged copies of the new DTS, TrueHD and WavPack files (`audio.py fuzz` in the suite, and `fuzz_audio` with undefined-behaviour
+checks for 240 s on WSL, 32,979 runs from them) gave no crash, hang or report.
+
+Suites with this round's code (pass / fail / skip; the PC was shared with other helpers' runs the whole time, so speed checks are
+not meaningful there):
+
+| Suite | Mac (through the lock) | WSL | Windows |
+|---|---|---|---|
+| `56_audiofix` (new) | 76 / 0 / 8 (no libvorbis in its ffmpeg; AudioToolbox AAC) | 89 / 0 / 0 | 90 / 0 / 0 |
+| `20_audio`, `30_readers`, `40_probe`, `45_formats`, `48_wma` | 172, 229, 236, 350, 164, no failure | in the full run, no failure | in the full run, no failure |
+| `52_sound` | 292 / 0 / 1 | 292 / 0 / 1 | in the full run, no failure |
+| `53_ac3`, `54_aac` | skipped (AudioToolbox) | in the full run, no failure | 246 / 0 / 0, 85 / 0 / 0 |
+| `70_tools` | 150 / 0 / 0 | 130 / 0 / 20 | 127 / 0 / 21 |
+| `75_installed` | 59 / 0 / 0 | 30 / 0 / 7 | 30 / 0 / 7 |
+| `85_fuzz` | not built on the Mac | 23 / 0 / 0 | not built on Windows |
+| `88_fixes` | 48 / 0 / 1 | 48 / 1 / 0 (the 100-frame AAC file, vo-aacenc's priming, failing before) | 50 / 0 / 0 |
+
+The full runs on WSL (into `90_speed`, 3,342 passes) and Windows (into `60_videox`, 2,735 passes) found no new failure in the code:
+`rd_vorbis.ogg`'s trim, `wv_speed_v3.avi`'s one-thread speed, the 100-frame AAC file on WSL and the WMA 2 600 s speed checks on
+Windows failed before this round, and WSL's frames-per-second checks for 1080p video failed while other helpers' runs shared the
+processor and GPU (this round changes no video code). The two mkvmerge Vorbis files (`vorbis_mono_44k.mka`, `vorbis_stereo_44k.webm`,
+no CodecDelay) now start with the first packet's 128 silent frames as the app's FFmpeg reading does, so `75_installed` judges them
+against the app's command (136 dB, same length, offset 0; the old timing was 128 frames off it) instead of ffmpeg's plain decode,
+and their Mac checksums changed. An earlier WSL run saw VA-API pictures that "did not decode" while other helpers used the GPU; the build of `main` failed the
+same way at that time, and the later run passed.

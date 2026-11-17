@@ -98,13 +98,41 @@ void pcm(Track& track, int bits, bool floating, bool bigEndian) {
     track.bigEndian = bigEndian;
 }
 
+uint64_t channelLayoutMask(View b) {
+    static const uint32_t tags[][2] = {{(100 << 16) | 1, 0x4}, {(101 << 16) | 2, 0x3}, {(102 << 16) | 2, 0x3}, {(104 << 16) | 2, 0x3}, {(105 << 16) | 2, 0x3},
+        {(106 << 16) | 2, 0x3}, {(108 << 16) | 4, 0x33}, {(113 << 16) | 3, 0x7}, {(115 << 16) | 4, 0x107}, {(117 << 16) | 5, 0x607}, {(121 << 16) | 6, 0x60F},
+        {(131 << 16) | 3, 0x103}, {(132 << 16) | 4, 0x603}, {(133 << 16) | 3, 0xB}, {(134 << 16) | 4, 0x10B}, {(135 << 16) | 5, 0x60B}, {(136 << 16) | 4, 0xF},
+        {(137 << 16) | 5, 0x10F}, {(149 << 16) | 2, 0xC}};
+    if (b.n < 16) return 0;
+    const uint32_t tag = View{b.p + 4, 4}.u32(), bitmap = View{b.p + 8, 4}.u32(), count = View{b.p + 12, 4}.u32();
+    if (tag == (1 << 16)) return bitmap & 0x3FFFF;
+    if (tag == 0) {
+        if (count > 64 || count > (b.n - 16) / 20) return 0;
+        uint64_t mask = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t label = View{b.p + 16 + 20 * size_t(i), 4}.u32();
+            if (label < 1 || label > 18 || (mask >> (label - 1))) return 0;
+            mask |= uint64_t(1) << (label - 1);
+        }
+        return mask;
+    }
+    for (const auto& known : tags) if (known[0] == tag) return known[1];
+    return 0;
+}
+
 void audioConfig(uint32_t type, View body, Track& track) {
-    if (type == fourcc("esds")) {
+    if (type == fourcc("chan")) {
+        track.channelMask = channelLayoutMask(body);
+    } else if (type == fourcc("esds")) {
         ElementaryStream stream;
         parseElementaryStream(body, stream);
         int kind = stream.objectTypeIndication;
         if (kind == 0x69 || kind == 0x6B) {
             track.codec = fourcc(".mp3");
+            return;
+        }
+        if (kind >= 0xA9 && kind <= 0xAC) {
+            track.codec = fourcc("dts ");
             return;
         }
         track.configType = type;
@@ -210,6 +238,7 @@ void audioEntry(uint32_t format, View v, Track& track, SoundUnit& unit) {
     else if (format == fourcc("lpcm") && version == 2 && (bits == 8) != bool(flags & 5)) pcm(track, bits, flags & 1, flags & 2);
     else if (format == fourcc(".mp3") || format == 0x6D730055) track.codec = fourcc(".mp3");
     else if (format == fourcc("fLaC")) track.bits = bits;
+    else if (format == fourcc("dtsc") || format == fourcc("dtsh") || format == fourcc("dtsl") || format == fourcc("dtse")) track.codec = fourcc("dts ");
     else if (format == fourcc("samr") || format == fourcc("sawb")) {
         track.channels = 1;
         track.sampleRate = format == fourcc("sawb") ? 16000 : 8000;

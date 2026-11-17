@@ -85,13 +85,7 @@ int pcm(const Args& args) {
     int64_t end = args.has("frames") ? at + args.number("frames", 0) : reader->length();
     size_t chunk = size_t(std::max(1L, args.number("chunk", long(kChunk))));
     float gain = 1;
-    if (format == "s16le") {
-        std::unique_ptr<Reader> file = Reader::open(args.plain[0]);
-        const Track* track = file ? file->first(Kind::Audio) : nullptr;
-        auto decoder = track ? AudioDecoder::open(*file, *track) : nullptr;
-        double peak = decoder ? mixPeak(decoder->channels(), channels) : 1;
-        if (peak > 1) gain = float(1 / peak);
-    }
+    if (format == "s16le" && reader->mixPeak() > 1) gain = float(1 / reader->mixPeak());
     std::vector<float> pcm(chunk * size_t(channels));
     std::vector<int16_t> whole(chunk * size_t(channels));
     while (at < end) {

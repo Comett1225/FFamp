@@ -133,6 +133,7 @@ struct WmaLossless : PacketDecoder {
         bitsPerSample = int(le16(e));
         if (bitsPerSample != 16 && bitsPerSample != 24) return fail("Windows Media Audio 9 Lossless sample size not supported");
         channels = mask ? __builtin_popcount(mask) : declared;
+        if (mask) layout = mask;
         if (channels < 1 || channels > kMaxChannels) return fail("Windows Media Audio 9 Lossless layout not supported");
         log2FrameSize = log2Of(unsigned(blockAlign)) + 4;
         lengthPrefix = decodeFlags & 0x40;

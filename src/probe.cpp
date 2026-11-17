@@ -451,6 +451,15 @@ Look lookOf(Reader& reader, const Track& t) {
             {0x6D730014, "g726"}, {0x6D730040, "g726"}, {0x6D730045, "g726"}, {0x6D730064, "g726"}, {0x6D73028F, "g722"}};
         look.codec = names.at(c);
         look.sampleFormat = c == fourcc("ima4") || c == 0x6D730011 || (c == 0x6D730002 && t.channels > 2) ? "s16p" : "s16";
+    } else if (c == fourcc("wvpk")) {
+        look.codec = "wavpack";
+        look.sampleFormat = t.bits > 16 ? "s32p" : "s16p";
+    } else if (c == fourcc("dts ")) {
+        look.codec = "dts";
+        look.sampleFormat = "fltp";
+    } else if (c == fourcc("mlpa")) {
+        look.codec = "truehd";
+        look.sampleFormat = "s32";
     } else if (c == fourcc("TTA1")) {
         look.codec = "tta";
         look.sampleFormat = t.bits <= 8 ? "u8" : t.bits <= 16 ? "s16" : "s32";

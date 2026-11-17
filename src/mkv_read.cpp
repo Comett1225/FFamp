@@ -280,6 +280,17 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
         FlacInfo info;
         if (flacInfo(t.config.data(), t.config.size(), info)) t.bits = info.bits;
         else lane.usable = false;
+        for (size_t block = 4; at == 8 && block + 4 <= secret.size();) {
+            const size_t size = (size_t(secret[block + 1]) << 16) | (size_t(secret[block + 2]) << 8) | secret[block + 3];
+            if (size > secret.size() - block - 4) break;
+            if ((secret[block] & 0x7F) == 4) {
+                Tags comments;
+                vorbisComments(secret.data() + block + 4, size, comments);
+                t.channelMask = takeChannelMask(comments);
+            }
+            if (secret[block] & 0x80) break;
+            block += 4 + size;
+        }
     } else if (id == "A_VORBIS") {
         set("vorb", fourcc("vorb"), true);
         std::vector<View> packets;
@@ -297,6 +308,9 @@ void describe(Lane& lane, std::vector<uint8_t>& secret, double outputRate) {
     else if (starts(id, "A_AC3")) set("ac-3", 0, false);
     else if (id == "A_ALAC") set("alac", fourcc("alac"), true);
     else if (id == "A_TTA1") set("TTA1", fourcc("TTA1"), false);
+    else if (id == "A_WAVPACK4") set("wvpk", fourcc("wvpk"), true);
+    else if (starts(id, "A_DTS")) set("dts ", 0, false);
+    else if (id == "A_TRUEHD" || id == "A_MLP") set("mlpa", 0, false);
     else if (id == "A_MS/ACM" && secret.size() >= 18) {
         uint32_t tag = extensibleTag(secret.data(), secret.size());
         t.codec = waveAudio(tag);
@@ -324,8 +338,17 @@ uint32_t samplesIn(Lane& lane, const uint8_t* p, size_t have, uint32_t size) {
         static const uint32_t blocks[4] = {256, 512, 768, 1536};
         return have >= 5 ? (p[4] >> 6) == 3 ? 1536 : blocks[(p[4] >> 4) & 3] : 0;
     }
-    if (t.codec == fourcc("vorb")) return have && !(p[0] & 1) ? lane.modes.next(p, have) + 1 : 0;
+    if (t.codec == fourcc("vorb")) {
+        if (!have || (p[0] & 1)) return 0;
+        VorbisModes& m = lane.modes;
+        const bool first = !m.previous;
+        const uint32_t frames = m.next(p, have);
+        return (first && !m.large.empty() ? (m.blocks[m.large[0] ? 1 : 0] + m.previous) / 4 : frames) + 1;
+    }
     if (waveDecoded(t.codec)) return uint32_t(std::min<int64_t>(waveFrames(t, size), 0x7FFFFFFF));
+    if (t.codec == fourcc("wvpk")) return have >= 4 ? std::min<uint32_t>(le32(p), 150000) : 0;
+    if (t.codec == fourcc("dts ")) return dtsFrameSamples(p, have);
+    if (t.codec == fourcc("mlpa")) return mlpUnitSamples(p, have, size, t.sampleRate);
     return 0;
 }
 

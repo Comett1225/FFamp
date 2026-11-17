@@ -49,17 +49,32 @@ std::vector<Place> layout(int channels, uint64_t mask) {
     return places;
 }
 
-void stereoShare(Place place, float& left, float& right) {
+void stereoShare(Place place, const MixLevels& m, int encoding, bool frontPair, bool surrounds, float& left, float& right) {
     const float side = float(std::sqrt(0.5));
+    const float wide = float(std::sqrt(0.75));
+    const float s = encoding ? m.surroundLtRt : m.surround;
     left = right = 0;
     switch (place) {
         case FL: case FLC: left = 1; break;
         case FR: case FRC: right = 1; break;
-        case FC: left = right = side; break;
-        case BL: case SL: left = side; break;
-        case BR: case SR: right = side; break;
-        case BC: case OTHER: left = right = 0.5f; break;
-        case LFE: break;
+        case FC: left = right = frontPair ? (encoding ? m.centreLtRt : m.centre) : side; break;
+        case BC:
+            if (!encoding) left = right = s * side;
+            else if (surrounds) left = -(right = s * side);
+            else left = -(right = s);
+            break;
+        case BL: case SL:
+            if (encoding == 1) left = -(right = s * side);
+            else if (encoding == 2) left = -s * wide, right = s * side;
+            else left = s;
+            break;
+        case BR: case SR:
+            if (encoding == 1) left = -(right = s * side);
+            else if (encoding == 2) left = -s * side, right = s * wide;
+            else right = s;
+            break;
+        case OTHER: left = right = 0.5f; break;
+        case LFE: left = right = m.lfe * side; break;
     }
 }
 
@@ -168,19 +183,27 @@ void SincKernel::render(const float* in, int64_t inBase, int channels, int64_t o
     });
 }
 
-ChannelMix::ChannelMix(int inChannels, int outChannels, uint64_t inLayout) : from(std::max(1, inChannels)), to(std::max(1, outChannels)) {
+ChannelMix::ChannelMix(int inChannels, int outChannels, uint64_t inLayout, const MixLevels& levels) : from(std::max(1, inChannels)), to(std::max(1, outChannels)) {
     matrix.assign(size_t(from) * size_t(to), 0.0f);
     identity = from == to;
     const std::vector<Place> source = layout(from, inLayout);
     const std::vector<Place>& target = layout(to);
+    const int encoding = to == 2 && (levels.preferred == 1 || levels.preferred == 3) ? (levels.preferred == 1 ? 1 : 2) : 0;
+    bool frontPair = false, surrounds = false;
+    for (Place p : source) {
+        frontPair = frontPair || p == FL || p == FR;
+        surrounds = surrounds || p == BL || p == BR || p == SL || p == SR;
+    }
     for (int o = 0; o < to; ++o) {
         for (int i = 0; i < from; ++i) {
             float& gain = matrix[size_t(o) * size_t(from) + size_t(i)];
             if (identity || source.empty() || target.empty()) {
                 gain = i == o ? 1.0f : 0.0f;
+            } else if (to == 1 && source[size_t(i)] == BC) {
+                gain = levels.surround * float(std::sqrt(0.5));
             } else if (to <= 2) {
                 float left, right;
-                stereoShare(source[size_t(i)], left, right);
+                stereoShare(source[size_t(i)], levels, encoding, frontPair, surrounds, left, right);
                 gain = to == 2 ? (o == 0 ? left : right) : (left + right) * float(std::sqrt(0.5));
             } else {
                 gain = source[size_t(i)] == target[size_t(o)] ? 1.0f : 0.0f;

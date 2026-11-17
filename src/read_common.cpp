@@ -2,6 +2,7 @@
 #include "readers.h"
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include "portable.h"
 #if defined(__ANDROID__)
@@ -398,6 +399,15 @@ bool splitXiph(const std::vector<uint8_t>& laced, std::vector<View>& packets) {
         at += size;
     }
     return true;
+}
+
+uint64_t takeChannelMask(Tags& tags) {
+    auto it = tags.find("waveformatextensible_channel_mask");
+    if (it == tags.end()) return 0;
+    const uint64_t mask = strtoull(it->second.c_str(), nullptr, 0);
+    if (!mask || (mask & ~uint64_t(0x3FFFF))) return 0;
+    tags.erase(it);
+    return mask;
 }
 
 void vorbisComments(const uint8_t* p, size_t n, Tags& tags) {

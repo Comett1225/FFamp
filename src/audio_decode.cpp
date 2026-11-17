@@ -2,6 +2,7 @@
 #include "audio_codec.h"
 #include "readers.h"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 
@@ -79,10 +80,18 @@ struct Block {
 
 const int64_t kBlockFrames = 32768;
 const int64_t kRunSeconds = 20;
-const int64_t kHole = 131072;
 const int64_t kSpareSeconds = 3600;
 const int64_t kLongestPacket = 65536;
 const size_t kMostBlockPackets = 1024;
+
+uint64_t statedLayout(const Track& t, int channels) {
+    const bool stored = t.codec == fourcc("lpcm") || t.codec == fourcc("fLaC") || waveDecoded(t.codec);
+    if (stored && t.channelMask && std::popcount(t.channelMask) == channels) return t.channelMask;
+    const int family = t.codec == fourcc("Opus") && t.config.size() > 18 ? t.config[18] : -1;
+    if (channels == 4 && (t.codec == fourcc("fLaC") || t.codec == fourcc("vorb") || family == 1)) return 0x33;
+    if (channels == 3 && (family == 255 || t.codec == fourcc("lpcm"))) return 0x0B;
+    return 0;
+}
 
 }
 
@@ -90,6 +99,7 @@ struct AudioDecoder::Impl {
     Reader* file = nullptr;
     const Track* track = nullptr;
     std::unique_ptr<PacketDecoder> codec;
+    MixLevels levels;
     std::vector<int64_t> starts;
     int64_t first = 0;
     int64_t last = 0;
@@ -103,6 +113,8 @@ struct AudioDecoder::Impl {
     bool ended = false;
     bool lagKnown = false;
     int64_t lag = 0;
+    int64_t gapAt = 0;
+    int64_t gap = 0;
     std::vector<float> held;
     std::vector<uint8_t> packet;
     int64_t hidden = INT64_MIN;
@@ -139,7 +151,7 @@ struct AudioDecoder::Impl {
         }
         for (size_t i = 1; i <= n; ++i) starts[i] = std::max(starts[i], starts[i - 1]);
         int64_t wantedFirst = std::clamp(scaled(t.mediaStart, rate, t.timescale), starts[0], starts[n]);
-        int64_t wantedLast = t.mediaEnd < 0 ? starts[n] : std::clamp(scaled(t.mediaEnd, rate, t.timescale), wantedFirst, starts[n]);
+        int64_t wantedLast = t.mediaEnd < 0 ? std::max(wantedFirst, starts[n] - codec->endTrim(*file, t)) : std::clamp(scaled(t.mediaEnd, rate, t.timescale), wantedFirst, starts[n]);
         const int64_t frameBytes = std::max(1, track->channels * (track->bits / 8));
         const bool pcm = t.codec == fourcc("lpcm");
         int64_t closed = 0;
@@ -153,7 +165,7 @@ struct AudioDecoder::Impl {
             int64_t span = starts[i + 1] - from;
             int64_t real = known ? span : pcm ? int64_t(t.samples[i].size) / frameBytes : longest;
             int64_t extra = std::max<int64_t>(0, span - real);
-            int64_t kept = extra > kHole || extra > spare ? std::min(span, real) : span;
+            int64_t kept = extra > spare ? std::min(span, real) : span;
             if (kept == span) spare -= extra;
             if (!haveFirst && wantedFirst < from + span) {
                 first = from - closed + std::min(wantedFirst - from, kept);
@@ -227,6 +239,14 @@ struct AudioDecoder::Impl {
         ended = false;
         lagKnown = codec->packetFrames <= 0;
         lag = 0;
+        gap = 0;
+    }
+
+    void settleGap() {
+        const size_t channels = size_t(codec->channels);
+        if (!gap || heldFrom + int64_t(held.size() / channels) < gapAt) return;
+        held.insert(held.begin() + long(size_t(std::max<int64_t>(0, gapAt - heldFrom)) * channels), size_t(gap) * channels, 0.0f);
+        gap = 0;
     }
 
     void forget(int64_t before) {
@@ -257,12 +277,16 @@ struct AudioDecoder::Impl {
         while (!ended && heldFrom + int64_t(held.size() / channels) < starts[to]) {
             if (next >= n) {
                 codec->finish(held);
+                settleGap();
                 ended = true;
                 break;
             }
             const int64_t wanted = starts[next] - lag;
-            const int64_t have = heldFrom + int64_t(held.size() / channels);
-            if (lagKnown && have < wanted) held.resize(held.size() + size_t(wanted - have) * channels, 0.0f);
+            const int64_t have = heldFrom + int64_t(held.size() / channels) + gap;
+            if (lagKnown && have < wanted) {
+                if (!gap) gapAt = have + lag;
+                gap += wanted - have;
+            }
             const size_t before = held.size();
             if (marking) remember(next);
             feedOne(next, &held);
@@ -272,6 +296,7 @@ struct AudioDecoder::Impl {
                 lag = std::clamp<int64_t>(starts[next] + codec->packetFrames - heldFrom - int64_t(held.size() / channels), 0, codec->packetFrames);
                 lagKnown = true;
             }
+            settleGap();
             ++next;
             forget(starts[from]);
         }
@@ -337,15 +362,22 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
         return fail("Vorbis needs libvorbis, which was not found when building");
 #endif
     } else {
-#ifndef __ANDROID__
         std::vector<uint8_t> packet(track.samples[0].size);
         if (!file.read(track, 0, packet.data())) return fail("cannot read the first audio packet");
-        a.codec = openSystemAudio(track, packet, error);
+        if (track.codec == fourcc("ac-3") || track.codec == fourcc("ec-3")) dolbyMixLevels(packet.data(), packet.size(), a.levels);
+        if (track.codec == fourcc("wvpk")) a.codec = openWavpackAudio(track, packet, error);
+        else if (track.codec == fourcc("dts ")) a.codec = openDtsAudio(track, packet, error);
+        else if (track.codec == fourcc("mlpa")) a.codec = openTruehdAudio(track, packet, error);
+        else {
+#ifndef __ANDROID__
+            a.codec = openSystemAudio(track, packet, error);
 #else
-        return fail("no decoder for this audio codec on this system");
+            return fail("no decoder for this audio codec on this system");
 #endif
+        }
     }
     if (!a.codec) return fail("audio codec not supported");
+    if (!a.codec->layout) a.codec->layout = statedLayout(track, a.codec->channels);
     if (a.codec->rate < 1 || a.codec->rate > 768000 || a.codec->channels < 1 || a.codec->channels > 64) return fail("audio layout not supported");
     a.place();
     if (a.codec->refusal) {
@@ -358,6 +390,7 @@ std::unique_ptr<AudioDecoder> AudioDecoder::open(Reader& file, const Track& trac
 int AudioDecoder::sampleRate() const { return impl->codec->rate; }
 int AudioDecoder::channels() const { return impl->codec->channels; }
 uint64_t AudioDecoder::layout() const { return impl->codec->layout; }
+const MixLevels& AudioDecoder::mixLevels() const { return impl->levels; }
 int64_t AudioDecoder::length() const { return impl->last - impl->first; }
 
 bool AudioDecoder::read(int64_t start, size_t frames, float* out) {

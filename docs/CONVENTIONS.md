@@ -39,6 +39,9 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 | FFV1 | `FFV1` | `bmih` (AVI, Matroska `V_MS/VFW/FOURCC`) or `FFV1` (Matroska `V_FFV1`) | the BITMAPINFOHEADER with the configuration record behind it, or the record alone; versions 0 and 1 have none |
 | HAP | `Hap1`, `Hap5`, `HapY`, `HapM`, `HapA` | 0 | empty |
 | v210 and uncompressed video | `v210`; the raw YUV fourccs (`I420`, `IYUV`, `YV12`, `NV12`, `NV21`, `YUY2`, `YUYV`, `yuvs`, `UYVY`, `2vuy`, `HDYC`, `Y42B`, `Y800`, `GREY` and the AVI list below); `raw ` (QuickTime RGB, `bits` 16, 24 or 32); `DIB ` (BI_RGB in AVI and Matroska) | `bmih` for `DIB ` and AVI | the BITMAPINFOHEADER and its palette: bit count 1, 2, 4, 8 (palette), 15, 16, 24 or 32, rows bottom-up when its height is positive, padded to 4 bytes |
+| DTS | `dts ` | 0 | empty; one frame per sample, starting with the core sync (16-bit big- or little-endian or 14-bit words); Matroska `A_DTS*`, MP4 (`mp4a` with object type 0xA9 to 0xAC, `dtsc`, `dtsh`, `dtsl`, `dtse`), AVI and WAV (tag 0x2001, cut into core frames) |
+| TrueHD / MLP | `mlpa` | 0 | empty; a sample holds one or more access units (Matroska `A_TRUEHD` and `A_MLP`, MP4 `mlpa`) |
+| WavPack | `wvpk` | `wvpk` | the Matroska CodecPrivate (2-byte version, may be empty); a sample is a Matroska WavPack frame: the 4-byte sample count, then for each block its flags, CRC, size (multi-block frames only) and data |
 | Windows Media Audio 1, 2, 9 Pro, 9 Lossless, 9 Voice | `wma1`, `wma2`, `wmap`, `wmal`, `wmas` | `wfex` | the stream's WAVEFORMATEX (18 bytes, little-endian; WAVEFORMATEXTENSIBLE when the tag is 0xFFFE) followed by its codec data; one sample is one ASF media object |
 
 ## Timing
@@ -50,6 +53,8 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
   edit list duration).
 - `order`: indexes of shown samples sorted by pts; `syncs`: key frames in decode order.
 - Matroska and TS have no stored dts: readers synthesise a non-decreasing dts not above pts.
+- Matroska Vorbis: the first packet lasts (its window + the next packet's window) / 4, as FFmpeg's Vorbis parser times it, so a file
+  without CodecDelay (mkvmerge) starts with that packet's silent frames, as the app's FFmpeg reading does.
 
 ## Reading packets
 
@@ -124,12 +129,24 @@ list; `Sample.offset` is then free for the reader's use.
 - Channel order by count, for the mixer and the WAV writer and, on the Mac, for every codec: 3 = FL FR FC, 4 = FL FR FC BC (WAV mask
   0x107), 5 = FL FR FC BL BR, 6 = FL FR FC LFE BL BR, 7 = FL FR FC LFE BC SL SR (WAV mask 0x70F), 8 = FL FR FC LFE BL BR SL SR.
   FLAC comes out in its own file order, which is this order (4-channel FLAC and Opus are really quad: all four channels are kept).
+- Where the stream states its layout, `AudioDecoder::layout()` gives it as an FFmpeg channel mask and the mixer places each channel by it:
+  the WAVEFORMATEXTENSIBLE mask of WAV, AVI and ASF (PCM and the WAVE-tag codecs), the MOV `chan` box (bitmap, descriptions and the
+  layout tags whose order is the mask's), the FLAC `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` comment (raw FLAC and Matroska), the WMA Pro and
+  Lossless masks, the DTS, TrueHD and WavPack layouts. 4-channel FLAC, Vorbis and Opus (family 1) are quad (`0x33`); 3-channel PCM
+  without a mask and Opus family 255 take FFmpeg's guess for the count (2.1, so the third channel is LFE).
+- The mixer is swresample's matrix: centre and surround at -3 dB unless the stream states its own levels (AC-3 and E-AC-3, read from
+  the first frame on every system: the bit stream info, the alternate syntax of bsid 6, E-AC-3 mixing metadata with its LFE level and
+  preferred Lt/Rt or Pro Logic II downmix, which only stereo output uses), LFE dropped unless a level is stated, a back centre to mono
+  at `surround * sqrt(0.5)`. `PcmReader::mixPeak()` is the largest row sum of the reader's matrix; 16-bit output divides by it when it
+  is above 1, as swresample normalises a downmix for integer output (the `pcm --format s16le` command does).
 - Off the Mac every decoder gives FFmpeg's order, which differs from the order by count where FFmpeg's layout does: 6.1 ALAC and AAC
   come out as FL FR FC LFE BL BR BC (`6.1(back)`), AAC with a program config element in FFmpeg's order for its layout. Such decoders
   state their layout as an FFmpeg channel mask (`AudioDecoder::layout()`, 0 when the order is the one by count), and `PcmReader`'s
   mixer places each channel by it, so a 6.1 file mixes to stereo with every channel on its own side on every system.
 - A gap between packets that the reader keeps, a packet that cannot be read and a packet the decoder rejects are played as silence of
-  the same length, so the sound after them stays at its own time.
+  the same length, so the sound after them stays at its own time. Gaps of any length are kept (up to an hour of silence in all), as
+  FFmpeg's `aresample=async=1` fills them; with a decoder whose output lags its input (Media Foundation AAC) the silence goes after
+  the output still inside the decoder.
 - `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
 - `Mp4Writer` writes version 1 (64-bit) `mvhd`, `tkhd`, `mdhd` and `elst` boxes when a length does not fit in 32 bits.
 
@@ -550,7 +567,10 @@ list; `Sample.offset` is then free for the reader's use.
 - Platform hooks, picked at run time with the software libraries behind them: `openPlatformVideo` (Media Foundation H.264 and HEVC, through
   the GPU when the MFT takes a D3D11 device manager: backend `mediafoundation-gpu`, else `mediafoundation`), `openPlatformEncoder` (the
   GPU driver's encoder MFT, then Microsoft's software MFT; no B-frames), `openPlatformAudio` (Media Foundation AAC, which hands its sound
-  out one frame late: `lead` is one frame), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
+  out one frame late: `lead` is one frame; refused for a program config element and whenever Media Foundation would give another rate
+  or channel count than the configuration states, such as LC at 24 kHz or less and HE-AAC whose configuration does not signal SBR, which
+  Media Foundation takes for double rate: those go to FFamp's own decoder; a stream change it announces is renegotiated, and one that
+  changes the format ends that decoder's sound), `openPlatformAac` (44.1 and 48 kHz at 96, 128, 160 or 192 kbit/s, no priming), and
   `openStillDecoder` (WIC on Windows, libjpeg-turbo on Linux). On Linux `openPlatformVideo` is VA-API (below); the other hooks return
   nothing there yet. Media Foundation pictures are cut to the output type's minimum display aperture, so left and top cropping is kept.
 - The system decoder comes first and the software decoder stands behind it, on every system: Media Foundation for H.264, HEVC and
@@ -670,3 +690,20 @@ list; `Sample.offset` is then free for the reader's use.
   NASM is a build tool only and never ships). FFamp builds with gcc or clang on Linux and clang-cl on Windows (`libffamp.lib`, so
   the CLI's import library cannot overwrite it; clang's builtins library is linked for 128-bit division). Paths given to FFamp are UTF-8
   on every system (`openFile`, `removeFile`, `fileBytes` in `src/portable.h`).
+
+## DTS, TrueHD and WavPack (`src/dts_decode.cpp`, `src/truehd_decode.cpp`, `src/wavpack_decode.cpp`, every system)
+
+- FFamp's own decoders, based on FFmpeg's (`docs/NOTICE.md`), on every system (no system decoder has them).
+- DTS: the core (every audio mode, LFE, joint intensity, ADPCM prediction, high-frequency VQ, block and Huffman codes, sum/difference)
+  with the XCH and XXCH channel extensions inside the core substream and an embedded XXCH downmix undone (ported, not tested: ffmpeg
+  cannot write them), through FFmpeg's float synthesis filter (`InverseMdct` for its 32-point transform), output in FFmpeg's channel
+  order (5.1 is `5.1(side)`). 140 dB or better against ffmpeg for FFmpeg's own stereo and 5.1 streams, same length and timing. Not decoded: the extension substream (XLL lossless, LBR, XBR, X96 in either substream), so DTS-HD
+  Master Audio plays its lossy core (FFmpeg plays the lossless stream) and a stream without a core (DTS Express) does not open.
+  Packets that are not big-endian 16-bit are converted as FFmpeg converts them.
+- TrueHD and MLP: bit-exact with ffmpeg (24-bit as `x * 256 / 2^31`, 16-bit MLP as `x / 32768`), up to three substreams (Atmos'
+  fourth is ignored, as in FFmpeg), the noise generators, rematrixing, FIR and IIR filters, the end-of-stream shortening (found in the
+  last packet when the decoder opens). A jump restarts 128 access units early, so the decoder passes a major sync.
+- WavPack: bit-exact with ffmpeg for 16, 24, 32-bit and float streams, mono, stereo and multi-block streams with their channel mask
+  (hybrid, lossy streams follow FFmpeg's code but ffmpeg cannot write one to test); every frame decodes on its own. DSD WavPack is
+  refused.
+

@@ -65,14 +65,15 @@ FLAC, IVF, MPEG-TS) and the writers (MP4/MOV/M4A, Matroska/WebM, Ogg, WAV, FLAC,
 | Raw video in AVI (RGB, palettes, YUV layouts), Cinepak | own | own | own | own, LGPL-derived (NOTICE) |
 | DNxHD/DNxHR, QuickTime Animation, HAP, Ut Video, FFV1 (based on FFmpeg's), PNG, v210, uncompressed | own | own | own | own, LGPL-derived (NOTICE; HAP's DXT formulas MIT) |
 | CineForm | not decoded yet | not decoded yet | not decoded yet | |
-| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
+| AAC (LC, HE, HEv2) | AudioToolbox | Media Foundation AAC decoder; FFamp's own decoder based on FFmpeg's when missing, for program config elements and when Media Foundation would change the rate or channels (LC at 24 kHz or less, HE-AAC without SBR signalled) | own decoder based on FFmpeg's | own, LGPL-derived (NOTICE) |
 | MP3, MP2, MP1 | AudioToolbox | mpg123 (Media Foundation's MP3 decoder was tried: it places the sound 624 frames later than FFmpeg's) | mpg123 | LGPL-2.1-or-later (already in the Mac dependency list) |
 | Opus, Vorbis | libopus, libvorbis | same | same | BSD-3-Clause (already in FFamp) |
 | FLAC | AudioToolbox | own decoder written from RFC 9639 (round 1) | same | own |
 | ALAC | AudioToolbox | own decoder based on FFmpeg's (round 1) | same | own, LGPL-derived (NOTICE) |
 | AC-3, E-AC-3 | AudioToolbox | own decoder based on FFmpeg's (Media Foundation's Dolby decoder is not on every edition) | same | own, LGPL-derived |
 | AMR-NB, AMR-WB | AudioToolbox | opencore-amr | opencore-amr | Apache-2.0 |
-| WMA family, ADPCM, G.711, TTA, DTS, TrueHD, WavPack | own | own | own | own |
+| WMA family, ADPCM, G.711, TTA, TrueHD, WavPack | own | own | own | own |
+| DTS | own (core with XCH and XXCH; the extension substream, so XLL lossless and LBR, not yet) | same | same | own, LGPL-derived (NOTICE) |
 
 ### Encoders
 

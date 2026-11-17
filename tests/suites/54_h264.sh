@@ -95,6 +95,8 @@ if ! on_mac; then
         check "random frames of h4_$name.mkv equal ffmpeg's (own decoder)" python3 comparex.py seek $O/h4_$name.mkv 50 3 --software
     done
 fi
+[ -f $O/h4_high_open_gop.mkv ] && check "random frames of h4_high_open_gop.mkv equal ffmpeg's (system decoder: VideoToolbox, Media Foundation or VA-API)" python3 comparex.py seek $O/h4_high_open_gop.mkv 50 3
+on_mac && [ -f $O/h4_high_refresh.mkv ] && check "random frames of h4_high_refresh.mkv equal ffmpeg's (VideoToolbox: a jump to a recovery-point P picture starts at an earlier key frame)" python3 comparex.py seek $O/h4_high_refresh.mkv 50 3
 
 check "H.274 film grain SEI written into an x264 stream (on every picture, and once with a repetition period): every frame bit-exact against ffmpeg, which applies the grain" python3 h264_check.py grain $O
 

@@ -75,15 +75,25 @@ struct VideoEncoder::Impl {
         return soft->encode(p, pts, duration, keep());
     }
 
+    bool planarFrame(const uint8_t* data, int64_t pts, int64_t duration) { return soft ? softPlanar(data, pts, duration) : submitI420(data, pts, duration); }
+
+    bool bgraFrame(const uint8_t* pixels, size_t stride, int64_t pts, int64_t duration, bool redFirst) {
+        planar.resize(size_t(spec.width) * size_t(spec.height) + 2 * size_t((spec.width + 1) / 2) * size_t((spec.height + 1) / 2));
+        bgraToI420(pixels, stride, spec.width, spec.height, planar.data(), redFirst);
+        return planarFrame(planar.data(), pts, duration);
+    }
+
+    bool bufferFrame(CVPixelBufferRef buffer, int64_t pts, int64_t duration) {
+        if (CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA) return soft ? softBuffer(buffer, pts, duration) : submit(buffer, pts, duration);
+        if (int(CVPixelBufferGetWidth(buffer)) != spec.width || int(CVPixelBufferGetHeight(buffer)) != spec.height) return false;
+        if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return false;
+        const bool ok = bgraFrame(static_cast<const uint8_t*>(CVPixelBufferGetBaseAddress(buffer)), CVPixelBufferGetBytesPerRow(buffer), pts, duration, false);
+        CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
+        return ok;
+    }
+
     bool softBuffer(CVPixelBufferRef buffer, int64_t pts, int64_t duration) {
         if (int(CVPixelBufferGetWidth(buffer)) != spec.width || int(CVPixelBufferGetHeight(buffer)) != spec.height) return false;
-        if (CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA) {
-            if (CVPixelBufferLockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return false;
-            planar.resize(size_t(spec.width) * size_t(spec.height) + 2 * size_t((spec.width + 1) / 2) * size_t((spec.height + 1) / 2));
-            bgraToI420(static_cast<const uint8_t*>(CVPixelBufferGetBaseAddress(buffer)), CVPixelBufferGetBytesPerRow(buffer), spec.width, spec.height, planar.data());
-            CVPixelBufferUnlockBaseAddress(buffer, kCVPixelBufferLock_ReadOnly);
-            return softPlanar(planar.data(), pts, duration);
-        }
         bool fits = withPixelBuffer(buffer, [&](const Picture& p) {
             pictureToI420(p, planar);
             return true;
@@ -143,6 +153,33 @@ struct VideoEncoder::Impl {
         OSStatus status = VTCompressionSessionEncodeFrame(session, buffer, CMTimeMake(pts, int32_t(spec.timescale)), CMTimeMake(duration, int32_t(spec.timescale)), nullptr, nullptr, nullptr);
         return status == noErr;
     }
+
+    bool submitI420(const uint8_t* data, int64_t pts, int64_t duration) {
+        CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(session);
+        CVPixelBufferRef buffer = nullptr;
+        if (!pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
+        CVPixelBufferLockBaseAddress(buffer, 0);
+        const size_t w = size_t(spec.width), h = size_t(spec.height);
+        const size_t cw = (w + 1) / 2, ch = (h + 1) / 2;
+        uint8_t* y = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 0));
+        const size_t yStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0);
+        for (size_t row = 0; row < h; ++row) memcpy(y + row * yStride, data + row * w, w);
+        uint8_t* uv = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 1));
+        const size_t uvStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
+        const uint8_t* u = data + w * h;
+        const uint8_t* v = u + cw * ch;
+        for (size_t row = 0; row < ch; ++row) {
+            uint8_t* line = uv + row * uvStride;
+            for (size_t x = 0; x < cw; ++x) {
+                line[2 * x] = u[row * cw + x];
+                line[2 * x + 1] = v[row * cw + x];
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, 0);
+        bool ok = submit(buffer, pts, duration);
+        CFRelease(buffer);
+        return ok;
+    }
 };
 
 VideoEncoder::VideoEncoder() : impl(new Impl) {}
@@ -168,7 +205,7 @@ std::unique_ptr<VideoEncoder> VideoEncoder::open(const EncodeSpec& spec, std::st
     }
     if (!e.spec.hevc && e.spec.codec != fourcc("avc1")) return fail("video codec not supported by this encoder");
     CFMutableDictionaryRef source = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    number(source, kCVPixelBufferPixelFormatTypeKey, spec.bgra ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+    number(source, kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
     number(source, kCVPixelBufferWidthKey, spec.width);
     number(source, kCVPixelBufferHeightKey, spec.height);
     CFMutableDictionaryRef surface = CFDictionaryCreateMutable(nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -191,74 +228,15 @@ std::unique_ptr<VideoEncoder> VideoEncoder::open(const EncodeSpec& spec, std::st
     return encoder;
 }
 
-bool VideoEncoder::encodeI420(const uint8_t* data, int64_t pts, int64_t duration) {
-    Impl& e = *impl;
-    if (e.soft) return !e.spec.bgra && e.softPlanar(data, pts, duration);
-    CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(e.session);
-    CVPixelBufferRef buffer = nullptr;
-    if (e.spec.bgra || !pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
-    CVPixelBufferLockBaseAddress(buffer, 0);
-    const size_t w = size_t(e.spec.width), h = size_t(e.spec.height);
-    const size_t cw = (w + 1) / 2, ch = (h + 1) / 2;
-    uint8_t* y = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 0));
-    const size_t yStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0);
-    for (size_t row = 0; row < h; ++row) memcpy(y + row * yStride, data + row * w, w);
-    uint8_t* uv = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 1));
-    const size_t uvStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
-    const uint8_t* u = data + w * h;
-    const uint8_t* v = u + cw * ch;
-    for (size_t row = 0; row < ch; ++row) {
-        uint8_t* line = uv + row * uvStride;
-        for (size_t x = 0; x < cw; ++x) {
-            line[2 * x] = u[row * cw + x];
-            line[2 * x + 1] = v[row * cw + x];
-        }
-    }
-    CVPixelBufferUnlockBaseAddress(buffer, 0);
-    bool ok = e.submit(buffer, pts, duration);
-    CFRelease(buffer);
-    return ok;
-}
+bool VideoEncoder::encodeI420(const uint8_t* data, int64_t pts, int64_t duration) { return !impl->spec.bgra && impl->planarFrame(data, pts, duration); }
 
-bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration, bool redFirst) {
-    Impl& e = *impl;
-    if (e.soft) {
-        e.planar.resize(size_t(e.spec.width) * size_t(e.spec.height) + 2 * size_t((e.spec.width + 1) / 2) * size_t((e.spec.height + 1) / 2));
-        bgraToI420(data, size_t(e.spec.width) * 4, e.spec.width, e.spec.height, e.planar.data(), redFirst);
-        return e.softPlanar(e.planar.data(), pts, duration);
-    }
-    CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(e.session);
-    CVPixelBufferRef buffer = nullptr;
-    if (!e.spec.bgra || !pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return false;
-    CVPixelBufferLockBaseAddress(buffer, 0);
-    uint8_t* pixels = static_cast<uint8_t*>(CVPixelBufferGetBaseAddress(buffer));
-    const size_t stride = CVPixelBufferGetBytesPerRow(buffer), row = size_t(e.spec.width) * 4;
-    for (int y = 0; y < e.spec.height; ++y) {
-        const uint8_t* from = data + y * row;
-        uint8_t* to = pixels + y * stride;
-        if (!redFirst) {
-            memcpy(to, from, row);
-            continue;
-        }
-        for (size_t x = 0; x < row; x += 4) {
-            to[x] = from[x + 2];
-            to[x + 1] = from[x + 1];
-            to[x + 2] = from[x];
-            to[x + 3] = 255;
-        }
-    }
-    CVPixelBufferUnlockBaseAddress(buffer, 0);
-    bool ok = e.submit(buffer, pts, duration);
-    CFRelease(buffer);
-    return ok;
-}
+bool VideoEncoder::encodeBGRA(const uint8_t* data, int64_t pts, int64_t duration, bool redFirst) { return impl->bgraFrame(data, size_t(impl->spec.width) * 4, pts, duration, redFirst); }
 
 bool VideoEncoder::encode(const Frame& frame, int64_t pts, int64_t duration) { return encodePixelBuffer(frame.native.get(), pts, duration); }
 
 bool VideoEncoder::encodePixelBuffer(void* pixelBuffer, int64_t pts, int64_t duration) {
     auto buffer = static_cast<CVPixelBufferRef>(pixelBuffer);
-    if (!buffer) return false;
-    return impl->soft ? impl->softBuffer(buffer, pts, duration) : impl->submit(buffer, pts, duration);
+    return buffer && impl->bufferFrame(buffer, pts, duration);
 }
 
 bool VideoEncoder::encodeSurface(void* surface, int64_t pts, int64_t duration) {

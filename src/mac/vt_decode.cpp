@@ -264,6 +264,12 @@ struct VideoDecoder::Impl {
     std::atomic<uint64_t> shown{0};
     std::atomic<int64_t> floor{0};
     bool keep = true;
+    bool avc = false;
+    bool resetNext = false;
+    int64_t leadingBefore = INT64_MIN;
+    uint32_t leadingUntil = 0;
+    uint32_t from = kNone;
+    H264Layout layout;
     uint32_t ahead = 8;
     uint32_t next = kNone;
     uint32_t last = kNone;
@@ -515,6 +521,8 @@ struct VideoDecoder::Impl {
         }
         clear();
         kept = INT64_MIN;
+        resetNext = avc;
+        leadingUntil = 0;
     }
 
     void store(const Picture& p, CVBufferRef labels = nullptr) {
@@ -651,6 +659,10 @@ struct VideoDecoder::Impl {
             return true;
         }
         if (soft) return feedSoft(index, keep);
+        if (index < leadingUntil && s.pts < leadingBefore) {
+            ++fed;
+            return true;
+        }
         CMBlockBufferRef block = nullptr;
         if (CMBlockBufferCreateWithMemoryBlock(nullptr, nullptr, s.size, nullptr, nullptr, 0, s.size, kCMBlockBufferAssureMemoryNowFlag, &block) != noErr) return false;
         char* bytes = nullptr;
@@ -664,6 +676,10 @@ struct VideoDecoder::Impl {
             const size_t size = s.size;
             ok = CMSampleBufferCreateReady(nullptr, block, format, 1, 1, &timing, 1, &size, &sample) == noErr;
         }
+        if (ok && resetNext) {
+            CMSetAttachment(sample, kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding, kCFBooleanTrue, kCMAttachmentMode_ShouldNotPropagate);
+            resetNext = false;
+        }
         if (ok) {
             VTDecodeFrameFlags flags = async ? kVTDecodeFrame_EnableAsynchronousDecompression : 0;
             OSStatus status = VTDecompressionSessionDecodeFrame(session, sample, flags, nullptr, nullptr);
@@ -673,6 +689,27 @@ struct VideoDecoder::Impl {
         if (sample) CFRelease(sample);
         CFRelease(block);
         return ok;
+    }
+
+    bool intra(uint32_t index) const {
+        std::vector<uint8_t> bytes(track->samples[index].size);
+        return file->read(*track, index, bytes.data()) && h264Intra(layout, bytes.data(), bytes.size());
+    }
+
+    uint32_t startFor(uint32_t key, bool& clean) const {
+        clean = !avc || intra(key);
+        auto it = std::lower_bound(keys.begin(), keys.end(), key);
+        for (int back = 0; !clean && back < 2 && it != keys.begin(); ++back) {
+            key = *--it;
+            clean = intra(key);
+        }
+        return key;
+    }
+
+    void prime() {
+        resetNext = !keys.empty() && intra(keys.front());
+        if (resetNext) feed(keys.front(), true);
+        resetNext = false;
     }
 
     uint32_t keyFor(uint32_t target) const {
@@ -730,6 +767,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     Impl& d = *decoder->impl;
     d.file = &file;
     d.track = &track;
+    d.avc = h264;
     d.shape.width = track.width;
     d.shape.height = track.height;
     if (uint64_t(track.width) * uint64_t(track.height) > 2304u * 1296u) d.ahead = 4;
@@ -779,8 +817,7 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         }
     }
     d.keys = track.syncs;
-    H264Layout layout;
-    if (h264 && h264Layout(config, layout) && layout.fields) d.pairFields(layout);
+    if (h264 && h264Layout(config, d.layout) && d.layout.fields) d.pairFields(d.layout);
     if (d.list.empty()) {
         d.list.reserve(track.order.size());
         for (uint32_t index : track.order) {
@@ -888,10 +925,18 @@ Frame VideoDecoder::frame(uint32_t index) {
     if (!present() && d.next != kNone && d.next > target && d.floor >= d.kept) d.settle(pts, later);
     const bool missed = !d.soft && following && d.next != kNone && d.next > target && d.floor >= d.kept;
     if (!present() && !missed) {
-        const uint32_t key = d.keyFor(item.first);
-        if (d.next == kNone || d.next < key || d.next > item.first) {
+        bool clean = true;
+        const uint32_t key = d.startFor(d.keyFor(item.first), clean);
+        if (d.next == kNone || d.next < key || d.next > item.first || key < d.from) {
             d.restart();
+            if (!clean) d.prime();
             d.next = key;
+            d.from = key;
+            if (d.avc && track.samples[key].pts <= pts) {
+                const auto after = std::upper_bound(d.keys.begin(), d.keys.end(), key);
+                d.leadingBefore = track.samples[key].pts;
+                d.leadingUntil = after == d.keys.end() ? uint32_t(track.samples.size()) : *after;
+            }
             ++d.restarts;
         }
         while (d.next <= target) {

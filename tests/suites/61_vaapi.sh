@@ -50,4 +50,8 @@ else
     check "H.264 with scaling matrices decodes on the GPU" va_backend $O/va_h264_cqm.mp4 vaapi
 fi
 for f in va_h264_cqm.mp4 va_vp9_10_360.webm va_av1_10_360.mp4; do check "$f: every frame bit-exact against ffmpeg" python3 comparex.py decode $O/$f; done
+for size in 320x240 640x360 320x240 640x360; do $F -f lavfi -i testsrc2=size=$size:rate=25 -frames:v 10 -c:v libx264 -preset fast -bf 0 -f h264 -; done > $O/va_sizes.h264
+$F -r 25 -f h264 -i $O/va_sizes.h264 -c copy $O/va_sizes.mkv
+va_sizes() { va_backend $O/va_sizes.mkv vaapi && [ "$($A decode $O/va_sizes.mkv 2> /dev/null | md5)" = "$($A decode $O/va_sizes.mkv --software 2> /dev/null | md5)" ]; }
+check "H.264 whose picture size changes at IDR pictures decodes on the GPU to the own decoder's frames (no second VA context right after the IDR)" va_sizes
 rm -f $O/va_*

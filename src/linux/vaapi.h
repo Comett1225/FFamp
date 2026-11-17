@@ -40,6 +40,7 @@ public:
     ~VaSession() { close(); }
     bool open(VAProfile profile, int width, int height, bool deep, int count);
     void close();
+    bool renew();
     bool ready() const { return context != VA_INVALID_ID; }
     int width() const { return frameWidth; }
     int height() const { return frameHeight; }

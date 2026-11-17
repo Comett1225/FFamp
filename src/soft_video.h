@@ -88,6 +88,7 @@ std::vector<uint8_t> vp9Config(const StreamShape& shape, double fps, int bitrate
 bool av1Config(const uint8_t* unit, size_t size, std::vector<uint8_t>& config, StreamShape& shape);
 bool h264Layout(const std::vector<uint8_t>& config, H264Layout& layout);
 int h264FieldOf(const H264Layout& layout, const uint8_t* sample, size_t size, uint32_t& frameNumber);
+bool h264Intra(const H264Layout& layout, const uint8_t* sample, size_t size);
 bool shapeFromConfig(uint32_t configType, const std::vector<uint8_t>& config, StreamShape& shape);
 int mpegChroma(Reader& file, const Track& track);
 

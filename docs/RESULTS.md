@@ -1938,3 +1938,111 @@ Two checks failed in the Windows full run and were dealt with:
   is not the cause: x264 MBAFF with JVT matrices, MBAFF without them and progressive with them all decode bit-exact through Media
   Foundation, so no routing rule was added. `h264_check.py` now allows exactly those two frames of that file when Media Foundation
   decoded it and fails on any other difference; `54_h264` run again: 84 / 0 / 1.
+
+# Open-GOP jumps and Mac export chroma (branch `gop-517`)
+
+Two leftovers of the 5.17 review. Judge: ffmpeg 9.0.2 with one thread, md5 of every frame; "jumps" are `ffamp frames --list` with
+random frame numbers (seeds as in `comparex.py`), each compared with ffmpeg's frame at that place.
+
+## Jumps to a key frame that is not an IDR picture
+
+FFmpeg starts a new hardware decoder after every flush: `h264_decode_flush` clears `context_initialized`, the next slice goes through
+`get_format`, and that uninitialises the hwaccel and makes a new VideoToolbox session or VA context. FFamp kept the one it had, and
+an I picture that is not an IDR does not empty the decoded picture buffer, so the GOP after the jump met the references of wherever
+the decoder had been. Each system then had one more problem of its own:
+
+- VideoToolbox answers the key frame's leading pictures (after it in the file, shown before it, referring to pictures before it) with
+  `kVTVideoDecoderBadDataErr` and then refuses every picture up to the next key frame, in a new session too; the frames asked for
+  came back as the key picture (concealment). FFmpeg's `-hwaccel videotoolbox` fails the same way after `-ss` in these files. Now the
+  first sample after a jump carries `kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding` (same result as a new session, no extra
+  time) and the leading pictures of the key frame the jump starts at are not fed. Shown pictures never refer to them (the recovery
+  point SEI says so); a jump into one starts at the key frame before it, as before.
+- VA-API under WSL (d3d12): after a jump FFamp, as FFmpeg, made up references for the frame-number gap before the key frame. Their
+  surface was never decoded, and with one of them in the reference list the driver returned a copy of the key picture for the next
+  B picture. The driver also kept state from before the jump in its context. Now a jump to a non-IDR key frame gets a new VA context
+  (`VaSession::renew`) and no made-up references. Not feeding the leading pictures alone (tried in the containers round) made VA-API
+  worse because it removed the decode failures that move a stream to FFamp's own decoder, which is exact.
+
+| File (x264, open GOP) | VideoToolbox before | after | VA-API (d3d12) before | after |
+|---|---|---|---|---|
+| 320x240, keyint 20, 3 B-frames, MP4 | 8/16, 26/40 | 16/16, 40/40, 80/80 | 15/16, 33/40 | 16/16, 40/40, 80/80 |
+| 640x360 with noise, keyint 48, B-pyramid, MP4 | 11/16, 27/40 | 16/16, 40/40, 80/80 | 14/16, 31/40 | 16/16, 40/40, 80/80 |
+| 320x240, keyint 24, strict B-pyramid, 6 references, MP4 | 8/16, 20/40 | 16/16, 40/40, 80/80 | not measured | 16/16, 40/40, 80/80 |
+| 1920x1080, keyint 60, MP4 | 13/16, 25/40 | 16/16, 40/40, 80/80 | 13/16, 30/40 | 16/16, 40/40, 80/80 |
+| `open_gop.avi` (containers fixture, 160x120) | 6/16, 19/40 | 16/16, 40/40, 80/80 | 14/16, 40/40 | 16/16, 40/40, 80/80 |
+| 1920x1080 closed GOP (IDR key frames) | 16/16, 40/40 | 16/16, 40/40, 80/80 | 16/16, 40/40 | 16/16, 40/40, 80/80 |
+
+Straight decodes stay exact. A test build that logs the fallback showed no stream leaving VA-API in 80 jumps of each file. HEVC with open GOP
+(x265 CRA pictures) was already exact in random jumps with VideoToolbox (40/40; a step back from a CRA was not, see the review fixes below); MBAFF with open GOP through VideoToolbox, which is
+not bit-exact with ffmpeg even in a straight decode, now equals its own straight decode (40/40, was 34/40).
+
+Jump times, mean of 40 jumps at 1080p: the Mac 10.2 ms before and 10.6 ms after (closed GOP), 12.7 and 10.8 ms (open GOP); WSL 36 to
+40 ms closed GOP either way, open GOP 48 to 54 ms before and 86 ms after (the new d3d12 context costs about 40 ms; only jumps to a
+key frame that is not an IDR pay it).
+
+The suites' open-GOP checks: `32_containers` runs the open-GOP AVI's random frames with the system decoder everywhere (it was skipped
+on the Mac) and keeps the software check off the Mac; `54_h264` adds 50 random frames of `h4_high_open_gop.mkv` through the system
+decoder against ffmpeg (VideoToolbox, Media Foundation or VA-API).
+
+## Review fixes
+
+Three defects found in review, each with a suite check that fails without the fix:
+
+- Intra refresh through VideoToolbox. The reset went on every H.264 restart, also on a key frame that is a P picture with a recovery
+  point (x264's intra refresh). VideoToolbox, with its picture buffer emptied, refused that picture and every one after it up to an I
+  picture, so the frames came back as concealment or not at all (`frames --list 10,59` of the suite's `h4_high_refresh.mkv` ended
+  with "frame 59 did not decode"). With no reset (as at `7616ed0`) it fails the same way in a new session and is only right once its
+  old references have been refreshed away. Now the reset goes only on IDR and I pictures, a jump to a P key frame starts up to two key
+  frames earlier, and a start that is still a P picture is preceded by the file's first key frame. Random jumps against ffmpeg:
+  `h4_high_refresh.mkv` (keyint 20) 13, 11 and 15 of 40 become 40/40 (seeds 2, 3, 5); 640x360 with 2 B-frames and 4 references,
+  keyint 30, 240 frames: 40/40 for seeds 1, 2, 3 and 5 (one key frame earlier gave 34 and 36, as x264's recovery count is 31);
+  1280x720, keyint 60, MP4: 40/40 for the same seeds (36 and 38 with one key frame earlier). Mean jump time 2.3, 8.7 and 15 ms for these three files.
+- A step back from an open-GOP key frame (VideoToolbox H.264 and HEVC, VA-API, Media Foundation and the software decoders share the
+  rule). After a jump to key frame K, the frame just before K is one of K's leading pictures and its key frame is the one before K, but
+  the decoder sat between the two and went on from K without its references; on the Mac the leading-picture skip then dropped it and
+  the frame stayed concealed until the decoder was reopened. Now a decode restarts when the asked frame's key frame lies before the one
+  it started at. Every frame asked for from the last to the first (`comparex.py selfback`): `open_gop.avi` 175/180 becomes 180/180 on
+  the Mac and under WSL, an x265 open-GOP clip (320x240, keyint 24) 47/48 becomes 48/48 on the Mac, x264 open GOP 320x240 keyint 20
+  346/360 becomes 360/360 under WSL; random jumps stay 40/40.
+- VA-API after a size change. A size change at an IDR picture resets the decoder, which marked it as after a jump, so the next P picture
+  replaced the context just opened. Under d3d12 that loses the IDR's references: in a stream of 8 segments of 10 frames alternating
+  320x240 and 640x360, frames 11 to 19, 21 to 29 and so on (every picture after each IDR but the first) differed from FFamp's own decoder,
+  with 7 extra contexts; now none, and the whole decode equals the own decoder with no fallback.
+
+New checks: `54_h264` 50 random frames of `h4_high_refresh.mkv` through VideoToolbox against ffmpeg (16/50 at `fa8e4d8`);
+`32_containers` every frame of `open_gop.avi` from the last to the first through the system decoder (175/180 at `fa8e4d8` on the Mac
+and under WSL); `60_videox` the same for a 48-frame x265 open-GOP clip (47/48 at `fa8e4d8` on the Mac); `61_vaapi` an H.264 stream
+whose size changes at its IDR pictures, decoded on the GPU, against the own decoder (different at `fa8e4d8`).
+
+## Mac exports of BGRA and RGBA frames
+
+VideoToolbox converted BGRA to 4:2:0 itself, taking one pixel per 2x2 block: on the fixes suite's test frame, V stayed 128 on 1-pixel
+red lines and U was 241 on a blue line (64x64 and 640x360). Every BGRA and RGBA frame (`encodeBGRA`, and BGRA pixel buffers and
+surfaces given to `encodePixelBuffer` and `encodeSurface`) now goes through `bgraToI420`, as on Windows and Linux, into an NV12
+buffer of the encoder's pool. Encoded at 20 Mbit/s and decoded by ffmpeg: V 184 on the red lines and U 184 on the blue line, as
+swscale gives them; chroma against swscale's at most 10 levels apart, mean 0.5 (was 72 and 5.5). New check in `88_fixes`.
+
+Export time, `frames-in` with RGBA frames of testsrc2 with noise piped in (300 frames at 1080p, 120 at 4K), 3 runs each through the
+build lock:
+
+| Size | Before (VideoToolbox converts) | After (`bgraToI420`) |
+|---|---|---|
+| 1920x1080 | 1.495, 1.500, 1.627 s (mean 1.541) | 1.509, 1.518, 1.622 s (mean 1.550, +0.6 %) |
+| 3840x2160 | 2.526, 2.948, 2.404 s (mean 2.626) | 2.437, 2.409, 2.388 s (mean 2.411) |
+
+The cost is under 1 %, well below the 10 % limit, so no vImage version was needed.
+
+## Suites
+
+| System | Suites | Pass / fail / skip |
+|---|---|---|
+| Mac (arm64) | `10_video`, `32_containers`, `54_h264`, `50_writers`, `60_videox`, `62_videofix`, `70_tools`, `88_fixes` | 1,069 / 0 / 10 |
+| Linux (WSL, gcc 13, VA-API through d3d12) | `10_video`, `32_containers`, `54_h264`, `60_videox`, `61_vaapi`, `62_videofix`, `88_fixes` | 673 / 1 / 16; the failure is the known 100-frame AAC file (vo-aacenc's priming) |
+
+Counts after the review fixes. Jump times at 1080p through VideoToolbox did not move (40 random jumps, open and closed GOP: 16.7 and
+16.8 ms before, 16.6 and 16.9 ms after; 15.0 ms either way with a second seed); reading the key frame's first slice header to tell an
+I picture from a P picture costs nothing measurable.
+
+The edit-joined MP4 of `32_containers` (a second segment whose hidden pictures have earlier times than the first key frame) failed
+in the first Mac run: pictures after the next key frame were skipped too. Skipping now stops at the next key frame; the
+three checks pass and the file's jumps are 12/12 on the Mac and 80/80 under WSL.

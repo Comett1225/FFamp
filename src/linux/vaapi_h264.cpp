@@ -308,6 +308,7 @@ struct H264Decoder : SoftDecoder {
     int64_t stamp = 0;
     bool idrCleared = false;
     bool skipping = false;
+    bool jumped = false;
     std::vector<uint8_t> scratch;
 
     H264Decoder() {
@@ -327,6 +328,7 @@ struct H264Decoder : SoftDecoder {
         open = false;
         skipping = false;
         pending = -1;
+        jumped = true;
     }
 
     std::vector<VASurfaceID> busy() const {
@@ -857,6 +859,7 @@ struct H264Decoder : SoftDecoder {
         if (!session.ready() || width != session.width() || height != session.height()) {
             if (nalType != 5) return false;
             reset();
+            jumped = false;
             const int count = 18;
             if (!session.open(VAProfileH264High, width, height, false, count) && !session.open(VAProfileH264Main, width, height, false, count)) return false;
         }
@@ -870,6 +873,7 @@ struct H264Decoder : SoftDecoder {
         deltaPoc[0] = s.deltaPoc[0];
         deltaPoc[1] = s.deltaPoc[1];
         const int maxFrameNum = 1 << q.log2FrameNum;
+        if (prevFrameNum < 0) prevFrameNum = (frameNum + maxFrameNum - 1) % maxFrameNum;
         if (frameNum != prevFrameNum) {
             int unwrapped = prevFrameNum;
             if (unwrapped > frameNum) unwrapped -= maxFrameNum;
@@ -1085,6 +1089,8 @@ struct H264Decoder : SoftDecoder {
             idrCleared = true;
         }
         if (!open) {
+            if (jumped && type != 5 && session.ready() && !session.renew()) return false;
+            jumped = false;
             if (!parsePps(ppsRaw[s.ppsId], sps, pps)) return false;
             if (!fieldStart(s, type, refIdc, sink)) {
                 open = false;

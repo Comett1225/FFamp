@@ -76,6 +76,8 @@ for f in vx_hevc10_720.mp4 vx_vp9_720.mp4 vx_av1_720.mp4 vx_av1_10bit_720.mp4 vx
     check "decode $f" python3 comparex.py decode $O/$f
     check "seek $f" python3 comparex.py seek $O/$f 40 7
 done
+[ -f $O/vx_hevc_open_gop.mp4 ] || $F -f lavfi -i testsrc2=size=320x240:rate=30 -frames:v 48 -c:v libx265 -x265-params log-level=error:keyint=24:open-gop=1 -pix_fmt yuv420p -tag:v hvc1 $O/vx_hevc_open_gop.mp4
+check "every frame of an open-GOP HEVC clip asked for from the last to the first equals the straight decode (a step back from a CRA to its leading picture)" python3 comparex.py selfback $O/vx_hevc_open_gop.mp4
 for f in vx_vp9_720.mp4 vx_av1_720.mp4 vx_av1_10bit_720.mp4; do
     check "software decode $f" python3 comparex.py decode $O/$f --software
     check "software seek $f" python3 comparex.py seek $O/$f 40 7 --software

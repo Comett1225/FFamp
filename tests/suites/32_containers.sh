@@ -13,11 +13,13 @@ check "AVI drop chunks after the last picture are part of its length" json_says 
 check "AVI H.264 with length-prefixed NAL units and avcC decodes to the MP4 file's frames" same_pictures $CX/bframes_lengths.avi $CX/bframes.mp4
 check "AVI H.264 with length-prefixed NAL units keeps its avcC" probe_says $CX/bframes_lengths.avi "video avc1 160x120"
 check "open-GOP AVI H.264 takes its key frames from the index" probe_says $CX/open_gop.avi "keyframes 6 "
-if on_mac; then
-    skip "random frames of the open-GOP AVI (VideoToolbox keeps its references across a jump to a key frame that is not an IDR picture, in MP4 too)"
+if [ "$SYSTEM" = Windows ]; then
+    skip "random frames and a backward walk of the open-GOP AVI through Media Foundation (it keeps its references across a jump to a key frame that is not an IDR picture)"
 else
-    check "random frames of the open-GOP AVI equal the straight decode (software decoder)" python3 comparex.py selfseek $CX/open_gop.avi 16 5 --software
+    check "random frames of the open-GOP AVI equal the straight decode" python3 comparex.py selfseek $CX/open_gop.avi 16 5
+    check "every frame of the open-GOP AVI asked for from the last to the first equals the straight decode (a step back from a key frame to its leading picture)" python3 comparex.py selfback $CX/open_gop.avi
 fi
+on_mac || check "random frames of the open-GOP AVI equal the straight decode (software decoder)" python3 comparex.py selfseek $CX/open_gop.avi 16 5 --software
 check "AVI HEVC with start codes decodes to the MP4 file's frames" same_pictures $CX/hevc_starts.avi $CX/hevc.mp4
 check "AVI HEVC with length-prefixed NAL units and hvcC decodes to the MP4 file's frames" same_pictures $CX/hevc_lengths.avi $CX/hevc.mp4
 check "AVI HEVC has the MP4 file's single key frame" probe_says $CX/hevc_starts.avi "video hvc1 160x120.*keyframes 1 "

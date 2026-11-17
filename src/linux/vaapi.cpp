@@ -124,6 +124,18 @@ bool VaSession::open(VAProfile profile, int width, int height, bool tenBit, int 
     return true;
 }
 
+bool VaSession::renew() {
+    if (context == VA_INVALID_ID) return false;
+    drop();
+    va->vaDestroyContext(va->display, context);
+    failed = false;
+    if (va->vaCreateContext(va->display, config, frameWidth, frameHeight, VA_PROGRESSIVE, surfaces.data(), int(surfaces.size()), &context) != VA_STATUS_SUCCESS) {
+        context = VA_INVALID_ID;
+        return false;
+    }
+    return true;
+}
+
 void VaSession::drop() {
     for (VABufferID id : params) va->vaDestroyBuffer(va->display, id);
     for (VABufferID id : slices) va->vaDestroyBuffer(va->display, id);

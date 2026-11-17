@@ -282,9 +282,11 @@ def self_seek(path, count, seed, extra):
     rng = random.Random(seed)
     picks = [rng.randrange(frames) for _ in range(count - 2)] + [0, frames - 1]
     rng.shuffle(picks)
+    if not count:
+        picks = list(range(frames - 1, -1, -1))
     run = subprocess.run([AMEDIA, "frames", path, "--list", ",".join(str(n) for n in picks)] + extra, capture_output=True)
     exact = sum(1 for i, n in enumerate(picks) if run.stdout[i * size:(i + 1) * size] == whole[n * size:(n + 1) * size])
-    print(f"self seek {os.path.basename(path)} [{shape['backend']}]: {exact}/{len(picks)} random frames equal the straight decode of {frames} frames")
+    print(f"self seek {os.path.basename(path)} [{shape['backend']}]: {exact}/{len(picks)} {'random' if count else 'backward'} frames equal the straight decode of {frames} frames")
     return frames == shape["count"] and exact == len(picks)
 
 
@@ -411,6 +413,8 @@ if __name__ == "__main__":
         ok = hdr(rest[0], float(rest[1]), float(rest[2]))
     elif kind == "selfseek":
         ok = self_seek(rest[0], int(rest[1]), int(rest[2]), extra)
+    elif kind == "selfback":
+        ok = self_seek(rest[0], 0, 0, extra)
     elif kind == "selfbgra":
         ok = self_bgra(rest[0], float(rest[1]))
     elif kind == "means":

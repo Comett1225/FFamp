@@ -105,6 +105,12 @@ void audioConfig(uint32_t type, View body, Track& track) {
             track.codec = fourcc(".mp3");
             return;
         }
+        if (kind == 0xDD && stream.specific.p) {
+            track.codec = fourcc("vorb");
+            track.configType = fourcc("vorb");
+            track.config.assign(stream.specific.p, stream.specific.p + stream.specific.n);
+            return;
+        }
         track.configType = type;
         track.config.assign(body.p, body.p + body.n);
         AacConfig aac;
@@ -445,7 +451,7 @@ std::string tagName(uint32_t type) {
         {0xA96E616D, "title"}, {0xA9415254, "artist"}, {0xA9616C62, "album"}, {0xA9646179, "date"}, {0xA9746F6F, "encoder"},
         {0xA9636D74, "comment"}, {0xA967656E, "genre"}, {0xA9777274, "composer"}, {0xA9677270, "grouping"}, {0xA96C7972, "lyrics"},
         {0xA9737766, "encoder"}, {0xA9617574, "artist"}, {0xA9696E66, "comment"}, {0xA9637079, "copyright"},
-        {fourcc("aART"), "album_artist"}, {fourcc("desc"), "description"}, {fourcc("cprt"), "copyright"},
+        {fourcc("aART"), "album_artist"}, {fourcc("desc"), "description"}, {fourcc("cprt"), "copyright"}, {0xA978797A, "location"},
     };
     for (auto& name : names) if (name.first == type) return name.second;
     return "";

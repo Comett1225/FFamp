@@ -229,10 +229,11 @@ bool fail(std::string* error, const char* text) {
     return false;
 }
 
-bool writeOut(std::vector<Piece>& pieces, double origin, const std::string& output, const Progress& progress, std::string* error) {
+bool writeOut(std::vector<Piece>& pieces, double origin, const std::string& output, const Reader& from, const Progress& progress, std::string* error) {
     if (pieces.empty()) return fail(error, "nothing to copy");
     auto writer = Writer::open(output, error);
     if (!writer) return false;
+    writer->tags(from.tags());
     settle(pieces, origin, matroskaPath(output), *writer);
     Ticker ticker{progress};
     if (!copyPieces(pieces, *writer, ticker, error)) return false;
@@ -265,7 +266,7 @@ bool trimCopy(const std::string& input, const std::string& output, int64_t start
         if (planPiece(*source.reader, *audio, source.zero, origin, to, false, piece)) pieces.push_back(std::move(piece));
     }
     if (pieces.empty()) return fail(error, "nothing lies between the two times");
-    return writeOut(pieces, origin, output, progress, error);
+    return writeOut(pieces, origin, output, *source.reader, progress, error);
 }
 
 const char* audioCopyExtension(uint32_t codec) {
@@ -290,7 +291,7 @@ bool copyFrames(Piece& piece, const std::string& output, Ticker& ticker, std::st
         if ((i & 31) == 0 && !ticker(double(i) / double(piece.samples.size()) * 0.99)) break;
     }
     ok = fclose(file) == 0 && ok && !ticker.cancelled;
-    if (ok) ok = rename(temp.c_str(), output.c_str()) == 0;
+    if (ok) ok = renameFile(temp, output);
     if (!ok) {
         removeFile(temp);
         if (!ticker.stopped(error) && error) *error = "writing the output file failed";
@@ -333,7 +334,7 @@ bool extractAudio(const std::string& input, const std::string& output, SoundChoi
             if (progress) progress(1.0);
             return true;
         }
-        if (!writeOut(pieces, pieces[0].start, output, progress, error)) {
+        if (!writeOut(pieces, pieces[0].start, output, *source.reader, progress, error)) {
             if (error && *error != "cancelled") *error += std::string("; this sound is copied into a .") + audioCopyExtension(track->codec) + " file";
             return false;
         }
@@ -382,7 +383,7 @@ bool merge(const std::string& video, const std::string& audio, const std::string
     std::vector<Piece> pieces(2);
     if (!planPiece(*picture.reader, *pictureTrack, picture.zero, 0, kForever, true, pieces[0])) return fail(error, "the first file has no video");
     if (!planPiece(*sound.reader, *soundTrack, sound.zero, 0, kForever, true, pieces[1])) return fail(error, "the second file has no sound");
-    return writeOut(pieces, 0, output, progress, error);
+    return writeOut(pieces, 0, output, *picture.reader, progress, error);
 }
 
 namespace {
@@ -398,7 +399,7 @@ bool copyKinds(const std::string& input, const std::string& output, bool sound, 
         if (planPiece(*source.reader, t, source.zero, 0, kForever, true, piece)) pieces.push_back(std::move(piece));
     }
     if (pieces.empty()) return fail(error, sound ? "nothing to copy" : "no video track");
-    return writeOut(pieces, 0, output, progress, error);
+    return writeOut(pieces, 0, output, *source.reader, progress, error);
 }
 
 }

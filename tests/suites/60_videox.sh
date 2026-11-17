@@ -24,7 +24,7 @@ for f in vp9_270p.ivf av1_270p.mp4 vp8_270p.ivf; do check "damaged $f never cras
 for f in vp9_270p.mp4 av1_10bit_270p.mp4 hevc10_270p.mp4; do check "bench $f runs" $A bench $VX/$f > /dev/null; done
 
 echo "== videox: AV1 and VP9 encoders, BGRA input and surfaces, no FFmpeg needed"
-check "BGRA to I420 is within one code value of the system converter" $A pixels --size 640x360
+check "BGRA to I420 is within one code value of the system converter (colour constant over each 2x2 block, where averaging and the system's point sampling agree)" $A pixels --size 640x360
 $A decode $VX/h264_270p.mp4 > $O/vx_src.yuv
 $A decode $VX/h264_270p.mp4 --bgra > $O/vx_src.bgra
 $A pixels --size 480x270 --video $O/vx_src.bgra --out $O/vx_ref.yuv --no-system

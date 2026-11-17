@@ -3,6 +3,7 @@
 #include "bits.h"
 #include "mdct.h"
 #include "readers.h"
+#include "writers.h"
 #include <algorithm>
 #include <bit>
 #include <climits>
@@ -81,6 +82,7 @@ struct Header {
     int srCode = 0, srShift = 0, sampleRate = 0, frameSize = 0, numBlocks = 6, channels = 0;
     int compressionExists[2] = {};
     int channelMap = 0;
+    int bitstreamMode = 0, bitRateCode = 0, complexity = 0;
 };
 
 int signedBits(BitReader& r, int n) { return int32_t(r.read(n) << (32 - n)) >> (32 - n); }
@@ -150,7 +152,8 @@ int eac3Info(BitReader& r, Header& h) {
         }
     }
     if (r.bit()) {
-        r.skip(5);
+        h.bitstreamMode = int(r.read(3));
+        r.skip(2);
         if (h.channelMode == kStereo) r.skip(4);
         if (h.channelMode >= kTwoTwo) r.skip(2);
         for (int i = 0; i < (h.channelMode ? 1 : 2); i++)
@@ -165,7 +168,7 @@ int eac3Info(BitReader& r, Header& h) {
             if (i == 0) {
                 r.skip(7);
                 if (r.bit()) {
-                    r.skip(8);
+                    h.complexity = int(r.read(8));
                     i++;
                 }
             } else {
@@ -189,8 +192,9 @@ int parseHeader(BitReader& r, Header& h) {
         if (h.srCode == 3) return kParseRate;
         int frameSizeCode = int(r.read(6));
         if (frameSizeCode > 37) return kParseSize;
+        h.bitRateCode = frameSizeCode >> 1;
         r.skip(5);
-        r.skip(3);
+        h.bitstreamMode = int(r.read(3));
         h.channelMode = int(r.read(3));
         if (h.channelMode == kStereo) {
             r.skip(2);
@@ -1607,6 +1611,59 @@ std::unique_ptr<PacketDecoder> openAc3Audio(const Track&, const std::vector<uint
     audio->reset();
     audio->prerollPackets = 1;
     return audio;
+}
+
+std::vector<uint8_t> dolbySpecific(uint32_t codec, const uint8_t* packet, size_t size) {
+    std::vector<uint8_t> out;
+    uint64_t pending = 0;
+    int count = 0;
+    auto put = [&](uint32_t value, int bits) {
+        pending = (pending << bits) | (value & ((1u << bits) - 1));
+        count += bits;
+        for (; count >= 8; count -= 8) out.push_back(uint8_t(pending >> (count - 8)));
+    };
+    Header h;
+    BitReader first(packet, size);
+    if (size < 8 || parseHeader(first, h) || h.frameSize > int(size)) return {};
+    if (codec == fourcc("ac-3")) {
+        if (h.bitstreamId > 8) return {};
+        put(uint32_t(h.srCode), 2);
+        put(uint32_t(h.bitstreamId), 5);
+        put(uint32_t(h.bitstreamMode), 3);
+        put(uint32_t(h.channelMode), 3);
+        put(uint32_t(h.lfeOn), 1);
+        put(uint32_t(h.bitRateCode), 5);
+        put(0, 5);
+        return out;
+    }
+    if (h.frameType == kDependent) return {};
+    const Header main = h;
+    int dependents = 0, places = 0;
+    for (size_t at = size_t(main.frameSize); at + 8 <= size;) {
+        BitReader next(packet + at, size - at);
+        if (parseHeader(next, h) || h.frameType != kDependent || h.frameSize > int(size - at)) break;
+        ++dependents;
+        places |= h.channelMap ? (h.channelMap >> 5) & 0x1F : h.channelMode;
+        at += size_t(h.frameSize);
+    }
+    put(uint32_t(int64_t(main.frameSize) * 8 * main.sampleRate / (main.numBlocks * 256) / 1000), 13);
+    put(0, 3);
+    put(uint32_t(main.srCode), 2);
+    put(uint32_t(main.bitstreamId), 5);
+    put(0, 2);
+    put(uint32_t(main.bitstreamMode), 3);
+    put(uint32_t(main.channelMode), 3);
+    put(uint32_t(main.lfeOn), 1);
+    put(0, 3);
+    put(uint32_t(dependents), 4);
+    if (dependents) put(uint32_t(places), 9);
+    else put(0, 1);
+    if (main.complexity) {
+        put(1, 8);
+        put(uint32_t(main.complexity), 8);
+    }
+    if (count) put(0, 8 - count);
+    return out;
 }
 
 }

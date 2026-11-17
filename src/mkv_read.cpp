@@ -16,7 +16,7 @@ const uint32_t kTrackEntry = 0xAE, kTrackNumber = 0xD7, kTrackType = 0x83, kCode
 const uint32_t kCodecDelay = 0x56AA, kLanguage = 0x22B59C, kVideo = 0xE0, kPixelWidth = 0xB0, kPixelHeight = 0xBA, kInterlaced = 0x9A, kColour = 0x55B0;
 const uint32_t kMatrix = 0x55B1, kRange = 0x55B9, kTransfer = 0x55BA, kPrimaries = 0x55BB, kAudio = 0xE1, kSamplingFrequency = 0xB5, kChannels = 0x9F;
 const uint32_t kBitDepth = 0x6264, kContentEncodings = 0x6D80, kContentEncoding = 0x6240, kContentCompression = 0x5034, kCompressionKind = 0x4254;
-const uint32_t kCompressionSettings = 0x4255, kContentEncryption = 0x5035;
+const uint32_t kCompressionSettings = 0x4255, kContentEncryption = 0x5035, kProjection = 0x7670, kPoseRoll = 0x7675;
 const uint32_t kTimestamp = 0xE7, kSimpleBlock = 0xA3, kBlockGroup = 0xA0, kBlock = 0xA1, kBlockDuration = 0x9B, kReferenceBlock = 0xFB;
 const uint32_t kDiscardPadding = 0x75A2, kPreviousSize = 0xAB, kPosition = 0xA7, kSilentTracks = 0x5854, kBlockAdditions = 0x75A1, kCodecState = 0xA4;
 const uint32_t kTag = 0x7373, kTargets = 0x63C0, kTargetTrack = 0x63C5, kSimpleTag = 0x67C8, kTagName = 0x45A3, kTagString = 0x4487;
@@ -379,6 +379,12 @@ public:
                         if (inner == kPixelWidth) t.width = int(std::min<uint64_t>(number(value), 65535));
                         else if (inner == kPixelHeight) t.height = int(std::min<uint64_t>(number(value), 65535));
                         else if (inner == kInterlaced) t.interlaced = number(value) == 1;
+                        else if (inner == kProjection) {
+                            children(value, [&](uint32_t part, View item) {
+                                const double roll = part == kPoseRoll ? real(item) : NAN;
+                                if (std::isfinite(roll) && std::fabs(roll) <= 360) t.rotation = int(((-std::lround(roll / 90) * 90) % 360 + 360) % 360);
+                            });
+                        }
                         else if (inner == kColour) {
                             children(value, [&](uint32_t part, View item) {
                                 int given = int(std::min<uint64_t>(number(item), 255));

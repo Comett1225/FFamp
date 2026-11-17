@@ -1454,3 +1454,69 @@ of the 720p and 1080p clips bit-exact through Media Foundation, so the fallback 
 against ffmpeg and the encoder names. What still fails is what failed in the merged run: `rd_vorbis.ogg`'s trim (both), the WMA 2
 600 s speed checks and the 10-bit HEVC whole-program rate (Windows), `wv_speed_v3.avi`'s one-thread speed (both), and on Linux the
 100-frame AAC file (vo-aacenc's priming), the RGBA frame rates through WSL's d3d12 copy-out and dav1d's 400 fps.
+
+# Writers round: interleaving, copies of more codecs, colour labels, tags and rotation
+
+Nine reviewed findings about the writers and the file tools, fixed on branch `fix-writers-517`. Measured on WSL against the build
+of `main` before this round (the judge is the FFmpeg 9.0.2 the app bundles); Windows and the Mac give the same answers where they
+share the code.
+
+| Finding | Before | Now |
+|---|---|---|
+| Sound after a seek (`ffmpeg -ss 3, 6, 9 -t 2`, samples of 96,000), 720p export | AV1 + Opus WebM 0 / 0 / 0, AV1 + AAC MKV 0 / 0 / 0, H.264 + AAC MKV 86,464 to 87,488 | 95,688 (FFmpeg's own AV1 + Opus WebM: 95,688), 93,632 to 94,656, 96,000 |
+| Sound ahead of the picture in file order | 3.95 s (AV1 WebM), 3.59 s (AV1 MKV), 1.26 s (H.264 MKV), 1.28 s (H.264 MP4) | 0.03 s, 0.03 s, 0.10 s, 0.10 s |
+| Fast trim into MP4 of MPEG-4 + MP3 AVI, Motion JPEG + PCM AVI, H.264 + AC-3, + E-AC-3, + MP3, VP8 + Vorbis | refused ("a track cannot be stored") | copied; FFmpeg decodes every file cleanly |
+| Colour labels of a trim of an untagged H.264 file | bt709 / bt709 | unknown / unknown, as the source and FFmpeg's copy |
+| RGB to 4:2:0 on 1-pixel lines (V on red, U on blue, U / V on a green row) | 128, 240, 128 / 128 | 184, 184, 94 / 88; swscale: 184, 184, 99 / 93 |
+| Mono AAC asked at 192, 256, 320 kbit/s | Linux 64,105 bit/s for all three; Windows 192,624 (Media Foundation), then 64,316 and 64,316 | Linux 160,265 (vo-aacenc's ceiling); Windows 192,624, 160,792, 160,792; the Mac 192,714, 256,593, 256,593 (320 failed there before) |
+| GIF with a 3 s last frame (Windows and Linux) | 0.41 s file on both | 3.40 s on both, last packet 3.0 s |
+| Frame rate of a 30 fps H.264 MKV export (ffprobe) | 1000/33 on Windows and Linux | 30/1 (DefaultDuration) |
+| Rewrap of a 61.9 MB file onto a drive with 1.4 times its size free | "writing the output file failed" (MP4 and MKV) | written |
+| Trim of a tagged MOV; rewrap of a rotated MP4 into MKV | no tags; no rotation | title and location kept in MP4, MOV and MKV; rotation 90 |
+
+What changed:
+
+- **Interleaving.** Both writers put packets in decode-time order before they reach the file (`Interleaver` in `src/writers.h`),
+  the way FFmpeg's muxer does, so the export paths (`ffamp encode`, `FrameWriter` and through it the app's export, `compress`,
+  capture) can feed sound ahead of the encoders' delayed pictures. A Matroska cluster now holds the sound of its own time.
+- **In place.** `finish` moves the packet data forward inside `<output>.part` and renames it, instead of copying it into a second
+  file: about the output's size is needed on the drive, not twice.
+- **More codecs by copy.** MP4 takes MP3, MP2, Vorbis, AC-3, E-AC-3 (`dac3` and `dec3` equal FFmpeg's for its files) and Motion
+  JPEG; MOV takes MP3, AC-3, E-AC-3 and Motion JPEG; Matroska takes MPEG-4 part 2, Motion JPEG, MP2, AC-3 and E-AC-3. So trim,
+  strip-audio, rewrap and merge work on the sources the app's FFmpeg command copies.
+- **Colour labels.** A copy of a video without colour labels gets none (no `colr`, no Matroska `Colour`); encoders still label
+  BT.709. `colr` is written only when primaries, transfer and matrix are all given, as in FFmpeg.
+- **Chroma.** `bgraToI420` averages each 2x2 block; every BGRA/RGBA export off the Mac goes through it.
+- **AAC bitrates.** vo-aacenc gets its highest bitrate (160 kbit/s per channel) instead of falling back to its 64 kbit/s default; the
+  Mac takes AudioToolbox's highest applicable bitrate (mono AAC at 320 kbit/s used to fail there).
+- **Last frame.** MP4/MOV stretch the last video sample to the declared length when the encoder gives no durations.
+- **Matroska** writes DefaultDuration (the typical frame step, snapped to a standard rate), rotation as ProjectionPoseRoll (the
+  reader takes it back), the title and global tags; the MP4 writer writes iTunes items and `©xyz`; the copy tools pass the source's
+  tags through.
+
+## Suites
+
+Full runs of `tests/run.sh` on Windows and WSL (pass / fail / skip), the affected suites on the Mac:
+
+| System | This round | Follow-up round |
+|---|---|---|
+| Windows (clang-cl, libraries with NASM) | 3,142 / 5 / 223 | 3,105 / 5 / 222 |
+| Linux (WSL, gcc 13, VA-API through d3d12) | 3,290 / 15 / 201 | 3,260 / 7 / 201 |
+| Mac (50_writers, 70_tools, 30_readers, 40_probe, 45_formats, 20_audio, 52_sound, 53_ac3, 80_capture, 10_video, 60_videox, 88_fixes) | 2,339 / 0 / 7 | |
+
+New checks: nine `fixcheck`s (`interleave`, `colour-unknown`, `copy-codecs`, `mkv-frame-rate`, `gif-hold`, `chroma-lines`,
+`aac-mono-rate`, `copy-tags`, `mkv-rotation`), 28 FFmpeg-judged checks in `88_fixes` (sound after a seek in three exports, the
+stated frame rate, seven fast trims and the copies, colour labels, the GIF hold, chroma against swscale, mono AAC, tags in three
+containers, rotation) and, on Linux as root, the rewrap onto a tmpfs with 1.4 times the file's size. `hold.gif` joins the GIF
+fixtures. The Mac's `pixels` check now compares with VideoToolbox on a test card whose colour is constant over each 2x2 block,
+where averaging and VideoToolbox's point sampling agree.
+
+The Linux run had eight more failures than the follow-up round, all on the VA-API decode path (`vfr.mp4` frames against `-ss` and
+the fps filter, four "runs of frames after jumps"), while three other helpers' suites ran on the same PC (load average 12 to 15).
+Run again alone, every one of them passes, with this build and with `main`'s. The other seven are the follow-up round's. Windows fails
+the follow-up round's five and nothing else (the extra skip is the tmpfs check).
+
+Left: VideoToolbox converts BGRA to 4:2:0 by point sampling too (the Mac export path hands BGRA straight to it: V 128 on the red
+lines, U 241 on the blue one, at 64x64 and 640x360); routing those frames through `bgraToI420` into the encoder's NV12 pool would
+fix it at some CPU cost, not measured. E-AC-3 frames of fewer than six blocks are copied into MP4 as they are (FFmpeg joins them
+into six-block samples). There is no AVI writer: an `.avi` output name gets an MP4 file, where FFmpeg writes AVI.

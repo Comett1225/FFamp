@@ -1022,6 +1022,287 @@ bool wmaBlockAlign() {
     return decoder && decoder->length() > 0 && decoder->length() < 1000000;
 }
 
+struct Placed {
+    uint64_t offset;
+    double time;
+    bool video;
+};
+
+double leadInFile(const std::string& path) {
+    auto reader = Reader::open(path);
+    if (!reader) return 1e9;
+    std::vector<Placed> placed;
+    for (const Track& t : reader->tracks())
+        for (const Sample& s : t.samples) placed.push_back({s.offset, double(s.dts - t.mediaStart + t.delay) / t.timescale, t.kind == Kind::Video});
+    std::sort(placed.begin(), placed.end(), [](const Placed& a, const Placed& b) { return a.offset < b.offset; });
+    double video = -1e9, lead = 0;
+    for (const Placed& p : placed) {
+        if (p.video) video = std::max(video, p.time);
+        else if (video > -1e9) lead = std::max(lead, p.time - video);
+    }
+    return lead;
+}
+
+bool interleave() {
+    auto source = Reader::open(fixtures + "/tools/clip.mp4");
+    const Track* video = source ? source->first(Kind::Video) : nullptr;
+    const Track* audio = source ? source->first(Kind::Audio) : nullptr;
+    if (!video || !audio) return false;
+    for (const char* name : {"early_sound.mkv", "early_sound.mp4"}) {
+        const std::string path = scratch(name);
+        auto writer = Writer::open(path);
+        if (!writer) return false;
+        const int pictures = writer->add(specOf(*video)), sound = writer->add(specOf(*audio));
+        std::vector<uint8_t> data;
+        auto put = [&](const Track& t, int out, uint32_t i) {
+            const Sample& s = t.samples[i];
+            data.resize(s.size);
+            return source->read(t, i, data.data()) && writer->write(out, data.data(), data.size(), s.pts, s.dts, s.duration, s.sync);
+        };
+        uint32_t next = 0;
+        for (uint32_t i = 0; i < video->samples.size(); ++i) {
+            const double ahead = double(video->samples[i].dts) / video->timescale + 2;
+            while (next < audio->samples.size() && double(audio->samples[next].dts) / audio->timescale < ahead) if (!put(*audio, sound, next++)) return false;
+            if (!put(*video, pictures, i)) return false;
+        }
+        while (next < audio->samples.size()) if (!put(*audio, sound, next++)) return false;
+        if (!writer->finish() || leadInFile(path) > 0.5) return false;
+    }
+    return true;
+}
+
+bool colourUnknown() {
+    for (const char* name : {"untagged.mp4", "untagged.mov", "untagged.mkv"}) {
+        if (!rewrap(fixtures + "/probe/h264.mp4", scratch(name), nullptr)) return false;
+        auto reader = Reader::open(scratch(name));
+        const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+        if (!video || video->color.known) return false;
+    }
+    for (const char* name : {"tagged.mp4", "tagged.mkv"}) {
+        if (!rewrap(fixtures + "/probe/colr.mp4", scratch(name), nullptr)) return false;
+        auto reader = Reader::open(scratch(name));
+        const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+        if (!video || !video->color.known || video->color.matrix != 1 || video->color.primaries != 1 || video->color.transfer != 1) return false;
+    }
+    auto source = Reader::open(fixtures + "/probe/h264.mp4");
+    const Track* from = source ? source->first(Kind::Video) : nullptr;
+    if (!from) return false;
+    TrackSpec encoded;
+    encoded.codec = from->codec;
+    encoded.timescale = from->timescale;
+    encoded.width = from->width;
+    encoded.height = from->height;
+    encoded.configType = from->configType;
+    encoded.config = from->config;
+    for (const char* name : {"labelled.mp4", "labelled.mkv"}) {
+        auto writer = Writer::open(scratch(name));
+        if (!writer) return false;
+        const int track = writer->add(encoded);
+        std::vector<uint8_t> data(from->samples[0].size);
+        if (!source->read(*from, 0, data.data()) || !writer->write(track, data.data(), data.size(), 0, 0, from->samples[0].duration, true) || !writer->finish()) return false;
+        auto reader = Reader::open(scratch(name));
+        const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+        if (!video || !video->color.known || video->color.matrix != 1 || video->color.full) return false;
+    }
+    return true;
+}
+
+bool samePackets(Reader& a, const Track& x, Reader& b, const Track& y) {
+    if (x.samples.size() != y.samples.size()) return false;
+    std::vector<uint8_t> one, two;
+    for (uint32_t i = 0; i < x.samples.size(); ++i) {
+        one.resize(x.samples[i].size);
+        two.resize(y.samples[i].size);
+        if (one.size() != two.size() || !a.read(x, i, one.data()) || !b.read(y, i, two.data()) || one != two) return false;
+    }
+    return true;
+}
+
+bool samePayload(Reader& a, const Track& x, Reader& b, const Track& y) {
+    std::vector<uint8_t> one, two, piece;
+    for (uint32_t i = 0; i < x.samples.size(); ++i) {
+        piece.resize(x.samples[i].size);
+        if (!a.read(x, i, piece.data())) return false;
+        one.insert(one.end(), piece.begin(), piece.end());
+    }
+    for (uint32_t i = 0; i < y.samples.size(); ++i) {
+        piece.resize(y.samples[i].size);
+        if (!b.read(y, i, piece.data())) return false;
+        two.insert(two.end(), piece.begin(), piece.end());
+    }
+    return !one.empty() && one == two;
+}
+
+std::vector<uint8_t> boxBody(const std::string& path, const char (&type)[5]) {
+    const std::vector<uint8_t> file = load(path);
+    auto at = std::search(file.begin(), file.end(), type, type + 4);
+    if (at - file.begin() < 4 || file.end() - at < 4) return {};
+    const size_t size = (size_t(at[-4]) << 24) | (size_t(at[-3]) << 16) | (size_t(at[-2]) << 8) | at[-1];
+    if (size < 8 || size_t(file.end() - at) < size - 4) return {};
+    return {at + 4, at + (size - 4)};
+}
+
+bool copyCodecs() {
+    const std::pair<const char*, std::vector<const char*>> cases[] = {
+        {"formats/avi_mpeg4_mp3.avi", {"mp4", "mov", "mkv"}}, {"formats/avi_mjpeg_pcm.avi", {"mp4", "mov", "mkv"}}, {"probe/h264_mp3.ts", {"mp4", "mov", "mkv"}},
+        {"probe/h264_ac3.ts", {"mp4", "mov", "mkv"}}, {"probe/h264_eac3.ts", {"mp4", "mov", "mkv"}}, {"readers/vp8_vorbis.webm", {"mp4", "mkv"}},
+        {"formats/eac3_51.mp4", {"mp4", "mkv"}}, {"formats/ac3_stereo.mp4", {"mp4", "mkv"}},
+    };
+    int number = 0;
+    for (const auto& [name, kinds] : cases) {
+        auto source = Reader::open(fixtures + "/" + name);
+        if (!source) return false;
+        ++number;
+        for (const char* kind : kinds) {
+            const std::string path = scratch("copy_" + std::to_string(number) + "." + kind);
+            if (!rewrap(fixtures + "/" + name, path, nullptr)) return false;
+            auto copy = Reader::open(path);
+            if (!copy) return false;
+            for (Kind k : {Kind::Video, Kind::Audio}) {
+                const Track* x = source->first(k);
+                const Track* y = copy->first(k);
+                if (!x) continue;
+                if (!y || x->codec != y->codec || !(x->codec == fourcc("lpcm") ? samePayload(*source, *x, *copy, *y) : samePackets(*source, *x, *copy, *y))) return false;
+            }
+        }
+    }
+    for (const char* box : {"dec3", "dac3"}) {
+        const std::string name = box[2] == 'c' ? "formats/eac3_51.mp4" : "formats/ac3_stereo.mp4";
+        const std::string path = scratch(std::string("again_") + box + ".mp4");
+        if (!rewrap(fixtures + "/" + name, path, nullptr)) return false;
+        const auto theirs = box[2] == 'c' ? boxBody(fixtures + "/" + name, "dec3") : boxBody(fixtures + "/" + name, "dac3");
+        const auto ours = box[2] == 'c' ? boxBody(path, "dec3") : boxBody(path, "dac3");
+        if (theirs.empty() || theirs != ours) return false;
+    }
+    return !rewrap(fixtures + "/readers/vp8_vorbis.webm", scratch("no_vorbis.mov"), nullptr) && !extractAudio(fixtures + "/readers/vp8_vorbis.webm", scratch("no_vorbis.m4a"), SoundChoice::Copy, 0, nullptr);
+}
+
+uint64_t defaultDuration(const std::string& path) {
+    const std::vector<uint8_t> file = load(path);
+    static const uint8_t id[3] = {0x23, 0xE3, 0x83};
+    auto at = std::search(file.begin(), file.end(), id, id + 3);
+    if (file.end() - at < 4) return 0;
+    const int bytes = at[3] & 0x7F;
+    if (!(at[3] & 0x80) || bytes > 8 || file.end() - at < 4 + bytes) return 0;
+    uint64_t value = 0;
+    for (int i = 0; i < bytes; ++i) value = value << 8 | at[4 + i];
+    return value;
+}
+
+bool mkvFrameRate() {
+    const std::string path = scratch("rate.mkv");
+    if (!rewrap(fixtures + "/tools/clip.mp4", path, nullptr) || defaultDuration(path) != 33333333) return false;
+    const std::string again = scratch("rate_again.mkv");
+    return trimCopy(path, again, 500000, 2500000, nullptr) && defaultDuration(again) == 33333333;
+}
+
+bool gifHold() {
+    GifInfo info;
+    const std::string colour = scratch("hold.mp4"), matte = scratch("hold_matte.mp4");
+    if (!gifToVideo(fixtures + "/tools/hold.gif", colour, matte, &info, nullptr) || info.durationMs != 3400) return false;
+    auto reader = Reader::open(colour);
+    const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+    if (!video || video->samples.size() != 5 || std::fabs(video->seconds() - 3.4) > 0.011) return false;
+    return std::fabs(double(video->samples.back().duration) / video->timescale - 3.0) < 0.011;
+}
+
+bool chromaLines() {
+    const int size = 64;
+    std::vector<uint8_t> pixels(size_t(size) * size * 4);
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            uint8_t* p = &pixels[(size_t(y) * size + x) * 4];
+            const bool red = x == 9 || x == 21 || x == 33, blue = x == 40, green = y == 51;
+            p[0] = red ? 0 : blue ? 255 : green ? 0 : 128;
+            p[1] = red || blue ? 0 : green ? 200 : 128;
+            p[2] = red ? 255 : blue || green ? 0 : 128;
+            p[3] = 255;
+        }
+    }
+    std::vector<uint8_t> planes(size_t(size) * size * 3 / 2);
+    bgraToI420(pixels.data(), size_t(size) * 4, size, size, planes.data());
+    if (!save(scratch("chroma.bgra"), pixels) || !save(scratch("chroma.yuv"), planes)) return false;
+    const uint8_t* u = planes.data() + size * size;
+    const uint8_t* v = u + size * size / 4;
+    auto near = [](int value, int want) { return std::abs(value - want) <= 2; };
+    for (int column : {4, 10, 16}) if (!near(v[5 * 32 + column], 184)) return false;
+    if (!near(u[5 * 32 + 20], 184) || !near(u[5 * 32 + 19], 128) || !near(u[5 * 32 + 21], 128)) return false;
+    return u[25 * 32 + 2] < 110 && v[25 * 32 + 2] < 110 && near(u[26 * 32 + 2], 128);
+}
+
+bool aacMonoRate() {
+    const int rate = 48000, seconds = 4;
+    std::vector<int16_t> pcm(size_t(rate) * seconds);
+    uint32_t noise = 1;
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        noise = noise * 1664525u + 1013904223u;
+        pcm[i] = int16_t(6000 * std::sin(i * 0.0571) + 3000 * std::sin(i * 0.3313) + int(noise >> 21) - 1024);
+    }
+    for (int bitrate : {192000, 256000, 320000}) {
+        auto encoder = AacEncoder::open(rate, 1, bitrate);
+        if (!encoder) return false;
+        size_t bytes = 0;
+        AudioSink sink = [&](const uint8_t*, size_t n) { bytes += n; };
+        for (size_t at = 0; at < pcm.size(); at += 4096) if (!encoder->encode(pcm.data() + at, std::min<size_t>(4096, pcm.size() - at), sink)) return false;
+        if (!encoder->finish(sink)) return false;
+        if (double(bytes) * 8 / seconds < 120000) return false;
+    }
+    return true;
+}
+
+bool copyTags() {
+    const std::string tagged = fixtures + "/probe/tags.m4a";
+    auto original = Reader::open(tagged);
+    if (!original) return false;
+    for (const char* name : {"tags.m4a", "tags.mkv"}) {
+        if (!rewrap(tagged, scratch(name), nullptr)) return false;
+        auto reader = Reader::open(scratch(name));
+        if (!reader) return false;
+        for (const char* key : {"title", "artist", "album", "date"}) {
+            auto found = reader->tags().find(key);
+            auto wanted = original->tags().find(key);
+            if (wanted == original->tags().end() || found == reader->tags().end() || found->second != wanted->second) return false;
+        }
+    }
+    auto source = Reader::open(fixtures + "/probe/h264.mp4");
+    const Track* from = source ? source->first(Kind::Video) : nullptr;
+    if (!from) return false;
+    const std::string phone = scratch("phone.mov");
+    auto writer = Writer::open(phone);
+    if (!writer) return false;
+    writer->tags({{"title", "Holiday"}, {"location", "+52.3700+004.8900/"}});
+    const int track = writer->add(specOf(*from));
+    std::vector<uint8_t> data;
+    for (uint32_t i = 0; i < from->samples.size(); ++i) {
+        const Sample& s = from->samples[i];
+        data.resize(s.size);
+        if (!source->read(*from, i, data.data()) || !writer->write(track, data.data(), data.size(), s.pts, s.dts, s.duration, s.sync)) return false;
+    }
+    if (!writer->finish()) return false;
+    for (const char* name : {"trip.mp4", "trip.mov", "trip.mkv"}) {
+        if (!trimCopy(phone, scratch(name), 200000, 800000, nullptr)) return false;
+        auto reader = Reader::open(scratch(name));
+        if (!reader || reader->tags().count("title") == 0 || reader->tags().at("title") != "Holiday" || reader->tags().count("location") == 0
+            || reader->tags().at("location") != "+52.3700+004.8900/")
+            return false;
+    }
+    return true;
+}
+
+bool mkvRotation() {
+    auto source = Reader::open(fixtures + "/probe/rot90.mp4");
+    const Track* from = source ? source->first(Kind::Video) : nullptr;
+    if (!from || !from->rotation) return false;
+    const std::string turned = scratch("turned.mkv"), silent = scratch("turned_silent.mkv");
+    if (!rewrap(fixtures + "/probe/rot90.mp4", turned, nullptr) || !stripAudio(fixtures + "/probe/rot90.mp4", silent, nullptr)) return false;
+    for (const std::string& name : {turned, silent}) {
+        auto reader = Reader::open(name);
+        const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+        if (!video || video->rotation != from->rotation) return false;
+    }
+    return true;
+}
+
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre},
     {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"encoder-names", encoderNames}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
@@ -1034,6 +1315,8 @@ const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"scaler-labels", scalerLabels},
 #endif
     {"finish-twice", finishTwice}, {"many-tracks", manyTracks}, {"long-gap", longGap}, {"wma-block-align", wmaBlockAlign},
+    {"interleave", interleave}, {"colour-unknown", colourUnknown}, {"copy-codecs", copyCodecs}, {"mkv-frame-rate", mkvFrameRate}, {"gif-hold", gifHold},
+    {"chroma-lines", chromaLines}, {"aac-mono-rate", aacMonoRate}, {"copy-tags", copyTags}, {"mkv-rotation", mkvRotation},
 };
 
 int fixcheck(const Args& args) {

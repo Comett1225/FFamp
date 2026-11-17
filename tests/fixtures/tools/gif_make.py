@@ -43,7 +43,10 @@ def scenes():
     partial = {"name": "partial.gif", "width": 30, "height": 21, "frames": []}
     for step in range(5):
         partial["frames"].append({"x": 2 + step, "y": 1 + step, "pixels": block(20, 12, step, "checks"), "clear": None, "dispose": [1, 2, 1, 3, 1][step], "delay": 6})
-    return [opaque, alpha, still, woven, partial]
+    hold = {"name": "hold.gif", "width": 64, "height": 48, "frames": []}
+    for step, delay in enumerate([10, 10, 10, 10, 300]):
+        hold["frames"].append({"x": 0, "y": 0, "pixels": block(64, 48, step, "bars"), "clear": None, "dispose": 1, "delay": delay})
+    return [opaque, alpha, still, woven, partial, hold]
 
 
 def own_palette():

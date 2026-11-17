@@ -128,7 +128,9 @@ libraries on Linux. Archive sizes overstate what a link keeps; the app's own lib
    by bundling FFmpeg, which contains all of them. (An alternative once considered for H.264 decode only: download Cisco's OpenH264
    binary on first use, at the cost of a download and of the "nothing extra" goal.) Default in this plan: build from source, as FFmpeg was.
 2. **AAC encoder.** vo-aacenc (LC only) is the software AAC encoder here; FFmpeg's own AAC encoder (what the Linux app uses today) can
-   be ported instead if the owner prefers parity over size. Round 1 measures vo-aacenc against FFmpeg.
+   be ported instead if the owner prefers parity over size. Round 1 measures vo-aacenc against FFmpeg. vo-aacenc stops at 160 kbit/s
+   per channel, so the app's mono AAC at 192 to 320 kbit/s comes out at 160 kbit/s (FFmpeg's encoder takes up to about 288 per
+   channel); Media Foundation covers mono 192 kbit/s on Windows.
 3. **H.264 on Linux.** Decided 2026-11-16: FFamp's own decoder, FFmpeg's H.264 decoder ported to `src/h264` with its x86-64 and
    AArch64 assembly and its frame and slice threads. It replaced OpenH264 (single-threaded, a few values off on some B-frames, no
    interlaced, 8-bit 4:2:0 only); bit-exact with FFmpeg, faster than FFmpeg's own decode with threads (`docs/RESULTS.md`). VA-API (round 2)

@@ -1,7 +1,6 @@
 #include "absent/android.h"
 #include "aac_config.h"
-#include "readers.h"
-#include "soft_video.h"
+#include "own_video.h"
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -92,6 +91,7 @@ public:
         picture.width = p.width;
         picture.height = p.height;
         picture.stamp = p.stamp;
+        picture.rgb = rgbPlanes(p);
         pictureToI420(p, picture.i420);
         held.push_back(std::move(picture));
     }
@@ -224,14 +224,22 @@ size_t annexB(const uint8_t* in, size_t size, int lengthSize, uint8_t* out, size
     return written;
 }
 
-std::unique_ptr<SoftVideo> SoftVideo::open(const Track& t, std::string* error) {
+std::unique_ptr<SoftVideo> SoftVideo::open(Reader& reader, const Track& t, std::string* error) {
     std::unique_ptr<Soft> soft(new Soft);
     if (vc1Codec(t.codec) && t.configType == fourcc("bmih")) soft->codec = openVc1(t.codec, t.config, t.width, t.height, error);
     else if (msmpeg4Codec(t.codec)) soft->codec = openMsmpeg4(t.codec, t.config, t.width, t.height, error);
-    else if (rawVideoCodec(t.codec)) soft->codec = openRawVideo(t, error);
-    else if (t.codec == fourcc("cvid")) soft->codec = openCinepak(t, error);
+    else if (ownVideoName(t.codec)) soft->codec = openOwnVideo(t, error);
     else if (t.codec == fourcc("h263")) soft->codec = openH263(error);
     else if ((t.codec >> 16) == 0x6476) soft->codec = openDv();
+    else if (t.codec == fourcc("apch") || t.codec == fourcc("apcn") || t.codec == fourcc("apcs") || t.codec == fourcc("apco") || t.codec == fourcc("ap4h") || t.codec == fourcc("ap4x")) soft->codec = openProRes(t.codec, error);
+    else if (t.configType == fourcc("avcC") && !t.config.empty()) {
+        uint32_t led = 0;
+        soft->codec = openH264(t.config, error, [&](std::vector<uint8_t>& bytes) {
+            if (led >= t.samples.size()) return false;
+            bytes.resize(t.samples[led].size);
+            return reader.read(t, led++, bytes.data());
+        });
+    }
 #ifdef ABSENT_XVID
     else if (t.codec == fourcc("mp4v") && t.configType == fourcc("esds")) soft->codec = openXvid(t.config, t.width, t.height);
 #endif

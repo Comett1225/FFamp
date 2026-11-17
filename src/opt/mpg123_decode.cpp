@@ -22,7 +22,7 @@ struct Mpg123Audio : PacketDecoder {
         int problem = 0;
         handle = mpg123_new(nullptr, &problem);
         if (!handle) return false;
-        mpg123_param(handle, MPG123_FLAGS, MPG123_QUIET | MPG123_NO_READAHEAD, 0);
+        mpg123_param(handle, MPG123_FLAGS, MPG123_QUIET | MPG123_NO_READAHEAD | MPG123_AUTO_RESAMPLE, 0);
         mpg123_param(handle, MPG123_REMOVE_FLAGS, MPG123_GAPLESS, 0);
         mpg123_format_none(handle);
         mpg123_format(handle, rate, channels == 1 ? MPG123_MONO : MPG123_STEREO, MPG123_ENC_FLOAT_32);

@@ -1627,3 +1627,43 @@ give an `avcC`), MPEG-4 part 2 Simple Profile, H.263 and MPEG-2 have MediaCodec 
 decoder. Sound: the own AAC, AC-3/E-AC-3, FLAC, ALAC, WMA, ADPCM, G.711 and PCM decoders are in the library; MP3/MP2 go to MediaCodec.
 Missing on Android: Motion JPEG (no own JPEG decoder and no MediaCodec type), an own MPEG-1/2 decoder (libmpeg2 is not built there),
 FFamp's own H.264 decoder (left out of the Android build; MediaCodec decodes H.264), and HuffYUV, Ut Video and MagicYUV (on `gaps2`).
+
+# Containers review fixes (branch `fix-containers-517`)
+
+Nine verified findings of the containers review, each fixed in the reader or writer and checked by `tests/suites/32_containers.sh`
+(fixtures in `tests/fixtures/containers`, made by its `make.sh`), first without FFmpeg (ffamp against itself and checked values),
+then with FFmpeg 9.0.2 as the judge.
+
+| Finding | Before | Now |
+|---|---|---|
+| AVI H.264 with B-frames and empty chunks (every `ffmpeg -c copy` from MP4) | decode order, pts = dts | display order, every frame identical to FFmpeg's; drop chunks after the last picture count in its length (2.000 s like ffprobe, was 1.96 s) |
+| AVI H.264 stored with lengths and `avcC` in `strf` (`ffmpeg -c copy` without the bitstream filter) | video track dropped | decoded, the record kept as the config |
+| AVI open-GOP H.264 | 1 key frame, a jump decoded from the start (3,600 packets for one jump in a 2-minute file) | key frames from the index (60, a jump feeds about 60 packets) |
+| AVI HEVC (`HEVC`, `H265`, `HEV1`, `HVC1`, `DVHE`) | every frame a key frame, `video codec not supported` | display order from the picture order counts, IRAP key frames, decodes with start codes and with `hvcC` |
+| MP4 with several separate edits | first segment only (1.0 s of 2.0 s) | segments joined, the 50 frames of FFmpeg's decode in its order |
+| MP4 edit at media time 0 on a B-frame track | video 2 frames late against the sound | starts at 0 as in FFmpeg |
+| Fragmented MP4 with negative composition offsets | video one frame early | FFmpeg's `dts_shift`: video start 0.033333 as ffprobe |
+| Matroska and WebM rotation (Projection pose) | rotation 0, read and written | read as FFmpeg reads it, written by `MkvWriter` (ffprobe finds rotation 90 in a rewrapped file) |
+| Raw MP3 after more than 1 MB of junk, or with a part at another sample rate | the rest of the file dropped | read to the end; the other rate is resampled by mpg123 or decoded by a rebuilt AudioToolbox converter, pitch kept |
+
+One thing outside the containers came up: jumps into open-GOP H.264 at a key frame that is not an IDR picture give wrong pictures
+with VideoToolbox (6 of 16 random frames right in a native open-GOP MP4 on `main`, the key frame's picture comes back for the others)
+and with VA-API under WSL (38 and 39 of 40); FFamp's own decoder and Media Foundation get all of them right. The AVI reader now
+marks the open-GOP key frames as MP4 does, so open-GOP AVI files meet the same decoder issue (before, every jump decoded from the
+start of the file). Not feeding the key frame's leading pictures after a jump was tried: 13 of 16 with VideoToolbox, but worse with
+VA-API (24 of 40), so it was left for the decoders' round. The open-GOP check of the suite uses the software decoder off the Mac and
+is skipped on the Mac.
+
+Suites touched by the change (`10_video`, `20_audio`, `30_readers`, `32_containers`, `40_probe`, `45_formats`, `47_asf`, `50_writers`,
+`70_tools`, `80_capture` off the Mac, `88_fixes`), pass / fail / skip:
+
+| System | Result | Failures |
+|---|---|---|
+| Windows (clang-cl, NASM) | 1,831 / 1 / 175 | `rd_vorbis.ogg`'s trim, as before |
+| Linux (WSL), VA-API off | 1,843 / 2 / 160 | `rd_vorbis.ogg`'s trim and the 100-frame AAC file, as before |
+| Mac (arm64) | 1,769 / 0 / 2 | none |
+
+With VA-API on, other suites using the same GPU at the same time made VA-API lose a frame now and then (decode comparisons failed
+that passed when run again); `32_containers` alone gives 34 / 0 / 0 with VA-API. `edits.mp4` (three edits) now plays both segments;
+its expected probe output was pinned again, and the one field left against ffprobe is the stream length (ffprobe counts the leading
+empty edit in it).

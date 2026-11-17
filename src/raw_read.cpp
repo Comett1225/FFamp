@@ -2,6 +2,7 @@
 #include "nal.h"
 #include "readers.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace absent {
@@ -111,7 +112,7 @@ struct Scanner {
         MpegAudio m;
         if (!mpegAudio(p, m)) return 0;
         if (first) firstMpeg = m;
-        else if (m.layer != firstMpeg.layer || m.version != firstMpeg.version || m.sampleRate != firstMpeg.sampleRate) return 0;
+        else if (m.layer != firstMpeg.layer) return 0;
         return uint32_t(m.size);
     }
 
@@ -194,10 +195,11 @@ const char* packets(FileReader& reader, uint64_t start) {
     }
     track.timescale = uint32_t(track.sampleRate);
     int64_t time = 0;
+    long double exact = 0;
     while (at < end) {
         uint32_t size = scan.frameAt(at, false);
         if (!size || size > end - at) {
-            at = scan.next(at + 1, kSearch, false);
+            at = scan.next(at + 1, end - at, false);
             continue;
         }
         Sample s;
@@ -214,7 +216,8 @@ const char* packets(FileReader& reader, uint64_t start) {
             mpegAudio(p, m);
             s.offset = at;
             s.size = size;
-            s.duration = uint32_t(m.samples);
+            exact += (long double)m.samples * track.sampleRate / m.sampleRate;
+            s.duration = uint32_t(std::max<int64_t>(1, std::llroundl(exact) - time));
         }
         s.pts = s.dts = time;
         s.sync = true;

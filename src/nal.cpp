@@ -237,6 +237,7 @@ VideoInfo parseHevcSps(const uint8_t* nal, size_t n) {
     const uint32_t orderMinus4 = r.ue();
     if (orderMinus4 > 12) return info;
     const uint32_t orderBits = orderMinus4 + 4;
+    info.orderBits = int(orderBits);
     bool everyLayer = r.bit();
     for (int i = everyLayer ? 0 : subLayersMinus1; i <= subLayersMinus1; ++i) {
         r.ue();

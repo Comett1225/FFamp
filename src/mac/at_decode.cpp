@@ -25,6 +25,7 @@ struct SystemAudio : PacketDecoder {
     bool ending = false;
     AudioStreamPacketDescription description{};
     int speech = 0;
+    bool mpeg = false;
     std::vector<uint8_t> piece;
 
     ~SystemAudio() override {
@@ -98,7 +99,10 @@ struct SystemAudio : PacketDecoder {
 
     void reset() override { build(); }
 
+    void follow(const std::vector<uint8_t>& packet, std::vector<float>& out);
+
     void feed(const std::vector<uint8_t>& packet, std::vector<float>& out) override {
+        if (mpeg) follow(packet, out);
         if (!speech) {
             waiting = &packet;
             pull(out);
@@ -132,6 +136,16 @@ bool describeMpeg(const std::vector<uint8_t>& p, AudioStreamBasicDescription& d)
     d.mFormatID = layer == 3 ? kAudioFormatMPEGLayer3 : layer == 2 ? kAudioFormatMPEGLayer2 : kAudioFormatMPEGLayer1;
     d.mFramesPerPacket = layer == 1 ? 384 : (layer == 3 && version != 3) ? 576 : 1152;
     return true;
+}
+
+void SystemAudio::follow(const std::vector<uint8_t>& packet, std::vector<float>& out) {
+    AudioStreamBasicDescription next = from;
+    if (!describeMpeg(packet, next) || next.mSampleRate == from.mSampleRate) return;
+    ending = true;
+    pull(out);
+    from.mSampleRate = next.mSampleRate;
+    from.mFramesPerPacket = next.mFramesPerPacket;
+    build();
 }
 
 UInt32 losslessFlag(int bits) {
@@ -202,6 +216,7 @@ std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::ve
         decoder->prerollPackets = from.mFormatID == kAudioFormatMPEG4AAC ? 4 : 32;
     } else if (track.codec == fourcc(".mp3") || track.codec == fourcc(".mp2")) {
         if (!describeMpeg(firstPacket, from)) return fail("MPEG audio header not understood");
+        decoder->mpeg = true;
         decoder->prerollPackets = 12;
         decoder->lead = from.mFormatID == kAudioFormatMPEGLayer3 ? -529 : -241;
     } else if (track.codec == fourcc("alac")) {

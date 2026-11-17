@@ -86,6 +86,7 @@ struct Stream {
     bool video = false;
     bool audio = false;
     bool tape = false;
+    bool hevc = false;
     uint32_t handler = 0;
     uint32_t scale = 0;
     uint32_t rate = 0;
@@ -155,6 +156,93 @@ OrderFields orderFields(const std::vector<uint8_t>& set) {
     f.framesOnly = r.bit();
     f.usable = r.ok && kind == 0 && f.numberBits >= 4 && f.numberBits <= 16 && f.countBits >= 4 && f.countBits <= 16;
     return f;
+}
+
+struct HevcFields {
+    bool usable = false;
+    bool separate = false;
+    bool outputFlag = false;
+    int extraBits = 0;
+    int countBits = 4;
+};
+
+bool dropped(const uint8_t* nal, size_t size, bool hevc) {
+    if (hevc) {
+        const int type = (nal[0] >> 1) & 63;
+        return size < 2 || type == 35 || type == 38;
+    }
+    const int type = nal[0] & 31;
+    return type == 9 || type == 12;
+}
+
+void hevcPps(const uint8_t* nal, size_t size, HevcFields& f) {
+    if (size < 3) return;
+    std::vector<uint8_t> plain = unescape(nal + 2, std::min<size_t>(size - 2, 16));
+    BitReader r{plain.data(), plain.size()};
+    r.ue();
+    r.ue();
+    r.skip(1);
+    f.outputFlag = r.bit();
+    f.extraBits = int(r.bits(3));
+    f.usable = r.ok;
+}
+
+int64_t hevcCount(const uint8_t* nal, size_t size, const HevcFields& f) {
+    const int type = (nal[0] >> 1) & 63;
+    std::vector<uint8_t> plain = unescape(nal + 2, std::min<size_t>(size - 2, 48));
+    BitReader r{plain.data(), plain.size()};
+    if (!r.bit()) return -1;
+    if (type >= 16 && type <= 23) r.skip(1);
+    r.ue();
+    r.skip(size_t(f.extraBits));
+    r.ue();
+    if (f.outputFlag) r.skip(1);
+    if (f.separate) r.skip(2);
+    const uint32_t low = type == 19 || type == 20 ? 0 : r.bits(f.countBits);
+    return r.ok ? int64_t(low) : -1;
+}
+
+template <class F>
+void eachNal(const uint8_t* p, size_t n, size_t lengthSize, F each) {
+    if (!lengthSize) {
+        annexNals(p, n, each);
+        return;
+    }
+    size_t at = 0;
+    while (n - at >= lengthSize) {
+        size_t size = 0;
+        for (size_t k = 0; k < lengthSize; ++k) size = size << 8 | p[at + k];
+        at += lengthSize;
+        if (size == 0 || size > n - at) return;
+        each(p + at, size);
+        at += size;
+    }
+}
+
+template <class F>
+void configNals(const std::vector<uint8_t>& config, bool hevc, F each) {
+    View v{config.data(), config.size()};
+    if (hevc) {
+        v.skip(22);
+        const uint32_t arrays = v.u8();
+        for (uint32_t i = 0; i < arrays && v.ok; ++i) {
+            v.skip(1);
+            const uint32_t count = v.u16();
+            for (uint32_t k = 0; k < count && v.ok; ++k) {
+                View nal = v.sub(v.u16());
+                if (v.ok && nal.n) each(nal.p, nal.n);
+            }
+        }
+        return;
+    }
+    v.skip(5);
+    for (int list = 0; list < 2 && v.ok; ++list) {
+        const uint32_t count = list ? v.u8() : v.u8() & 31;
+        for (uint32_t k = 0; k < count && v.ok; ++k) {
+            View nal = v.sub(v.u16());
+            if (v.ok && nal.n) each(nal.p, nal.n);
+        }
+    }
 }
 
 bool packedMark(const uint8_t* p, size_t n) {
@@ -305,6 +393,7 @@ public:
     uint64_t oldIndexAt = 0;
     uint64_t oldIndexSize = 0;
     uint32_t framePeriod = 0;
+    bool indexed = false;
     std::vector<uint8_t> scratch;
 
     const Stream* streamOf(const Track& track) const {
@@ -344,9 +433,9 @@ public:
         if (index >= s->raw.size() || !source.load(sample.offset, s->raw[index], scratch, kLargestChunk)) return false;
         size_t total = 0;
         bool fits = true;
+        const bool hevc = s->hevc;
         annexNals(scratch.data(), scratch.size(), [&](const uint8_t* nal, size_t size) {
-            int type = nal[0] & 31;
-            if (type == 9 || type == 12 || !fits) return;
+            if (dropped(nal, size, hevc) || !fits) return;
             if (size + 4 > sample.size - total) {
                 fits = false;
                 return;
@@ -924,77 +1013,71 @@ public:
         const bool part2 = t.codec == fourcc("mp4v");
         const bool mpeg = t.codec == fourcc("mp1v") || t.codec == fourcc("mp2v");
         const bool avc = t.codec == fourcc("avc1");
+        const bool hevc = t.codec == fourcc("hvc1");
+        const bool nals = avc || hevc;
+        s.hevc = hevc;
         const bool vc1 = vc1Codec(t.codec) && !t.config.empty();
         const bool ms = msmpeg4Codec(t.codec);
         const bool h263 = t.codec == fourcc("h263");
         const bool cinepak = t.codec == fourcc("cvid");
-        const int lengthSize = avc && s.extra.size() >= 7 && s.extra[0] == 1 ? (s.extra[4] & 3) + 1 : 0;
         std::vector<Shown> frames;
         frames.reserve(s.chunks.size());
-        NalList sps, pps;
+        NalList vps, sps, pps;
         OrderFields fields;
+        HevcFields order;
+        bool orderSps = false;
+        const size_t lengthSize = nals && s.extra.size() >= (hevc ? 23u : 7u) && s.extra[0] == 1 ? size_t(s.extra[hevc ? 21 : 4] & 3) + 1 : 0;
         int64_t count = -1;
-        auto eachNal = [&](const uint8_t* p, size_t n, auto&& each) {
-            if (!lengthSize) {
-                annexNals(p, n, each);
-                return;
-            }
-            for (size_t at = 0; n - at >= size_t(lengthSize);) {
-                size_t size = 0;
-                for (int k = 0; k < lengthSize; ++k) size = (size << 8) | p[at + size_t(k)];
-                at += size_t(lengthSize);
-                if (!size || size > n - at) break;
-                each(p + at, size);
-                at += size;
-            }
-        };
-        auto parameterSets = [&](const uint8_t* p, size_t n, size_t& packed, bool& key) {
-            count = -1;
-            eachNal(p, n, [&](const uint8_t* nal, size_t size) {
-                int type = nal[0] & 31;
-                if (type == 9 || type == 12) return;
-                packed += size + 4;
+        bool intra = false;
+        auto parameterSets = [&](const uint8_t* nal, size_t size, size_t& packed, bool& key) {
+            if (dropped(nal, size, hevc)) return;
+            packed += size + 4;
+            NalList* list = nullptr;
+            if (hevc) {
+                const int type = (nal[0] >> 1) & 63;
+                if (type >= 16 && type <= 23) intra = true;
+                if (type >= 16 && type <= 20) key = true;
+                if (type == 33 && !orderSps) {
+                    VideoInfo info = parseHevcSps(nal, size);
+                    if (info.valid && info.orderBits >= 4 && info.orderBits <= 16) {
+                        order.countBits = info.orderBits;
+                        order.separate = info.separatePlanes;
+                        orderSps = true;
+                    }
+                }
+                if (type == 34 && pps.empty()) hevcPps(nal, size, order);
+                if (type <= 21 && count < 0 && orderSps && order.usable) count = hevcCount(nal, size, order);
+                list = type == 32 ? &vps : type == 33 ? &sps : type == 34 ? &pps : nullptr;
+            } else {
+                const int type = nal[0] & 31;
                 if (type == 5) key = true;
                 if (type == 7 && sps.empty()) fields = orderFields(std::vector<uint8_t>(nal, nal + size));
-                if ((type == 1 || type == 5) && count < 0 && fields.usable) {
+                if ((type == 1 || type == 5) && count < 0) {
                     std::vector<uint8_t> plain = unescape(nal, std::min<size_t>(size, 48));
                     BitReader r{plain.data() + 1, plain.size() - 1};
                     r.ue();
-                    r.ue();
+                    const uint32_t slice = r.ue() % 5;
+                    if (r.ok && (slice == 2 || slice == 4)) intra = true;
                     r.ue();
                     if (fields.separate) r.skip(2);
                     r.skip(size_t(fields.numberBits));
                     if (!fields.framesOnly && r.bit()) r.skip(1);
                     if (type == 5) r.ue();
                     uint32_t low = r.bits(fields.countBits);
-                    if (r.ok) count = low;
+                    if (r.ok && fields.usable) count = low;
                 }
-                NalList* list = type == 7 ? &sps : type == 8 ? &pps : nullptr;
-                if (!list || list->size() >= 32 || size > 65535) return;
-                std::vector<uint8_t> one(nal, nal + size);
-                if (std::find(list->begin(), list->end(), one) == list->end()) list->push_back(std::move(one));
-            });
-        };
-        if (avc && lengthSize) {
-            const std::vector<uint8_t>& c = s.extra;
-            size_t at = 5;
-            for (int set = 0; set < 2 && at < c.size(); ++set) {
-                const int sets = set == 0 ? c[at++] & 31 : c[at++];
-                for (int k = 0; k < sets && at + 2 <= c.size(); ++k) {
-                    const size_t n = be16(c.data() + at);
-                    at += 2;
-                    if (n == 0 || n > c.size() - at) break;
-                    std::vector<uint8_t> one(c.begin() + long(at), c.begin() + long(at + n));
-                    if (set == 0 && sps.empty()) fields = orderFields(one);
-                    NalList& list = set == 0 ? sps : pps;
-                    if (list.size() < 32) list.push_back(std::move(one));
-                    at += n;
-                }
+                list = type == 7 ? &sps : type == 8 ? &pps : nullptr;
             }
-        } else if (avc) {
+            if (!list || list->size() >= 32 || size > 65535) return;
+            std::vector<uint8_t> one(nal, nal + size);
+            if (std::find(list->begin(), list->end(), one) == list->end()) list->push_back(std::move(one));
+        };
+        if (nals) {
             size_t packed = 0;
             bool key = false;
-            parameterSets(s.extra.data(), s.extra.size(), packed, key);
+            auto each = [&](const uint8_t* nal, size_t size) { parameterSets(nal, size, packed, key); };
+            if (lengthSize) configNals(s.extra, hevc, each);
+            else annexNals(s.extra.data(), s.extra.size(), each);
         }
         std::vector<uint8_t> headers;
         bool packedStream = part2 && packedMark(s.extra.data(), s.extra.size());
@@ -1011,13 +1094,16 @@ public:
                 --placeholders;
                 continue;
             }
-            if (avc && !f.empty) {
+            if (nals && !f.empty) {
                 if (!source.load(c.at, c.size, bytes, kLargestChunk)) continue;
                 size_t packed = 0;
                 bool key = false;
-                parameterSets(bytes.data(), bytes.size(), packed, key);
-                if (!lengthSize) f.size = uint32_t(std::min<size_t>(packed, 0x7FFFFFFF));
+                count = -1;
+                intra = false;
+                eachNal(bytes.data(), bytes.size(), lengthSize, [&](const uint8_t* nal, size_t size) { parameterSets(nal, size, packed, key); });
+                f.size = lengthSize ? c.size : uint32_t(std::min<size_t>(packed, 0x7FFFFFFF));
                 f.type = key ? 0 : 1;
+                f.key = intra && (hevc || (c.key && indexed));
                 f.count = count;
                 f.empty = packed == 0;
             } else if (vc1 && !f.empty) {
@@ -1087,9 +1173,9 @@ public:
             }
             frames.push_back(f);
         }
-        if (avc) {
-            t.configType = fourcc("avcC");
-            t.config = lengthSize ? s.extra : buildAvcConfig(sps, pps);
+        if (nals) {
+            t.configType = hevc ? fourcc("hvcC") : fourcc("avcC");
+            t.config = lengthSize ? s.extra : hevc ? buildHevcConfig(vps, sps, pps) : buildAvcConfig(sps, pps);
             if (t.config.empty()) return;
         } else if (part2) {
             size_t first = 0;
@@ -1100,7 +1186,7 @@ public:
             t.configType = fourcc("esds");
             t.config = mpeg4Descriptor(chosen.data(), chosen.size());
         }
-        const bool typed = avc || part2 || mpeg || vc1 || ms || h263 || cinepak;
+        const bool typed = nals || part2 || mpeg || vc1 || ms || h263 || cinepak;
         bool reordered = false;
         if (part2 || mpeg || vc1) for (const Shown& f : frames) reordered = reordered || (!f.empty && f.type == 2);
         std::vector<int64_t> slots(frames.size(), 0);
@@ -1115,17 +1201,14 @@ public:
             }
         }
         if (held < frames.size()) slots[held] = slot++;
-        if (avc && fields.usable) {
-            const int64_t span = int64_t(1) << fields.countBits;
+        if ((avc && fields.usable) || (hevc && orderSps && order.usable)) {
+            const int64_t span = int64_t(1) << (hevc ? order.countBits : fields.countBits);
             int64_t high = 0, before = 0;
             std::vector<size_t> group;
-            std::vector<int64_t> places;
-            auto close = [&]() {
-                places.clear();
-                for (size_t k : group) places.push_back(slots[k]);
-                std::sort(places.begin(), places.end());
+            auto close = [&] {
+                const std::vector<size_t> places = group;
                 std::stable_sort(group.begin(), group.end(), [&](size_t a, size_t b) { return frames[a].count < frames[b].count; });
-                for (size_t k = 0; k < group.size(); ++k) slots[group[k]] = places[k];
+                for (size_t k = 0; k < group.size(); ++k) slots[group[k]] = int64_t(places[k]);
                 group.clear();
             };
             for (size_t i = 0; i < frames.size(); ++i) {
@@ -1146,7 +1229,7 @@ public:
         }
         int64_t late = 0;
         for (size_t i = 0; i < frames.size(); ++i) late = std::max(late, int64_t(i) - slots[i]);
-        std::vector<uint32_t> order;
+        std::vector<uint32_t> shown;
         for (size_t i = 0; i < frames.size(); ++i) {
             const Shown& f = frames[i];
             if (f.empty) continue;
@@ -1156,17 +1239,18 @@ public:
             sample.pts = slots[i] * step;
             sample.dts = (int64_t(i) - late) * step;
             sample.duration = step;
-            sample.sync = typed ? f.type == 0 : intraOnly(t.codec) || f.key;
-            order.push_back(uint32_t(t.samples.size()));
+            sample.sync = typed ? f.type == 0 || (nals && f.key) : intraOnly(t.codec) || f.key;
+            shown.push_back(uint32_t(t.samples.size()));
             t.samples.push_back(sample);
-            if (avc && !lengthSize) s.raw.push_back(f.raw);
+            if (nals && !lengthSize) s.raw.push_back(f.raw);
         }
-        std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return t.samples[a].pts < t.samples[b].pts; });
-        for (size_t i = 0; i + 1 < order.size(); ++i) {
-            int64_t gap = t.samples[order[i + 1]].pts - t.samples[order[i]].pts;
-            t.samples[order[i]].duration = uint32_t(std::clamp<int64_t>(gap, 1, int64_t(step) * 100000));
+        std::sort(shown.begin(), shown.end(), [&](uint32_t a, uint32_t b) { return t.samples[a].pts < t.samples[b].pts; });
+        for (size_t i = 0; i + 1 < shown.size(); ++i) {
+            int64_t gap = t.samples[shown[i + 1]].pts - t.samples[shown[i]].pts;
+            t.samples[shown[i]].duration = uint32_t(std::clamp<int64_t>(gap, 1, int64_t(step) * 100000));
         }
-        if (!t.samples.empty()) t.mediaStart = t.samples[order[0]].pts;
+        if (!shown.empty()) t.samples[shown.back()].duration = uint32_t(std::clamp<int64_t>(int64_t(frames.size()) * step - t.samples[shown.back()].pts, 1, int64_t(step) * 100000));
+        if (!t.samples.empty()) t.mediaStart = t.samples[shown[0]].pts;
         t.delay = int64_t(s.start) * step;
     }
 };
@@ -1188,6 +1272,7 @@ std::unique_ptr<Reader> openAvi(const std::string& path, std::string* error) {
         for (Stream& s : reader->streams) s.chunks.clear();
         reader->walk();
     } else {
+        reader->indexed = true;
         reader->rest();
     }
     if (!reader->streams.empty() && reader->streams[0].tape) reader->tapeSound();

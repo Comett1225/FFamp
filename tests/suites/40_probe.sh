@@ -53,7 +53,7 @@ for f in h264.mp4 hevc.mov frag.mp4 rot90.mp4 rot180.mp4 rot270.mp4 delay.mp4 de
     check "fields of $f" python3 probe_check.py compare $PX/$f
     check "packets of $f" python3 probe_check.py packets $PX/$f
 done
-check "fields of edits.mp4 (first segment only, by design)" python3 probe_check.py compare $PX/edits.mp4 stream0.duration
+check "fields of edits.mp4 (ffprobe counts the leading empty edit in the stream length)" python3 probe_check.py compare $PX/edits.mp4 stream0.duration
 for f in h264_aac.ts hevc_aac.ts h264.m2ts wrap.ts; do
     check "fields of $f" python3 probe_check.py compare $PX/$f $TS_KNOWN stream1.bit_rate~0.04
     check "packets of $f" python3 probe_check.py packets $PX/$f stream0.size stream1.size+7 stream1.pos stream1.pts~1 stream1.dts~1

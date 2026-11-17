@@ -77,8 +77,18 @@ list; `Sample.offset` is then free for the reader's use.
   `pts - mediaStart + delay`. Tracks of one file are kept in sync by their difference in `delay`; a consumer that wants the file to start
   at zero subtracts the smallest `delay` of all tracks (what the app does with ffprobe's format `start_time`).
 - MP4/MOV: leading empty edits (media_time -1) add up to `delay`. The first media edit sets `mediaStart` and, when it has a duration,
-  `mediaEnd`; edits that continue exactly where the previous one ended are joined to it. Later, separate segments are not played.
-  Samples at or after `mediaEnd` are left out of `order`.
+  `mediaEnd`; edits that continue exactly where the previous one ended are joined to it. Samples at or after `mediaEnd` are left out of
+  `order`. In a video track `mediaStart` is the first composition time inside the edit, so an edit at media time 0 on a track whose
+  first picture is shown later starts that picture at the edit's start, as FFmpeg does (with no edit list the picture keeps its time).
+- MP4/MOV with several separate media edits: the segments are joined into one timeline, each one starting where the one before it
+  ends (`mediaEnd` is the end of the last). Video keeps, for each segment, the samples from the key frame before it up to its last
+  shown sample; the samples among them that the segment does not show are decoded but not shown: their `pts` are moved below
+  `mediaStart` (unique, rising in decode order, never a shown time). Sound keeps the packets that start inside each segment (the
+  first segment also its run-in), as FFmpeg does. A segment's first shown sample is placed at the segment's start. A stream copy
+  keeps those samples before the start of its edit, where readers that go by time (FFamp, AVFoundation) do not show them; FFmpeg
+  goes by its index and shows fewer frames of such a copy (its own copy of the source is no better).
+- Fragmented MP4: every fragment sample's `pts` gets the track's largest negative composition offset added (FFmpeg's `dts_shift`),
+  so negative offsets show the video when FFmpeg shows it.
 - MPEG-TS: timescale 90000 for every track. Each track's `dts` starts at 0; `mediaStart` is the pts of its first sample (the first key
   frame for video) and `delay` is that sample's time on the stream clock (33-bit wrap-around undone). A stream that starts less than a
   minute before the wrap gets negative times before it, as ffprobe shows it. `Track.id` is the PID.
@@ -170,21 +180,25 @@ list; `Sample.offset` is then free for the reader's use.
   `LIST rec` groups, takes an odd-sized chunk as padded unless only the unpadded position holds a chunk header, and after bytes that
   are no chunk header searches for the next header whose size fits (FFmpeg's `avi_sync`). A chunk cut off by the end of the file
   keeps the part that is there.
-- AVI key frames: MPEG-1/2/4, H.264, VC-1, Microsoft MPEG-4, H.263 and Cinepak from their pictures (Cinepak: every strip intra, no
-  partial codebook update, no skip vectors); Motion JPEG, DV and raw video on every chunk; any other codec from the index flags
-  (`idx1` flag 0x10, OpenDML bit 31 clear), only the first chunk when an `idx1` marks none (FFmpeg), every chunk when there is no
-  index.
-- Empty chunks are not samples; the picture before them lasts longer. MPEG-1, MPEG-2 and MPEG-4 pictures get their shown order from
-  their picture types, H.264 from its picture order count, with empty chunks in between taking no part in the order (each shown
-  picture gets one of the places its group of pictures holds); `dts` is moved back so it never passes `pts`. A DivX packed bitstream
-  (marked by the `DivX...p` user data) is split into one sample per picture and its placeholder chunks are dropped. H.264 with start
-  codes is converted to 4-byte lengths; H.264 whose format block carries an `avcC` record (an `avc1` stream copied from MP4) is kept
-  as stored with that record as its config.
-- AVI fourccs: every video fourcc FFmpeg's `riff.c` maps to MPEG-4 part 2, H.264, H.263, Motion JPEG, DV, MPEG-1 and MPEG-2 (`dvhd`,
-  `dvh1` and `CDVH` give `dvh6`, or `dvhp` at 720 lines). `BI_RGB` gives codec `raw `, a raw YUV fourcc keeps its own name (`YUY2`,
-  `YUYV`, `YUNV`, `V422`, `VYUY`, `Y422`, `YVYU`, `UYVY`, `UYNV`, `UYNY`, `HDYC`, `uyv1`, `2Vu1`, `VDTZ`, `auv2`, `cyuv`, `I420`,
-  `IYUV`, `yv12`, `YV12`, `YV16`, `Y42B`, `P422`, `Y41B`, `YUV9`, `YVU9`, `Y800`, `Y8  `, `GREY`, `NV12`, `NV21`), Cinepak is `cvid`;
-  all of these get configType `bmih` (the whole format block: BITMAPINFOHEADER and palette) and `Track.bits` = biBitCount.
+- AVI key frames: MPEG-1/2/4, VC-1, Microsoft MPEG-4, H.263 and Cinepak from their pictures (Cinepak: every strip intra, no partial
+  codebook update, no skip vectors); H.264 IDR pictures and the I pictures an index marks as key frames (open GOP, from `idx1`
+  `AVIIF_KEYFRAME` or the OpenDML key bit); HEVC every IRAP picture; Motion JPEG, DV and raw video on every chunk; any other codec from
+  the index flags (`idx1` flag 0x10, OpenDML bit 31 clear), only the first chunk when an `idx1` marks none (FFmpeg), every chunk when
+  there is no index.
+- Empty chunks are not samples; the picture before them lasts longer (the last picture too). MPEG-1, MPEG-2 and MPEG-4 pictures get
+  their shown order from their picture types, H.264 and HEVC from their picture order counts, sorted between IDR (and HEVC BLA)
+  pictures, with empty chunks in between taking no part in the order (each shown picture gets one of the places its group of pictures
+  holds); `dts` is moved back so it never passes `pts`. A DivX packed bitstream (marked by the `DivX...p` user data) is split into one
+  sample per picture and its placeholder chunks are dropped. H.264 and HEVC stored with start codes are converted to 4-byte lengths
+  (delimiters and filler dropped) with an `avcC` / `hvcC` built from the parameter sets; stored with lengths and an `avcC` / `hvcC`
+  record behind the BITMAPINFOHEADER (what `ffmpeg -c copy` writes from MP4), the chunks are kept as they are and the record is the
+  config.
+- AVI fourccs: every video fourcc FFmpeg's `riff.c` maps to MPEG-4 part 2, H.264, HEVC (`HEVC`, `H265`, `HEV1`, `HVC1`, `DVHE`), H.263,
+  Motion JPEG, DV, MPEG-1 and MPEG-2 (`dvhd`, `dvh1` and `CDVH` give `dvh6`, or `dvhp` at 720 lines). `BI_RGB` gives codec `raw `, a
+  raw YUV fourcc keeps its own name (`YUY2`, `YUYV`, `YUNV`, `V422`, `VYUY`, `Y422`, `YVYU`, `UYVY`, `UYNV`, `UYNY`, `HDYC`, `uyv1`,
+  `2Vu1`, `VDTZ`, `auv2`, `cyuv`, `I420`, `IYUV`, `yv12`, `YV12`, `YV16`, `Y42B`, `P422`, `Y41B`, `YUV9`, `YVU9`, `Y800`, `Y8  `,
+  `GREY`, `NV12`, `NV21`), Cinepak is `cvid`; all of these get configType `bmih` (the whole format block: BITMAPINFOHEADER and palette)
+  and `Track.bits` = biBitCount.
 - AVI sound: MP3, MP2, AC-3 and PCM are read as one byte stream across the chunks and cut into their own frames, so chunk borders
   and AVI block timing do not matter. `Sample.offset` is the place in that stream. A dependent E-AC-3 frame joins the packet of the
   frame before it. AAC (tags 0x00FF, 0x1600, 0x1610, 0x706D, 0x4143, 0xA106) takes its AudioSpecificConfig from the codec data
@@ -221,6 +235,12 @@ list; `Sample.offset` is then free for the reader's use.
 - VC-1 in AVI and in Matroska (`V_MS/VFW/FOURCC`) keeps its fourcc (`WMV3`, `WVC1`, `WMVA`) with configType `bmih`, as in ASF. In
   AVI its key frames (I pictures and field pairs that start with an I field) and its shown order (a B or BI picture is shown before
   the anchor stored ahead of it) come from the picture types, as for MPEG-4; the index's key flags are not used.
+- Matroska and WebM rotation: Video > Projection with the rectangular type, pitch 0 and yaw 0 or 180 gives `rotation` from its pose
+  roll as FFmpeg's display matrix does (roll 90, counter-clockwise, is `rotation` 270, as in MP4; with yaw 180, a mirror, `rotation` is
+  the angle FFmpeg reports for that matrix). `MkvWriter` writes ProjectionPoseRoll for a rotated track (`TrackSpec::rotation`).
+- Raw MP3 (and MP2, MP1): after junk of any length (a tag with large cover art in the middle of joined files) the reader finds the
+  frames again. Frames of the same layer at another sample rate are kept, with durations counted in the first frame's rate; mpg123
+  resamples them to that rate, and on the Mac the AudioToolbox converter is rebuilt for their rate with the first rate as its output.
 - A Matroska video codec no decoder here knows is kept as a track named by its VFW fourcc or the first letters of its codec ID, so
   probe reports its name, start and length; `VideoDecoder::open` fails with `video codec not supported by this decoder`.
 

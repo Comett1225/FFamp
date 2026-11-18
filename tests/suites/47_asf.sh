@@ -46,6 +46,9 @@ echo "== asf: altered copies of the fixtures (no FFmpeg)"
 $AC spread $AX/mpeg4_pcm.asf $O/ax_spread.asf 4 512 128
 check "scrambled (spread) sound is put back in its order" [ "$($A packets $O/ax_spread.asf --raw --track 2 | md5)" = "$($A packets $AX/mpeg4_pcm.asf --raw --track 2 | md5)" ]
 check "the scrambled copy really is scrambled" ax_differs $O/ax_spread.asf $AX/mpeg4_pcm.asf
+$AC spread $AX/mpeg4_pcm.asf $O/ax_spread_wide.asf 2 1024 256
+check "sound spread over 2 rows of 4 chunks is put back in its order" [ "$($A packets $O/ax_spread_wide.asf --raw --track 2 | md5)" = "$($A packets $AX/mpeg4_pcm.asf --raw --track 2 | md5)" ]
+check "the 2-row scrambled copy really is scrambled" ax_differs $O/ax_spread_wide.asf $AX/mpeg4_pcm.asf
 $AC explicit $AX/wma2.wma $O/ax_explicit.wma
 check "packets that state their own length give the same media objects" ax_same $O/ax_explicit.wma $AX/wma2.wma
 check "the copy really states packet lengths" ax_differs $O/ax_explicit.wma $AX/wma2.wma
@@ -92,6 +95,7 @@ check "h264_mp3.asf sound against ffmpeg" python3 audio.py against $AX/h264_mp3.
 check "msmpeg4v3.asf sound against ffmpeg" python3 audio.py against $AX/msmpeg4v3.asf 60 0 0
 check "mpeg4_pcm.asf sound bit-exact against ffmpeg" python3 audio.py against $AX/mpeg4_pcm.asf 200 0 0 exact
 check "the scrambled copy's sound bit-exact against ffmpeg" python3 audio.py against $O/ax_spread.asf 200 0 0 exact
+check "the 2-row scrambled copy's sound bit-exact against ffmpeg" python3 audio.py against $O/ax_spread_wide.asf 200 0 0 exact
 
 if [ -n "${WINMEDIA_SAMPLES:-}" ] && [ -d "$WINMEDIA_SAMPLES" ]; then
     echo "== asf: Microsoft-made sample files from WINMEDIA_SAMPLES (not committed)"

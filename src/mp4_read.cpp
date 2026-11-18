@@ -27,9 +27,10 @@ std::string fourccText(uint32_t value) {
 
 double Track::seconds() const {
     if (!timescale || order.empty()) return 0;
-    int64_t end = INT64_MIN;
+    int64_t end = INT64_MIN, begin = INT64_MAX;
     for (uint32_t i : order) end = std::max(end, samples[i].pts + int64_t(samples[i].duration));
-    return double(end - mediaStart) / timescale;
+    for (const Sample& s : samples) if (s.pts + int64_t(s.duration) > mediaStart) begin = std::min(begin, std::max(s.pts, mediaStart));
+    return double(end - (begin == INT64_MAX ? mediaStart : begin)) / timescale;
 }
 
 double Track::rate() const {
@@ -294,6 +295,9 @@ void entry(uint32_t format, View v, Track& track, SoundUnit& unit) {
             if (type == fourcc("avcC") || type == fourcc("hvcC") || type == fourcc("vpcC") || type == fourcc("av1C") || type == fourcc("apvC") || type == fourcc("esds")) {
                 track.configType = type;
                 track.config.assign(body.p, body.p + body.n);
+            } else if (type == fourcc("glbl") && format == fourcc("FFV1") && track.config.empty()) {
+                track.configType = fourcc("FFV1");
+                track.config.assign(body.p, body.p + body.n);
             } else if (type == fourcc("colr")) {
                 uint32_t kind = body.u32();
                 if (kind == fourcc("nclx") || kind == fourcc("nclc")) {
@@ -431,6 +435,7 @@ int64_t movieToTrack(uint64_t ticks, uint32_t movieScale, uint32_t trackScale) {
 struct Segment {
     int64_t time = 0;
     int64_t length = 0;
+    int64_t gap = 0;
 };
 
 void joinSegments(Track& track, const std::vector<Segment>& parts) {
@@ -440,8 +445,11 @@ void joinSegments(Track& track, const std::vector<Segment>& parts) {
     std::vector<Sample> joined;
     std::vector<size_t> away;
     int64_t place = 0, start = 0, lastDts = INT64_MIN;
-    for (size_t j = 0; j < parts.size(); ++j) {
+    const size_t mostJoined = 4 * track.samples.size() + 65536;
+    for (size_t j = 0; j < parts.size() && joined.size() <= mostJoined; ++j) {
         const Segment& part = parts[j];
+        if (part.gap > INT64_MAX / 4 - place) break;
+        place += part.gap;
         const int64_t end = part.time + part.length;
         int64_t lowest = INT64_MAX;
         size_t lo = track.samples.size(), hi = 0;
@@ -500,14 +508,23 @@ void applyEdits(Pending& p, uint32_t movieScale) {
     if (end > track.mediaStart) track.mediaEnd = end;
     std::vector<Segment> parts;
     if (end > track.mediaStart) parts.push_back({track.mediaStart, end - track.mediaStart});
-    for (; at < p.edits.size() && !parts.empty(); ++at) {
+    int64_t gap = 0;
+    const size_t mostParts = std::max<size_t>(1, (size_t(1) << 28) / std::max<size_t>(1, track.samples.size()));
+    for (; at < p.edits.size() && !parts.empty() && parts.size() <= mostParts; ++at) {
         const Edit& edit = p.edits[at];
-        if (edit.time < 0 || edit.duration == 0) continue;
+        if (edit.duration == 0) continue;
         const int64_t length = movieToTrack(edit.duration, movieScale, track.timescale);
+        if (edit.time == -1) {
+            gap = std::min(gap + length, INT64_MAX / 4);
+            continue;
+        }
+        if (edit.time < 0) continue;
         Segment& last = parts.back();
-        if (std::llabs(edit.time - (last.time + last.length)) <= 1 && length <= INT64_MAX / 4 - last.length) last.length += length;
-        else parts.push_back({edit.time, length});
+        if (!gap && std::llabs(edit.time - (last.time + last.length)) <= 1 && length <= INT64_MAX / 4 - last.length) last.length += length;
+        else parts.push_back({edit.time, length, gap});
+        gap = 0;
     }
+    if (parts.size() > mostParts) parts.resize(mostParts);
     if (parts.size() > 1 && !track.samples.empty()) {
         joinSegments(track, parts);
         return;
@@ -662,10 +679,12 @@ void trak(View v, Pending& p) {
     });
 }
 
-void placePcm(Pending& p, uint64_t fileSize, uint32_t unit, uint32_t frames, uint64_t group) {
+void placePcm(Pending& p, uint64_t fileSize, uint32_t unit, uint32_t frames, uint64_t group, uint64_t& samplesLeft) {
     Track& track = p.track;
     uint32_t delta = p.stts[0].second;
-    uint64_t left = std::min(p.sampleCount, p.stts[0].first);
+    uint64_t listed = 0;
+    for (const auto& run : p.stts) listed += run.first;
+    uint64_t left = std::min<uint64_t>(p.sampleCount, listed);
     if (unit < 1 || unit > 65536 || delta > 65536 || frames < 1 || frames > 65536) return;
     left = std::min(left, fileSize / unit * frames);
     int64_t dts = 0;
@@ -678,7 +697,8 @@ void placePcm(Pending& p, uint64_t fileSize, uint32_t unit, uint32_t frames, uin
             uint64_t taken = std::min<uint64_t>(p.stsc[r].count, left);
             left -= taken;
             uint64_t inChunk = taken / frames;
-            while (inChunk) {
+            while (inChunk && samplesLeft) {
+                --samplesLeft;
                 uint64_t take = std::min(inChunk, group);
                 Sample s;
                 s.offset = offset;
@@ -722,7 +742,7 @@ void gapless(View movie, std::vector<Track*>& audio, const std::map<uint32_t, bo
     }
 }
 
-void place(Pending& p, uint64_t fileSize) {
+void place(Pending& p, uint64_t fileSize, uint64_t& samplesLeft) {
     Track& track = p.track;
     SoundUnit unit;
     if (p.stsd.n >= 8) {
@@ -741,10 +761,12 @@ void place(Pending& p, uint64_t fileSize) {
         track.configType = fourcc("wfex");
         track.config.assign(form, form + 18);
     }
-    const bool framed = p.fixedSize == 1 && unit.frames && unit.bytes && waveDecoded(track.codec);
-    if (track.kind == Kind::Audio && p.fixedSize && p.stts.size() == 1 && track.channels > 0 && (framed || (track.codec == fourcc("lpcm") && track.bits >= 8))) {
-        if (framed) placePcm(p, fileSize, unit.bytes, unit.frames, unit.frames >= 160 ? 1 : std::max<uint32_t>(1, 1024 / unit.frames));
-        else placePcm(p, fileSize, p.fixedSize == 1 ? uint32_t(track.channels) * uint32_t(track.bits / 8) : p.fixedSize, 1, 4096);
+    const bool lpcm = track.codec == fourcc("lpcm");
+    const bool framed = p.fixedSize == 1 && unit.frames && unit.bytes && !lpcm;
+    const bool steady = !p.stts.empty() && std::all_of(p.stts.begin(), p.stts.end(), [&](const auto& run) { return run.second == p.stts[0].second; });
+    if (track.kind == Kind::Audio && p.fixedSize && steady && track.channels > 0 && (framed || (lpcm && track.bits >= 8))) {
+        if (framed) placePcm(p, fileSize, unit.bytes, unit.frames, unit.frames >= 160 ? 1 : std::max<uint32_t>(1, 1024 / unit.frames), samplesLeft);
+        else placePcm(p, fileSize, p.fixedSize == 1 ? uint32_t(track.channels) * uint32_t(track.bits / 8) : p.fixedSize, 1, 4096, samplesLeft);
         return;
     }
     uint32_t count = p.sampleCount;
@@ -754,6 +776,8 @@ void place(Pending& p, uint64_t fileSize) {
     for (const Run& run : p.stsc) possible = std::max<uint64_t>(possible, run.count);
     possible *= p.chunks.size();
     if (count > possible) count = uint32_t(possible);
+    if (count > samplesLeft) count = uint32_t(samplesLeft);
+    samplesLeft -= count;
     track.samples.assign(count, Sample());
     uint32_t index = 0;
     for (size_t r = 0; r < p.stsc.size() && index < count; ++r) {
@@ -851,7 +875,7 @@ void fragment(View v, uint64_t start, std::map<uint32_t, Pending>& tracks, uint6
                     s.offset = offset;
                     s.dts = p->fragmentTime;
                     s.pts = s.dts + shift;
-                    s.sync = !(sampleFlags & 0x10000);
+                    s.sync = !(sampleFlags & 0x01010000);
                     offset += s.size;
                     p->fragmentTime += s.duration;
                     p->track.samples.push_back(s);
@@ -906,7 +930,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
     std::vector<uint8_t> piece;
     bool seen = false;
     uint64_t at = 0;
-    uint64_t samplesLeft = total;
+    uint64_t samplesLeft = total / 8 + 65536;
     while (at + 8 <= total) {
         uint8_t head[16];
         if (fseeko(file, int64_t(at), SEEK_SET) != 0 || fread(head, 1, 8, file) != 8) break;
@@ -942,9 +966,10 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
                 } else if (name == fourcc("trak")) {
                     Pending p;
                     trak(content, p);
-                    place(p, total);
-                    p.placed = p.track.samples.size();
+                    place(p, total, samplesLeft);
+                    if (!p.track.samples.empty()) p.fragmentTime = p.track.samples.back().dts + int64_t(p.track.samples.back().duration);
                     applyEdits(p, movieScale);
+                    p.placed = p.track.samples.size();
                     if (p.track.id && !pending.count(p.track.id)) {
                         ids.push_back(p.track.id);
                         pending.emplace(p.track.id, std::move(p));
@@ -977,13 +1002,17 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
         for (size_t i = from.placed; i < from.track.samples.size(); ++i) from.track.samples[i].pts += from.dtsShift;
         Track track = std::move(from.track);
         size_t keep = 0;
-        while (keep < track.samples.size() && track.samples[keep].offset <= total && track.samples[keep].size <= total - track.samples[keep].offset) ++keep;
+        uint64_t bytesLeft = 8 * total + (1u << 20);
+        for (; keep < track.samples.size(); ++keep) {
+            const Sample& s = track.samples[keep];
+            if (s.offset > total || s.size > total - s.offset || s.size > bytesLeft) break;
+            bytesLeft -= s.size;
+        }
         track.samples.resize(keep);
         if (waveDecoded(track.codec) && track.mediaEnd >= 0) {
-            for (const Sample& s : track.samples) {
-                const int64_t end = s.pts + std::max<int64_t>(s.duration, waveFrames(track, s.size));
-                if (s.pts < track.mediaEnd && end > track.mediaEnd) track.mediaEnd = end;
-            }
+            const Sample* last = nullptr;
+            for (const Sample& s : track.samples) if (s.pts < track.mediaEnd && (!last || s.pts >= last->pts)) last = &s;
+            if (last) track.mediaEnd = std::max(track.mediaEnd, last->pts + std::max<int64_t>(last->duration, waveFrames(track, last->size)));
         }
         for (uint32_t i = 0; i < track.samples.size(); ++i) {
             if (track.samples[i].pts >= track.mediaStart && (track.mediaEnd < 0 || track.samples[i].pts < track.mediaEnd)) track.order.push_back(i);

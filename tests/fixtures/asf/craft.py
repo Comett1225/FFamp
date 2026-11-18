@@ -131,7 +131,7 @@ def spread(data, span, packet, chunk):
         stored = bytearray(logical)
         for base in range(0, len(logical) - group + 1, group):
             for out in range(span * across):
-                place = (out % across) * span + out // across
+                place = (out % span) * across + out // span
                 stored[base + place * chunk:base + (place + 1) * chunk] = logical[base + out * chunk:base + (out + 1) * chunk]
         done = 0
         for a, n in item["pieces"]:

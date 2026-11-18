@@ -148,16 +148,23 @@ OrderFields orderFields(const std::vector<uint8_t>& set) {
             }
         }
     }
-    f.numberBits = int(r.ue()) + 4;
+    const uint32_t numberSize = r.ue();
+    if (numberSize > 12) return f;
+    f.numberBits = int(numberSize) + 4;
     uint32_t kind = r.ue();
-    if (kind == 0) f.countBits = int(r.ue()) + 4;
-    else if (kind == 1) return f;
+    if (kind == 0) {
+        const uint32_t countSize = r.ue();
+        if (countSize > 12) return f;
+        f.countBits = int(countSize) + 4;
+    } else if (kind == 1) {
+        return f;
+    }
     r.ue();
     r.skip(1);
     r.ue();
     r.ue();
     f.framesOnly = r.bit();
-    f.usable = r.ok && kind == 0 && f.numberBits >= 4 && f.numberBits <= 16 && f.countBits >= 4 && f.countBits <= 16;
+    f.usable = r.ok && kind == 0;
     return f;
 }
 
@@ -395,6 +402,7 @@ public:
     std::vector<std::pair<uint64_t, uint64_t>> movies;
     uint64_t oldIndexAt = 0;
     uint64_t oldIndexSize = 0;
+    uint64_t indexEntriesLeft = 0;
     uint32_t framePeriod = 0;
     bool indexed = false;
     std::vector<uint8_t> scratch;
@@ -617,7 +625,8 @@ public:
         uint64_t base = le64(h + 12);
         if (base >= source.size() && (base >> 32) == (base & 0xFFFFFFFFu) && (base & 0xFFFFFFFFu) < source.size()) base &= 0xFFFFFFFFu;
         if (stride < 8 || count > (size - 24) / stride) return;
-        for (uint64_t i = 0; i < count; ++i) {
+        for (uint64_t i = 0; i < count && indexEntriesLeft; ++i) {
+            --indexEntriesLeft;
             const uint8_t* e = source.view(at + 24 + i * stride, 8);
             if (!e) return;
             const uint32_t length = le32(e + 4);
@@ -635,7 +644,8 @@ public:
         }
         if (h[3] != 0 || le16(h) != 4) return;
         uint64_t count = std::min<uint64_t>(le32(h + 4), (size - 24) / 16);
-        for (uint64_t i = 0; i < count; ++i) {
+        for (uint64_t i = 0; i < count && indexEntriesLeft; ++i) {
+            --indexEntriesLeft;
             const uint8_t* e = source.view(at + 24 + i * 16, 16);
             if (!e) break;
             uint64_t place = le64(e);
@@ -647,6 +657,7 @@ public:
 
     bool openIndexes() {
         bool any = false;
+        indexEntriesLeft = source.size() / 8 + 65536;
         for (Stream& s : streams) {
             if (s.indexSize >= 24) superIndex(s, s.indexAt, s.indexSize, 0);
             any = any || !s.chunks.empty();
@@ -971,7 +982,7 @@ public:
                 rate = d.rate;
                 channels = d.channels;
                 codec = d.codec;
-            } else if (!mpeg && d.dependent && d.bytes >= need && d.bytes <= total - at && !t.samples.empty() && t.samples.back().offset + t.samples.back().size == at) {
+            } else if (!mpeg && d.dependent && d.bytes >= need && d.bytes <= total - at && !t.samples.empty() && t.samples.back().offset + t.samples.back().size == at && t.samples.back().size < (1u << 20)) {
                 t.samples.back().size += d.bytes;
                 at += d.bytes;
                 lost = 0;

@@ -221,9 +221,10 @@ bool pictureToLayout(const Picture& p, int width, int height, PixelLayout layout
     ready.bits = p.bits;
     ready.color = p.color;
     const int matrix = p.color.known ? p.color.matrix : 2;
-    if (matrix != 0 && matrix != 1 && matrix != 5 && matrix != 6 && matrix != 9 && matrix != 10 && p.color.transfer != 16 && p.color.transfer != 18) {
+    const bool hdr = p.color.transfer == 16 || p.color.transfer == 18;
+    if ((matrix == 0 && !gbr) || (matrix != 0 && matrix != 1 && matrix != 5 && matrix != 6 && matrix != 9 && matrix != 10 && !hdr)) {
         ready.color.known = true;
-        ready.color.matrix = p.height >= 720 ? 1 : 6;
+        ready.color.matrix = hdr ? 9 : p.height >= 720 ? 1 : 6;
     }
     const auto lumaAcross = tapsFor(p.width, width), lumaDown = tapsFor(p.height, height);
     const auto chromaAcross = tapsFor(p.chromaWidth, chromaWidth), chromaDown = tapsFor(p.chromaHeight, chromaHeight);

@@ -91,6 +91,7 @@ ffv1_range.mkv yuv422p10le - -c:v ffv1 -coder 1 -slices 4 -pix_fmt yuv422p10le -
 ffv1_v1.avi yuv420p - -c:v ffv1 -level 1 -g 5
 ffv1_rgb.mkv gbrp - -c:v ffv1 -pix_fmt bgr0 -g 5
 ffv1_rgba.mkv gbrap alpha -c:v ffv1 -pix_fmt bgra -coder 1 -g 5
+ffv1_v3.mov yuv420p - -c:v ffv1 -level 3 -slices 4 -g 5
 hap.mov gbrp - -c:v hap
 hap_alpha.mov gbrap alpha -c:v hap -format hap_alpha
 hap_q.mov gbrp - -c:v hap -format hap_q

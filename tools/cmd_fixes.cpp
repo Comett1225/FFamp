@@ -1,7 +1,9 @@
 #include "../src/aac_config.h"
 #include "../src/capture.h"
+#include "../src/frames.h"
 #include "../src/nal.h"
 #include "../src/tools_common.h"
+#include "absent/android.h"
 #include "absent/audio.h"
 #include "absent/encoders.h"
 #include "cli.h"
@@ -1320,6 +1322,327 @@ bool manyReaders() {
 }
 #endif
 
+std::vector<uint8_t> escapedNal(const std::string& bits, uint8_t head) {
+    std::vector<uint8_t> raw = {head};
+    for (size_t i = 0; i < bits.size(); i += 8) {
+        uint8_t value = 0;
+        for (size_t k = 0; k < 8; ++k) value = uint8_t(value << 1 | (i + k < bits.size() && bits[i + k] == '1'));
+        raw.push_back(value);
+    }
+    std::vector<uint8_t> out;
+    int zeros = 0;
+    for (uint8_t b : raw) {
+        if (zeros >= 2 && b <= 3) {
+            out.push_back(3);
+            zeros = 0;
+        }
+        out.push_back(b);
+        zeros = b ? 0 : zeros + 1;
+    }
+    return out;
+}
+
+std::vector<uint8_t> hostileAvi(bool loopingIndex) {
+    const std::string wideCount = std::string(30, '0') + "1" + std::string(29, '0') + "1";
+    const std::vector<uint8_t> sps = escapedNal("01000010" "11000000" "00011110" "111" + wideCount + "010" "0" "00100" "00100" "1" "1" "0" "0" "1", 0x67);
+    std::vector<uint8_t> header, format, stream, hdrl, movi, index, body, file;
+    text(header, "vids");
+    text(header, "H264");
+    little(header, 0, 12);
+    little(header, 1, 4);
+    little(header, 25, 4);
+    header.resize(56, 0);
+    little(format, 40, 4);
+    little(format, 64, 4);
+    little(format, 64, 4);
+    little(format, 1, 2);
+    little(format, 24, 2);
+    text(format, "H264");
+    format.resize(40, 0);
+    for (uint8_t b : {1, 0x42, 0xC0, 0x1E, 0xFF, 0xE1}) format.push_back(b);
+    format.push_back(uint8_t(sps.size() >> 8));
+    format.push_back(uint8_t(sps.size()));
+    format.insert(format.end(), sps.begin(), sps.end());
+    for (uint8_t b : {1, 0, 4, 0x68, 0xCE, 0x38, 0x80}) format.push_back(b);
+    chunk(stream, "strh", header);
+    chunk(stream, "strf", format);
+    if (loopingIndex) {
+        std::vector<uint8_t> super;
+        little(super, 4, 2);
+        little(super, 0, 2);
+        little(super, 100, 4);
+        text(super, "00dc");
+        super.resize(24, 0);
+        for (int i = 0; i < 100; ++i) {
+            little(super, 0, 8);
+            little(super, 24 + 1600 + 8, 4);
+            little(super, 1, 4);
+        }
+        chunk(stream, "indx", super);
+    }
+    chunk(hdrl, "avih", std::vector<uint8_t>(56, 0));
+    std::vector<uint8_t> list = listed("strl", stream);
+    hdrl.insert(hdrl.end(), list.begin(), list.end());
+    const std::vector<uint8_t> slice = {0, 0, 0, 6, 0x65, 0x88, 0x87, 0xFF, 0xFF, 0xFF};
+    for (int i = 0; i < 20; ++i) {
+        text(index, "00dc");
+        little(index, 0x10, 4);
+        little(index, 4 + movi.size(), 4);
+        little(index, slice.size(), 4);
+        chunk(movi, "00dc", slice);
+    }
+    text(body, "AVI ");
+    for (const std::vector<uint8_t>& part : {listed("hdrl", hdrl), listed("movi", movi)}) body.insert(body.end(), part.begin(), part.end());
+    chunk(body, "idx1", index);
+    chunk(file, "RIFF", body);
+    if (loopingIndex) {
+        static const char name[] = "indx";
+        const uint64_t at = uint64_t(std::search(file.begin(), file.end(), name, name + 4) - file.begin());
+        for (int i = 0; i < 100; ++i) for (int k = 0; k < 8; ++k) file[at + 8 + 24 + size_t(i) * 16 + size_t(k)] = uint8_t(at >> (8 * k));
+    }
+    return file;
+}
+
+bool aviHostile() {
+    for (bool looping : {false, true}) {
+        const std::string path = scratch(looping ? "looping_index.avi" : "wide_sps.avi");
+        if (!save(path, hostileAvi(looping))) return false;
+        const auto start = std::chrono::steady_clock::now();
+        auto reader = Reader::open(path);
+        const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+        if (!video || video->samples.size() != 20 || std::chrono::steady_clock::now() - start > std::chrono::seconds(3)) return false;
+    }
+    return true;
+}
+
+void fullBox(Bytes& b, const char (&name)[5], const std::vector<uint32_t>& words) {
+    const size_t at = b.open(fourcc(name), 0, 0);
+    for (uint32_t w : words) b.u32(w);
+    b.close(at);
+}
+
+void testTrak(Bytes& b, uint32_t id, const char (&handler)[5], uint32_t scale, const std::vector<uint32_t>& edits, const std::function<void(Bytes&)>& tables) {
+    const size_t trak = b.open(fourcc("trak"));
+    const size_t tkhd = b.open(fourcc("tkhd"), 0, 3);
+    b.zero(8);
+    b.u32(id);
+    b.zero(4 + 4 + 8 + 8 + 36 + 8);
+    b.close(tkhd);
+    if (!edits.empty()) {
+        const size_t edts = b.open(fourcc("edts"));
+        std::vector<uint32_t> list = {uint32_t(edits.size() / 2)};
+        for (size_t i = 0; i + 1 < edits.size(); i += 2) list.insert(list.end(), {edits[i], edits[i + 1], 0x00010000});
+        fullBox(b, "elst", list);
+        b.close(edts);
+    }
+    const size_t mdia = b.open(fourcc("mdia"));
+    fullBox(b, "mdhd", {0, 0, scale, 0, 0x55C40000});
+    const size_t hdlr = b.open(fourcc("hdlr"), 0, 0);
+    b.u32(0);
+    b.u32(fourcc(handler));
+    b.zero(13);
+    b.close(hdlr);
+    const size_t minf = b.open(fourcc("minf"));
+    const size_t stbl = b.open(fourcc("stbl"));
+    tables(b);
+    b.close(stbl);
+    b.close(minf);
+    b.close(mdia);
+    b.close(trak);
+}
+
+Bytes testMovie(uint32_t scale, const std::function<void(Bytes&)>& traks) {
+    Bytes b;
+    const size_t ftyp = b.open(fourcc("ftyp"));
+    b.u32(fourcc("qt  "));
+    b.u32(0);
+    b.close(ftyp);
+    const size_t moov = b.open(fourcc("moov"));
+    fullBox(b, "mvhd", {0, 0, scale, 0, 0x00010000, 0x01000000, 0, 0, 0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000, 0, 0, 0, 0, 0, 0, 2});
+    traks(b);
+    b.close(moov);
+    return b;
+}
+
+bool mp4SampleBudget() {
+    Bytes b = testMovie(1000, [](Bytes& m) {
+        testTrak(m, 1, "meta", 1000, {}, [](Bytes& t) {
+            std::vector<uint32_t> sizes = {0, 3000}, offsets = {3000};
+            sizes.resize(2 + 3000, 60000);
+            offsets.resize(1 + 3000, 0);
+            fullBox(t, "stsz", sizes);
+            fullBox(t, "stsc", {1, 1, 1, 1});
+            fullBox(t, "stco", offsets);
+            fullBox(t, "stts", {1, 3000, 1});
+        });
+        for (uint32_t id = 2; id <= 101; ++id) {
+            testTrak(m, id, "meta", 1000, {}, [](Bytes& t) {
+                fullBox(t, "stsz", {1, 0xFFFFFFFFu});
+                fullBox(t, "stsc", {1, 1, 0xFFFFFFFFu, 1});
+                fullBox(t, "stco", {1, 0});
+                fullBox(t, "stts", {1, 0xFFFFFFFFu, 1});
+            });
+        }
+        const size_t mvex = m.open(fourcc("mvex"));
+        fullBox(m, "trex", {1, 1, 1, 0, 0});
+        m.close(mvex);
+    });
+    const size_t moof = b.open(fourcc("moof"));
+    const size_t traf = b.open(fourcc("traf"));
+    fullBox(b, "tfhd", {1});
+    fullBox(b, "trun", {40000});
+    b.close(traf);
+    b.close(moof);
+    const size_t mdat = b.open(fourcc("mdat"));
+    b.zero(65536);
+    b.close(mdat);
+    const std::string path = scratch("many_tracks_budget.mov");
+    if (!save(path, b.d)) return false;
+    auto reader = Reader::open(path);
+    if (!reader || reader->tracks().empty()) return false;
+    uint64_t samples = 0;
+    for (const Track& t : reader->tracks()) samples += t.samples.size();
+    return samples <= b.d.size() / 8 + 65536 && reader->tracks()[0].id == 1 && reader->tracks()[0].samples.size() < 100;
+}
+
+bool mp4EditGaps() {
+    const auto video = [](Bytes& m, const std::vector<uint32_t>& edits, bool firstKeyOnly) {
+        testTrak(m, 1, "vide", 30, edits, [&](Bytes& t) {
+            if (firstKeyOnly) fullBox(t, "stss", {1, 1});
+            fullBox(t, "stsz", {1, 10});
+            fullBox(t, "stsc", {1, 1, 10, 1});
+            fullBox(t, "stco", {1, 8});
+            fullBox(t, "stts", {1, 10, 1});
+        });
+    };
+    std::vector<uint32_t> repeated;
+    for (int i = 0; i < 10000; ++i) repeated.insert(repeated.end(), {1, 9, 1, 0});
+    for (bool gap : {true, false}) {
+        Bytes b = testMovie(30, [&](Bytes& m) { video(m, gap ? std::vector<uint32_t>{4, 0, 3, 0xFFFFFFFFu, 4, 6} : repeated, !gap); });
+        const size_t mdat = b.open(fourcc("mdat"));
+        b.zero(16);
+        b.close(mdat);
+        const std::string path = scratch(gap ? "edit_gap.mov" : "edit_repeats.mov");
+        if (!save(path, b.d)) return false;
+        auto reader = Reader::open(path);
+        const Track* t = reader ? reader->first(Kind::Video) : nullptr;
+        if (!t) return false;
+        if (gap && (t->mediaEnd != 11 || t->order.size() != 8 || t->samples[t->order[4]].pts != 7)) return false;
+        if (!gap && t->samples.size() > 4 * 10 + 65536 + 10) return false;
+    }
+    return true;
+}
+
+bool mp4FragmentTimes() {
+    Bytes b = testMovie(30, [](Bytes& m) {
+        testTrak(m, 1, "vide", 30, {}, [](Bytes& t) {
+            fullBox(t, "stsz", {1, 3});
+            fullBox(t, "stsc", {1, 1, 3, 1});
+            fullBox(t, "stco", {1, 8});
+            fullBox(t, "stts", {1, 3, 1});
+        });
+        testTrak(m, 2, "vide", 30, {}, [](Bytes& t) {
+            fullBox(t, "stsz", {0, 0});
+            fullBox(t, "stsc", {0});
+            fullBox(t, "stco", {0});
+            fullBox(t, "stts", {0});
+        });
+        const size_t mvex = m.open(fourcc("mvex"));
+        fullBox(m, "trex", {1, 1, 1, 1, 0});
+        fullBox(m, "trex", {2, 1, 1, 1, 0});
+        m.close(mvex);
+    });
+    const size_t moof = b.open(fourcc("moof"));
+    for (uint32_t id : {1u, 2u}) {
+        const size_t traf = b.open(fourcc("traf"));
+        const size_t tfhd = b.open(fourcc("tfhd"), 0, 0x020000);
+        b.u32(id);
+        b.close(tfhd);
+        if (id == 2) fullBox(b, "tfdt", {3600 * 30});
+        fullBox(b, "trun", {id == 1 ? 2u : 30u});
+        b.close(traf);
+    }
+    b.close(moof);
+    const size_t mdat = b.open(fourcc("mdat"));
+    b.zero(64);
+    b.close(mdat);
+    const std::string path = scratch("fragment_times.mp4");
+    if (!save(path, b.d)) return false;
+    auto reader = Reader::open(path);
+    if (!reader || reader->tracks().size() != 2) return false;
+    const Track& joined = reader->tracks()[0];
+    const Track& late = reader->tracks()[1];
+    if (joined.samples.size() != 5 || joined.samples[3].dts != 3 || joined.samples[4].dts != 4) return false;
+    return late.samples.size() == 30 && std::fabs(late.seconds() - 1.0) < 0.01 && std::fabs(late.rate() - 30.0) < 0.5;
+}
+
+bool movMp3Packets() {
+    const uint32_t frames = 1152 * 10;
+    Bytes b = testMovie(44100, [&](Bytes& m) {
+        testTrak(m, 1, "soun", 44100, {}, [&](Bytes& t) {
+            const size_t stsd = t.open(fourcc("stsd"), 0, 0);
+            t.u32(1);
+            const size_t entry = t.open(fourcc(".mp3"));
+            t.zero(6);
+            t.u16(1);
+            t.u16(1);
+            t.zero(6);
+            t.u16(1);
+            t.u16(16);
+            t.u16(0xFFFE);
+            t.u16(0);
+            t.u32(44100u << 16);
+            for (uint32_t v : {1152u, 417u, 417u, 2u}) t.u32(v);
+            t.close(entry);
+            t.close(stsd);
+            fullBox(t, "stsz", {1, frames});
+            fullBox(t, "stsc", {1, 1, frames, 1});
+            fullBox(t, "stco", {1, 0});
+            fullBox(t, "stts", {2, frames / 2, 1, frames / 2, 1});
+        });
+    });
+    const size_t mdat = b.open(fourcc("mdat"));
+    const uint32_t data = uint32_t(b.d.size());
+    b.zero(4170);
+    b.close(mdat);
+    static const char name[] = "stco";
+    const size_t at = size_t(std::search(b.d.begin(), b.d.end(), name, name + 4) - b.d.begin()) + 12;
+    for (int k = 0; k < 4; ++k) b.d[at + size_t(k)] = uint8_t(data >> (24 - 8 * k));
+    const std::string path = scratch("mp3_frames.mov");
+    if (!save(path, b.d)) return false;
+    auto reader = Reader::open(path);
+    const Track* t = reader ? reader->first(Kind::Audio) : nullptr;
+    if (!t || t->codec != fourcc(".mp3") || t->samples.size() != 10) return false;
+    for (const Sample& s : t->samples) if (s.size != 417 || s.duration != 1152) return false;
+    return t->samples[9].offset == data + 9 * 417;
+}
+
+bool androidVorbisConfig() {
+    auto reader = Reader::open(fixtures + "/readers/vp8_vorbis.webm");
+    const Track* sound = reader ? reader->first(Kind::Audio) : nullptr;
+    if (!sound) return false;
+    const auto config = android::codecConfig(*sound);
+    return config.size() == 2 && config[0].size() == 30 && config[0][0] == 1 && config[1].size() > 7 && config[1][0] == 5 && memcmp(config[1].data() + 1, "vorbis", 6) == 0;
+}
+
+bool scaledMatrixZero() {
+    std::vector<uint8_t> luma(64 * 64, 81), blue(32 * 32, 90), red(32 * 32, 240);
+    absent::Picture p;
+    p.plane[0] = luma.data();
+    p.plane[1] = blue.data();
+    p.plane[2] = red.data();
+    p.stride[0] = 64;
+    p.stride[1] = p.stride[2] = 32;
+    p.width = p.height = 64;
+    p.chromaWidth = p.chromaHeight = 32;
+    p.color.known = true;
+    p.color.matrix = 0;
+    std::vector<uint8_t> same, scaled;
+    if (!pictureToLayout(p, 64, 64, PixelLayout::Bgra, same) || !pictureToLayout(p, 32, 32, PixelLayout::Bgra, scaled)) return false;
+    for (int c = 0; c < 3; ++c) if (std::abs(int(same[size_t(c)]) - int(scaled[size_t(c)])) > 2) return false;
+    return true;
+}
+
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre}, {"s16-gain", s16Gain},
     {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"encoder-names", encoderNames}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
@@ -1337,6 +1660,8 @@ const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"finish-twice", finishTwice}, {"many-tracks", manyTracks}, {"long-gap", longGap}, {"wma-block-align", wmaBlockAlign},
     {"interleave", interleave}, {"colour-unknown", colourUnknown}, {"copy-codecs", copyCodecs}, {"mkv-frame-rate", mkvFrameRate}, {"gif-hold", gifHold},
     {"chroma-lines", chromaLines}, {"aac-mono-rate", aacMonoRate}, {"copy-tags", copyTags}, {"mkv-rotation", mkvRotation},
+    {"avi-hostile", aviHostile}, {"mp4-sample-budget", mp4SampleBudget}, {"mp4-edit-gaps", mp4EditGaps}, {"mp4-fragment-times", mp4FragmentTimes},
+    {"mov-mp3-packets", movMp3Packets}, {"android-vorbis-config", androidVorbisConfig}, {"scaled-matrix-zero", scaledMatrixZero},
 };
 
 int fixcheck(const Args& args) {

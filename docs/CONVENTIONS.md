@@ -122,7 +122,8 @@ list; `Sample.offset` is then free for the reader's use.
   ends (`mediaEnd` is the end of the last). Video keeps, for each segment, the samples from the key frame before it up to its last
   shown sample; the samples among them that the segment does not show are decoded but not shown: their `pts` are moved below
   `mediaStart` (unique, rising in decode order, never a shown time). Sound keeps the packets that start inside each segment (the
-  first segment also its run-in), as FFmpeg does. A segment's first shown sample is placed at the segment's start. A stream copy
+  first segment also its run-in), as FFmpeg does. A segment's first shown sample is placed at the segment's start. An empty edit
+  between media edits leaves a pause of its length before the next segment, as in FFmpeg. A stream copy
   keeps those samples before the start of its edit, where readers that go by time (FFamp, AVFoundation) do not show them; FFmpeg
   goes by its index and shows fewer frames of such a copy (its own copy of the source is no better).
 - Fragmented MP4: every fragment sample's `pts` gets the track's largest negative composition offset added (FFmpeg's `dts_shift`),

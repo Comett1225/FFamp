@@ -1,6 +1,7 @@
 #include "absent/android.h"
 #include "aac_config.h"
 #include "own_video.h"
+#include "read_common.h"
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -161,6 +162,11 @@ std::vector<std::vector<uint8_t>> codecConfig(const Track& t) {
         std::vector<uint8_t> out = {'f', 'L', 'a', 'C', 0x80, 0, 0, 34};
         out.insert(out.end(), c.begin(), c.end());
         return {out};
+    }
+    if (t.configType == fourcc("vorb")) {
+        std::vector<View> headers;
+        if (!splitXiph(c, headers) || headers.size() != 3) return {};
+        return {std::vector<uint8_t>(headers[0].p, headers[0].p + headers[0].n), std::vector<uint8_t>(headers[2].p, headers[2].p + headers[2].n)};
     }
     return {};
 }

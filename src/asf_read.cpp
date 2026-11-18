@@ -480,7 +480,7 @@ public:
             const uint32_t across = s.virtualPacket / s.virtualChunk;
             for (; b.size - done >= group; done += group) {
                 for (uint32_t out = 0; out < s.span * across; ++out) {
-                    const uint32_t stored = (out % across) * s.span + out / across;
+                    const uint32_t stored = (out % s.span) * across + out / s.span;
                     appendRange(s, b, starts, done + stored * s.virtualChunk, s.virtualChunk);
                 }
             }
@@ -526,9 +526,10 @@ public:
 
     uint64_t packet(uint64_t at, uint32_t number) {
         const size_t want = size_t(std::min<uint64_t>(packetSize ? packetSize : std::max(largestPacket, 1u), std::min<uint64_t>(dataEnd - at, kLargestPacket)));
-        const uint8_t* p = source.view(at, want);
+        const size_t head = packetSize ? want : std::min<size_t>(want, 64);
+        const uint8_t* p = source.view(at, head);
         if (!p || want < 2) return 0;
-        Cursor c{p, want};
+        Cursor c{p, head};
         uint32_t flags = c.u8();
         if (flags & 0x80) {
             if (flags & 0x60) return packetSize;
@@ -548,6 +549,11 @@ public:
         const uint64_t step = packetSize ? packetSize : length;
         if (padding > length || length - padding < c.at) return step;
         const size_t end = std::min(length - padding, want);
+        if (end > head) {
+            p = source.view(at, end);
+            if (!p) return 0;
+            c.p = p;
+        }
         c.n = end;
         const bool multiple = flags & 1;
         uint32_t count = 1, lengthType = 2;

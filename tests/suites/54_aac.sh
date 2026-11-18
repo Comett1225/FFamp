@@ -77,6 +77,8 @@ $F -f lavfi -i "aevalsrc=0.3*sin(2*PI*(200+400*t)*t)|0.3*sin(2*PI*(300+200*t)*t)
 check "long 5.1 aac against ffmpeg at 135 dB" python3 audio.py against $AX/long.m4a 135 0 0
 check "long 5.1 aac: random reads and chunk sizes equal the straight decode" python3 audio.py chunks adecode $AX/long.m4a 40 7
 check "long 5.1 aac: decode time against ffmpeg's (no more than 2 times: its MDCT is AVX2 assembly, ours plain C++)" python3 wma_check.py speed $AX/long.m4a 2
+$F -f lavfi -i "aevalsrc=0.3*sin(2*PI*200*t)|0.3*sin(2*PI*300*t)|0.2*sin(2*PI*500*t)|0.3*sin(2*PI*60*t)|0.2*sin(2*PI*700*t)|0.2*sin(2*PI*900*t)|0.2*sin(2*PI*1100*t)|0.2*sin(2*PI*1300*t):s=48000:d=$AX_LONG:c=7.1" -c:a aac -b:a 512k $AX/long71.m4a
+check "long 7.1 aac: random reads past the first restart point keep the side and back pairs apart (equal the straight decode)" python3 audio.py chunks adecode $AX/long71.m4a 40 7
 for f in he_stereo_44k he_v2_44k; do
     for i in $(seq $((AX_LONG / 8))); do cat $FAA/$f.aac; done > $AX/long_$f.aac
     check "long_$f.aac against ffmpeg" python3 audio.py against $AX/long_$f.aac 135 0 0 peer

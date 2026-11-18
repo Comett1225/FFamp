@@ -244,8 +244,8 @@ struct PngDecoder : SoftDecoder {
             at += size_t(length) + 12;
         }
         const int channels = type == 0 ? 1 : type == 2 ? 3 : type == 3 ? 1 : type == 4 ? 2 : type == 6 ? 4 : 0;
-        if (!channels || !width || !height || uint64_t(width + 128) * uint64_t(height + 128) >= (uint64_t(1) << 28) || interlace > 1) return false;
-        if (depth != 8 && depth != 16 && !(depth < 8 && (type == 0 || type == 3) && (depth == 1 || depth == 2 || depth == 4))) return false;
+        if (!channels || !width || !height || (uint64_t(width) + 128) * (uint64_t(height) + 128) >= (uint64_t(1) << 28) || interlace > 1) return false;
+        if ((depth != 8 && depth != 16 && !(depth < 8 && (type == 0 || type == 3) && (depth == 1 || depth == 2 || depth == 4))) || (type == 3 && depth == 16)) return false;
         const int bitsPerPixel = channels * depth, pixelBytes = std::max(1, bitsPerPixel / 8);
         static const int startX[7] = {0, 4, 0, 2, 0, 1, 0}, startY[7] = {0, 0, 4, 0, 2, 0, 1}, stepX[7] = {8, 8, 4, 4, 2, 2, 1}, stepY[7] = {8, 8, 8, 4, 4, 2, 2};
         const int passes = interlace ? 7 : 1;

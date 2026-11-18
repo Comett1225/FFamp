@@ -204,8 +204,8 @@ struct DnxhdDecoder : SoftDecoder {
     }
 
     bool decode(const uint8_t* data, size_t size, int64_t stamp, const PictureSink& sink) override {
-        bool first = true, ok = true;
-        int field = 0;
+        bool first = true, ok = true, firstFour = false;
+        int field = 0, firstWidth = 0, firstHeight = 0;
         size_t offset = 0;
         for (;;) {
             const uint8_t* buf = data + offset;
@@ -244,7 +244,10 @@ struct DnxhdDecoder : SoftDecoder {
                 out.color.primaries = out.color.matrix == 9 ? 9 : 1;
                 out.color.transfer = 1;
                 out.color.full = four && !act;
-            } else if (bits != depth) {
+                firstWidth = width;
+                firstHeight = height;
+                firstFour = four;
+            } else if (bits != depth || width != firstWidth || height != firstHeight || four != firstFour || !interlaced) {
                 return false;
             }
             std::vector<uint32_t> rows(static_cast<size_t>(mbHeight), 0);
@@ -277,7 +280,7 @@ struct DnxhdDecoder : SoftDecoder {
                 }
             });
             ok = ok && !errors;
-            if (first && interlaced && table->codingUnitSize) {
+            if (first && interlaced) {
                 offset += table->codingUnitSize;
                 first = false;
                 continue;

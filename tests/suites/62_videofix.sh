@@ -108,6 +108,11 @@ ffv1_rgb16.mkv gbrp16le - -c:v ffv1 -coder 1 -pix_fmt gbrp16le -g 5
 ffv1_gbrap12.mkv gbrap12le alpha -c:v ffv1 -coder 1 -pix_fmt gbrap12le -g 5
 TABLE
 fi
+vf_make dnxhd_1080i.mov "testsrc2=size=1920x1080:rate=25" -t 0.2 -c:v dnxhd -b:v 120M -pix_fmt yuv422p -flags +ildct
+check "interlaced DNxHD decodes bit-exact against ffmpeg" $VC planes $VF/dnxhd_1080i.mov yuv422p
+check "DNxHD whose second field claims more rows than its first is refused, not written past the picture" $VC taller $VF/dnxhd_1080i.mov $VF/dnxhd_taller.mov
+vf_make ffv1_gray.avi "$S" -t 0.4 -c:v ffv1 -pix_fmt gray
+check "gray FFV1 with no range label is full range: BGRA equals ffmpeg's" $VC rgb $VF/ffv1_gray.avi
 for f in qtrle.mov ffv1.mkv ffv1_range.mkv; do check "random frames of $f equal the straight decode" python3 comparex.py selfseek $VF/$f 8 3; done
 for pair in dnxhr_hq.mov:dnxhd qtrle.mov:qtrle png.mov:png v210.mov:v210 raw.avi:rawvideo ut.avi:utvideo ffv1.mkv:ffv1; do
     check "probe names ${pair%%:*} as ffprobe does (${pair##*:})" vf_named ${pair%%:*} ${pair##*:}

@@ -80,6 +80,19 @@ def frame_out(path, layout, out, limit):
     return error <= limit
 
 
+def taller_field(source, target):
+    data = bytearray(open(source, "rb").read())
+    heads = [i for i in range(len(data) - 5) if data[i:i + 5] == b"\x00\x00\x02\x80\x01"]
+    for at in heads[1::2]:
+        data[at + 0x18:at + 0x1A] = (1088).to_bytes(2, "big")
+        data[at + 0x16C:at + 0x16E] = (68).to_bytes(2, "big")
+        data[at + 0x170 + 34 * 4:at + 0x170 + 68 * 4] = data[at + 0x170:at + 0x170 + 34 * 4]
+    open(target, "wb").write(data)
+    run = subprocess.run([AMEDIA, "decode", target], capture_output=True, timeout=300)
+    print(f"{os.path.basename(target)}: {len(heads)} field headers, second fields made taller, exit {run.returncode}, {len(run.stdout)} bytes out")
+    return len(heads) >= 2 and run.returncode == 1 and not run.stdout
+
+
 def same_decode(first, second):
     a, b = ours(first), ours(second)
     print(f"{os.path.basename(first)} and {os.path.basename(second)}: bytes {len(a)} and {len(b)}")
@@ -100,6 +113,8 @@ if __name__ == "__main__":
         ok = frame_out(rest[0], rest[1], rest[2], float(rest[3]))
     elif kind == "same":
         ok = same_decode(rest[0], rest[1])
+    elif kind == "taller":
+        ok = taller_field(rest[0], rest[1])
     else:
         ok = False
     sys.exit(0 if ok else 1)

@@ -99,6 +99,7 @@ private:
     }
 
     void put(uint8_t* row, int x, const uint8_t* colour) {
+        if (x >= alignedWidth) return;
         if (paletted) row[x] = colour[0];
         else memcpy(row + size_t(x) * 3, colour, 3);
     }

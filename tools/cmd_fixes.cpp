@@ -11,6 +11,9 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 namespace {
 
@@ -163,6 +166,68 @@ bool codedGap() {
         if (!sameSound(*clean, clean->length() * 6 / 10, *apart, clean->length() * 6 / 10 + gapFrames)) return false;
     }
     return true;
+}
+
+Track retimed(const Track& from, int64_t timescale, size_t lateFrom, int64_t lateTicks) {
+    Track t = from;
+    auto move = [&](int64_t ticks) { return std::llround(double(ticks) * double(timescale) / double(from.timescale)); };
+    t.timescale = uint32_t(timescale);
+    t.mediaStart = move(from.mediaStart);
+    if (from.mediaEnd >= 0) t.mediaEnd = move(from.mediaEnd) + lateTicks;
+    for (size_t i = 0; i < t.samples.size(); ++i) {
+        Sample& s = t.samples[i];
+        s.pts = move(s.pts) + (i >= lateFrom ? lateTicks : 0);
+        s.dts = move(s.dts) + (i >= lateFrom ? lateTicks : 0);
+        s.duration = uint32_t(move(s.duration));
+    }
+    return t;
+}
+
+bool codedGapTs() {
+    for (const char* name : {"aac_stereo_44k.m4a", "mp3_stereo_44k.mp4"}) {
+        auto reader = Reader::open(fixtures + "/audio/" + name);
+        const Track* track = reader ? reader->first(Kind::Audio) : nullptr;
+        if (!track) return false;
+        const Track even = retimed(*track, 90000, 0, 0);
+        auto clean = AudioDecoder::open(*reader, even);
+        if (!clean) return false;
+        const int64_t gapFrames = 9216;
+        const Track late = retimed(*track, 90000, track->samples.size() / 4, std::llround(double(gapFrames) * 90000.0 / clean->sampleRate()));
+        auto apart = AudioDecoder::open(*reader, late);
+        if (!apart || apart->length() != clean->length() + gapFrames) return false;
+        if (!sameSound(*clean, clean->length() / 10, *apart, clean->length() / 10)) return false;
+        if (!sameSound(*clean, clean->length() * 6 / 10, *apart, clean->length() * 6 / 10 + gapFrames)) return false;
+    }
+    return true;
+}
+
+int64_t peakBytes() {
+#ifdef _WIN32
+    return 0;
+#else
+    rusage use{};
+    getrusage(RUSAGE_SELF, &use);
+#ifdef __APPLE__
+    return int64_t(use.ru_maxrss);
+#else
+    return int64_t(use.ru_maxrss) * 1024;
+#endif
+#endif
+}
+
+bool longSilence() {
+    CountingReader reader;
+    std::vector<Span> spans;
+    const int64_t gapFrames = int64_t(48000) * 3000;
+    for (int i = 0; i < 40; ++i) spans.push_back({int64_t(i) * 1024 + (i > 10 ? gapFrames : 0), 1024});
+    fill(reader, 1, spans);
+    auto decoder = AudioDecoder::open(reader, reader.list[0]);
+    if (!decoder || decoder->length() != 40 * 1024 + gapFrames) return false;
+    const int64_t before = peakBytes();
+    const bool right = valueAt(*decoder, 10 * 1024 + 5) == 11 && valueAt(*decoder, 11 * 1024 + 5) == 0 && valueAt(*decoder, gapFrames / 2) == 0
+        && valueAt(*decoder, 11 * 1024 + gapFrames - 1) == 0 && valueAt(*decoder, 11 * 1024 + gapFrames + 5) == 12 && valueAt(*decoder, 39 * 1024 + gapFrames + 1023) == 40
+        && valueAt(*decoder, 10 * 1024 + 7) == 11;
+    return right && peakBytes() - before < (int64_t(64) << 20);
 }
 
 bool audioNegative() {
@@ -1321,7 +1386,7 @@ bool manyReaders() {
 #endif
 
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
-    {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre}, {"s16-gain", s16Gain},
+    {"audio-gap", audioGap}, {"coded-gap-ts", codedGapTs}, {"long-silence", longSilence}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre}, {"s16-gain", s16Gain},
     {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"encoder-names", encoderNames}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
     {"aac-rate", aacRate}, {"rf64-size", rf64Size}, {"aifc-flip", aifcFlip}, {"trun-offset", trunOffset}, {"decode-time-limit", decodeTimeLimit},
     {"flac-rate", flacRate}, {"lace-bounds", laceBounds}, {"vorbis-modes", vorbisModes}, {"sps-limits", spsLimits}, {"tag-flags", tagFlags},

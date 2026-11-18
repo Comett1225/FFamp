@@ -3,6 +3,7 @@
 #include "bits.h"
 #include "mdct.h"
 #include "readers.h"
+#include "resample.h"
 #include "writers.h"
 #include <algorithm>
 #include <bit>
@@ -248,6 +249,27 @@ int parseHeader(BitReader& r, Header& h) {
     h.lfeOn = r.bit();
     h.channels = kChannels[h.channelMode] + h.lfeOn;
     return eac3Info(r, h);
+}
+
+MixLevels mixLevelsOf(Header h) {
+    static const float gains[9] = {1.4142135623730950f, 1.1892071150027209f, 1.0f, 0.8408964152537145f, 0.7071067811865476f, 0.5946035575013605f, 0.5f, 0.0f,
+        0.3535533905932738f};
+    static const float lfeGains[32] = {3.162275f, 2.818382f, 2.511886f, 2.238719f, 1.995261f, 1.778278f, 1.584893f, 1.412536f, 1.258924f, 1.122018f, 1.000000f,
+        0.891251f, 0.794328f, 0.707946f, 0.630957f, 0.562341f, 0.501187f, 0.446683f, 0.398107f, 0.354813f, 0.316227f, 0.281838f, 0.251188f, 0.223872f, 0.199526f,
+        0.177828f, 0.158489f, 0.141253f, 0.125892f, 0.112201f, 0.100000f, 0.089125f};
+    if (h.bitstreamId <= 10) {
+        h.preferred = 0;
+        h.centreLtRt = h.surroundLtRt = 4;
+        h.lfeLevel = -1;
+    }
+    MixLevels levels;
+    levels.centre = gains[h.centreLevel];
+    levels.surround = gains[h.surroundLevel];
+    levels.centreLtRt = gains[h.centreLtRt];
+    levels.surroundLtRt = gains[h.surroundLtRt];
+    levels.lfe = h.lfeLevel >= 0 ? lfeGains[h.lfeLevel] : 0.0f;
+    levels.preferred = h.preferred;
+    return levels;
 }
 
 int findSync(const uint8_t* buf, int size) {
@@ -589,6 +611,7 @@ struct Ac3Audio : PacketDecoder {
     bool fold = false;
     uint64_t lastMask = 0;
     int lastMap[kAllChannels] = {};
+    MixLevels frameLevels;
     int lastFrames = 0;
     int produced = 0;
 
@@ -1369,6 +1392,7 @@ struct Ac3Audio : PacketDecoder {
         Header h;
         int err = parseHeader(r, h);
         if (err) return err;
+        if (h.frameType != kDependent) frameLevels = mixLevelsOf(h);
         s.allocation.srCode = h.srCode;
         s.bitstreamId = h.bitstreamId;
         s.channelMode = h.channelMode;
@@ -1544,16 +1568,34 @@ struct Ac3Audio : PacketDecoder {
         const size_t at = out.size();
         out.resize(at + frames * count);
         float* to = out.data() + at;
+        uint64_t wanted = 0;
+        for (size_t slot = 0; slot < count; ++slot) wanted |= want[slot];
+        if (count <= 2 && (lastMask & ~wanted)) {
+            const size_t given = size_t(std::popcount(lastMask));
+            std::vector<float> all(frames * given);
+            size_t c = 0;
+            for (uint64_t rest = lastMask; rest; rest &= rest - 1, ++c) {
+                const float* from = sourceOf(rest & (~rest + 1));
+                for (size_t i = 0; i < frames; ++i) all[i * given + c] = from[i];
+            }
+            ChannelMix(int(given), int(count), lastMask, frameLevels).apply(all.data(), frames, to);
+            return;
+        }
+        uint64_t used = 0;
         for (size_t slot = 0; slot < count; ++slot) {
-            const float* from = sourceOf(want[slot]);
+            uint64_t bit = want[slot];
+            const float* from = sourceOf(bit);
             float gain = 1.0f;
             if (!from && fold && slot >= 4) {
-                from = sourceOf(want[slot] == kSideLeft ? kBackLeft : kBackRight);
+                bit = want[slot] == kSideLeft ? kBackLeft : kBackRight;
+                from = sourceOf(bit);
                 if (!from) {
-                    from = sourceOf(kBackCenter);
+                    bit = kBackCenter;
+                    from = sourceOf(bit);
                     gain = float(M_SQRT1_2);
                 }
             }
+            if (from) used |= bit;
             float* dst = to + slot;
             if (!from) {
                 for (size_t i = 0; i < frames; ++i) dst[i * count] = 0.0f;
@@ -1561,6 +1603,35 @@ struct Ac3Audio : PacketDecoder {
                 for (size_t i = 0; i < frames; ++i) dst[i * count] = from[i];
             } else {
                 for (size_t i = 0; i < frames; ++i) dst[i * count] = from[i] * gain;
+            }
+        }
+        struct Move {
+            uint64_t bit, first;
+            float firstGain;
+            uint64_t second;
+            float secondGain;
+        };
+        const float half = float(M_SQRT1_2);
+        static const Move moves[] = {
+            {0x40, kFrontLeft, 1.0f, kFrontCenter, half}, {0x80, kFrontRight, 1.0f, kFrontCenter, half},
+            {kBackLeft, kSideLeft, 1.0f, kFrontLeft, half}, {kBackRight, kSideRight, 1.0f, kFrontRight, half},
+            {kSideLeft, kBackLeft, 1.0f, kFrontLeft, half}, {kSideRight, kBackRight, 1.0f, kFrontRight, half},
+            {0x800, kFrontCenter, half, 0, 0}, {0x2000, kFrontCenter, half, 0, 0},
+            {0x1000, kFrontLeft, half, 0, 0}, {0x4000, kFrontRight, half, 0, 0},
+            {0x80000000ULL, kFrontLeft, half, 0, 0}, {0x100000000ULL, kFrontRight, half, 0, 0},
+            {0x200000000ULL, kSideLeft, half, kBackLeft, half}, {0x400000000ULL, kSideRight, half, kBackRight, half},
+            {0x8000, kBackLeft, half, kSideLeft, half}, {0x20000, kBackRight, half, kSideRight, half},
+            {0x800000000ULL, kLowFrequency, 1.0f, 0, 0},
+        };
+        for (const Move& move : moves) {
+            const float* from = (lastMask & move.bit & ~used) ? sourceOf(move.bit) : nullptr;
+            if (!from) continue;
+            for (const auto& [target, gain] : {std::pair{move.first, move.firstGain}, std::pair{move.second, move.secondGain}}) {
+                const uint64_t* place = std::find(want, want + count, target);
+                if (!target || place == want + count) continue;
+                float* dst = to + (place - want);
+                for (size_t i = 0; i < frames; ++i) dst[i * count] += from[i] * gain;
+                break;
             }
         }
     }
@@ -1605,25 +1676,10 @@ struct Ac3Audio : PacketDecoder {
 }
 
 bool dolbyMixLevels(const uint8_t* frame, size_t size, MixLevels& levels) {
-    static const float gains[9] = {1.4142135623730950f, 1.1892071150027209f, 1.0f, 0.8408964152537145f, 0.7071067811865476f, 0.5946035575013605f, 0.5f, 0.0f,
-        0.3535533905932738f};
-    static const float lfeGains[32] = {3.162275f, 2.818382f, 2.511886f, 2.238719f, 1.995261f, 1.778278f, 1.584893f, 1.412536f, 1.258924f, 1.122018f, 1.000000f,
-        0.891251f, 0.794328f, 0.707946f, 0.630957f, 0.562341f, 0.501187f, 0.446683f, 0.398107f, 0.354813f, 0.316227f, 0.281838f, 0.251188f, 0.223872f, 0.199526f,
-        0.177828f, 0.158489f, 0.141253f, 0.125892f, 0.112201f, 0.100000f, 0.089125f};
     BitReader r(frame, size);
     Header h;
     if (size < 8 || parseHeader(r, h) < 0 || h.channelMode <= kStereo) return false;
-    if (h.bitstreamId <= 10) {
-        h.preferred = 0;
-        h.centreLtRt = h.surroundLtRt = 4;
-        h.lfeLevel = -1;
-    }
-    levels.centre = gains[h.centreLevel];
-    levels.surround = gains[h.surroundLevel];
-    levels.centreLtRt = gains[h.centreLtRt];
-    levels.surroundLtRt = gains[h.surroundLtRt];
-    levels.lfe = h.lfeLevel >= 0 ? lfeGains[h.lfeLevel] : 0.0f;
-    levels.preferred = h.preferred;
+    levels = mixLevelsOf(h);
     return true;
 }
 

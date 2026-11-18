@@ -241,7 +241,10 @@ int Vc1::bitplaneDecoding(uint8_t* data, int *rawFlag)
 int Vc1::vopDquantDecoding()
 {
     int pqdiff;
-    if (dquant != 2) {
+    if (dquant == 2) {
+        dquantfrm = 1;
+        dqprofile = kDqprofileFourEdges;
+    } else {
         dquantfrm = gb.bit();
         if (!dquantfrm)
             return 0;

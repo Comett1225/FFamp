@@ -121,6 +121,21 @@ def rangemap(path, scratch):
     return same
 
 
+def reduced(path, same, expanded):
+    size = frame_size(path)
+    ours = subprocess.run([AMEDIA, "decode", path], capture_output=True).stdout
+    theirs = subprocess.run([FFMPEG, "-nostdin", "-v", "quiet", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], capture_output=True).stdout
+    at = expanded * size
+    if len(ours) != len(theirs) or len(ours) < at + size:
+        print(f"{os.path.basename(path)}: {len(ours) // size} frames, ffmpeg {len(theirs) // size}")
+        return False
+    before = ours[:same * size] == theirs[:same * size]
+    picture = numpy.frombuffer(theirs[at:at + size], numpy.uint8).astype(numpy.int32)
+    scaled = ours[at:at + size] == numpy.clip(picture * 2 - 128, 0, 255).astype(numpy.uint8).tobytes()
+    print(f"{os.path.basename(path)}: first {same} frames identical {before}, frame {expanded} equals ffmpeg's scaled up by (x - 128) * 2 + 128 {scaled}")
+    return before and scaled
+
+
 if __name__ == "__main__":
     mode = sys.argv[1]
     if mode == "ordered":
@@ -133,6 +148,8 @@ if __name__ == "__main__":
         ok = seed(sys.argv[2], sys.argv[3], int(sys.argv[4]))
     elif mode == "rangemap":
         ok = rangemap(sys.argv[2], sys.argv[3])
+    elif mode == "reduced":
+        ok = reduced(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     elif mode == "unordered":
         ok = unordered(sys.argv[2])
     else:

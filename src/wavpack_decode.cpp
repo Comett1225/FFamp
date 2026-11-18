@@ -500,7 +500,10 @@ bool describe(const WvPacket& packet, Stream& out) {
         }
         size <<= 1;
         const size_t whole = size;
-        if (id & 0x40) size--;
+        if (id & 0x40) {
+            if (!size) break;
+            size--;
+        }
         if (n - skip < whole) break;
         const uint8_t* body = p + skip;
         if ((id & 0x3F) == 0x0D && size >= 2) {

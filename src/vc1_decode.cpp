@@ -93,6 +93,7 @@ std::shared_ptr<Frame> FramePool::get() {
             for (auto& m : f->motionMemory) std::fill(m.begin(), m.end(), int16_t(0));
             f->interlaced = false;
             f->fieldPicture = false;
+            f->reduced = false;
             return f;
         }
     }
@@ -401,8 +402,11 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
     if (!frameStart()) return false;
     curPic.ptr->fieldPicture = fieldMode;
     curPic.ptr->interlaced = fcm != kProgressive;
+    curPic.ptr->reduced = rangeredfrm;
     lastInterlaced = lastPic.ptr ? lastPic.ptr->interlaced : 0;
     nextInterlaced = nextPic.ptr ? nextPic.ptr->interlaced : 0;
+    lastReduced = lastPic.ptr ? lastPic.ptr->reduced : 0;
+    nextReduced = nextPic.ptr ? nextPic.ptr->reduced : 0;
     endMbX = mbWidth;
     if (fieldMode) {
         for (int i = 0; i < 3; i++) curPic.linesize[i] <<= 1;
@@ -531,7 +535,7 @@ struct Vc1Decoder : SoftDecoder {
         for (int i = 0; i < 3; i++) {
             p.plane[i] = c.curPic.ptr->data[i];
             p.stride[i] = size_t(c.curPic.ptr->linesize[i]);
-            const int factor = c.profile != vc1::kProfileAdvanced ? 0 : i ? (c.rangeMapuvFlag ? c.rangeMapuv + 9 : 0) : (c.rangeMapyFlag ? c.rangeMapy + 9 : 0);
+            const int factor = c.profile != vc1::kProfileAdvanced ? (c.curPic.ptr->reduced ? 16 : 0) : i ? (c.rangeMapuvFlag ? c.rangeMapuv + 9 : 0) : (c.rangeMapyFlag ? c.rangeMapy + 9 : 0);
             if (!factor) continue;
             const int columns = i ? p.chromaWidth : p.width, rows = i ? p.chromaHeight : p.height;
             mapped[i].resize(size_t(columns) * size_t(rows));

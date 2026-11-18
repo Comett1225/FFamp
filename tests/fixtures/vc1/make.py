@@ -50,6 +50,7 @@ class Stream:
         self.max_b = 0 if simple else 1
         self.loop = 0 if simple else 1
         self.overlap = 1
+        self.dquant = 0
 
     def sequence(self):
         b = Bits()
@@ -63,7 +64,7 @@ class Stream:
         b.put(1, 1)
         b.put(1, 1)
         b.put(0, 1)
-        b.put(0, 2)
+        b.put(self.dquant, 2)
         b.put(0, 1)
         b.put(0, 1)
         b.put(self.overlap, 1)
@@ -198,6 +199,31 @@ class Stream:
             b.put(value, size)
         return b.data()
 
+    def edge_intra(self, pqindex, absolute, dc):
+        b = Bits()
+        self.head(b, "P", pqindex)
+        modes = ["1mv", "mixed", "hpel", "ic", "bilinear"] if PQUANT[pqindex] <= 12 else ["bilinear", "1mv", "hpel", "ic", "mixed"]
+        b.put(1, modes.index("1mv") + 1)
+        rows = [[1 if (x, y) == (0, 0) else 0 for x in range(self.mbw)] for y in range(self.mbh)]
+        self.plane(b, 1, "colskip", rows)
+        b.put(0, 2)
+        b.put(0, 2)
+        if self.dquant == 1:
+            b.put(1, 1)
+            b.put(0, 2)
+        b.put(7, 3)
+        b.put(absolute, 5)
+        b.put(0, 1)
+        b.put(0, 1)
+        b.put(MV_CODES[35], MV_BITS[35])
+        b.put(0, 1)
+        for n, diff in enumerate([dc, 0, 0, 0, dc // 2, -dc // 2]):
+            table = DC[0][1 if n >= 4 else 0]
+            b.put(table[abs(diff) * 2], table[abs(diff) * 2 + 1])
+            if diff:
+                b.put(1 if diff < 0 else 0, 1)
+        return b.data()
+
     def bidirectional(self, pqindex, interpolated):
         b = Bits()
         self.head(b, "B", pqindex)
@@ -269,5 +295,17 @@ def main(folder):
     seed(os.path.join(folder, "..", "fuzz", "vc1", "simple.bin"), simple.sequence(), frames)
 
 
+def edges(folder):
+    for dquant in (1, 2):
+        stream = Stream(False, 64, 48)
+        stream.dquant = dquant
+        frames = [(True, stream.intra(2, 12)), (False, stream.edge_intra(12, 20, 24))]
+        avi(os.path.join(folder, f"dquant{dquant}.avi"), 64, 48, stream.sequence(), frames)
+
+
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else HERE)
+    folder = sys.argv[1] if len(sys.argv) > 1 else HERE
+    if sys.argv[2:] == ["dquant"]:
+        edges(folder)
+    else:
+        main(folder)

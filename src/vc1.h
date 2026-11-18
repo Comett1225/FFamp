@@ -66,6 +66,7 @@ const Vlcs& tables();
 
 inline int clip(int value, int low, int high) { return value < low ? low : value > high ? high : value; }
 inline uint8_t clipU8(int value) { return uint8_t(value < 0 ? 0 : value > 255 ? 255 : value); }
+inline uint8_t rangeScaled(int value, bool down) { return down ? uint8_t(((value - 128) >> 1) + 128) : clipU8(2 * value - 128); }
 inline int midPred(int a, int b, int c) {
     if (a > b) {
         if (c > b) {
@@ -155,6 +156,7 @@ struct Frame {
     int8_t* qscaleTable = nullptr;
     bool interlaced = false;
     bool fieldPicture = false;
+    bool reduced = false;
 };
 
 struct Pic {
@@ -262,6 +264,7 @@ struct Vc1 {
     int lastUseIc = 0, nextUseIc = 0, auxUseIc = 0;
     int* currUseIc = &auxUseIc;
     int lastInterlaced = 0, nextInterlaced = 0;
+    int lastReduced = 0, nextReduced = 0;
     int rnd = 0, cbptab = 0;
     uint8_t rangeredfrm = 0, interpfrm = 0;
     int fcm = kProgressive;

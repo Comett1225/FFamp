@@ -1443,7 +1443,9 @@ bool vc1Concealed() {
         const size_t rows = 16 * size_t(s.width);
         return std::vector<uint8_t>(bottom ? s.luma.end() - ptrdiff_t(rows) : s.luma.begin(), bottom ? s.luma.end() : s.luma.begin() + ptrdiff_t(rows));
     };
-    return band(cut[1], false) == band(clean[1], false) && band(cut[1], true) == band(cut[0], true) && band(clean[1], true) != band(clean[0], true);
+    std::vector<uint8_t> reduced = band(cut[0], true);
+    for (uint8_t& value : reduced) value &= 0xFE;
+    return band(cut[1], false) == band(clean[1], false) && band(cut[1], true) == reduced && band(clean[1], true) != band(clean[0], true);
 }
 
 bool vc1BeforeAnchor() {

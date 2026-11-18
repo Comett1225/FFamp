@@ -975,7 +975,7 @@ int Vc1::decodePBlock(int16_t block[64], int n,
 }
 int Vc1::decodePMb()
 {
-    int i, j;
+    int i;
     int mbPos = mbX + mbY * mbStride;
     int cbp;
     int mquant;
@@ -1041,9 +1041,6 @@ int Vc1::decodePMb()
                     if (ret < 0)
                         return ret;
                     vc1dsp.invTrans8x8(block[curBlkIdx][blockMap[i]]);
-                    if (rangeredfrm)
-                        for (j = 0; j < 64; j++)
-                            block[curBlkIdx][blockMap[i]][j] *= 2;
                     blockCbp   |= 0xF << (i << 2);
                     blockIntra |= 1 << i;
                 } else if (val) {
@@ -1139,9 +1136,6 @@ int Vc1::decodePMb()
                     if (ret < 0)
                         return ret;
                     vc1dsp.invTrans8x8(block[curBlkIdx][blockMap[i]]);
-                    if (rangeredfrm)
-                        for (j = 0; j < 64; j++)
-                            block[curBlkIdx][blockMap[i]][j] *= 2;
                     blockCbp   |= 0xF << (i << 2);
                     blockIntra |= 1 << i;
                 } else if (isCoded[i]) {
@@ -1488,7 +1482,7 @@ int Vc1::decodePMbIntfi()
 }
 int Vc1::decodeBMb()
 {
-    int i, j;
+    int i;
     int mbPos = mbX + mbY * mbStride;
     int cbp = 0;
     int mquant;
@@ -1609,9 +1603,6 @@ int Vc1::decodeBMb()
             if (ret < 0)
                 return ret;
             vc1dsp.invTrans8x8(blocks[i]);
-            if (rangeredfrm)
-                for (j = 0; j < 64; j++)
-                    blocks[i][j] *= 2;
             putSignedPixelsClamped(blocks[i],
                                               dest[dstIdx] + off,
                                               i & 4 ? uvlinesize
@@ -1632,7 +1623,7 @@ int Vc1::decodeBMb()
 }
 int Vc1::decodeBMbIntfi()
 {
-    int i, j;
+    int i;
     int mbPos = mbX + mbY * mbStride;
     int cbp = 0;
     int mquant;
@@ -1679,9 +1670,6 @@ int Vc1::decodeBMbIntfi()
             if (ret < 0)
                 return ret;
             vc1dsp.invTrans8x8(blocks[i]);
-            if (rangeredfrm)
-                for (j = 0; j < 64; j++)
-                    blocks[i][j] <<= 1;
             off  = (i & 4) ? 0 : ((i & 1) * 8 + (i & 2) * 4 * linesize);
             putSignedPixelsClamped(blocks[i],
                                               dest[dstIdx] + off,
@@ -2105,7 +2093,7 @@ int Vc1::decodeBMbIntfr()
 }
 void Vc1::decodeIBlocks()
 {
-    int k, j;
+    int k;
     int cbp, val;
     int mbPos;
     switch (yAcTableIndex) {
@@ -2160,16 +2148,8 @@ void Vc1::decodeIBlocks()
             }
             if (overlap && pq >= 9) {
                 iOverlapFilter();
-                if (rangeredfrm)
-                    for (k = 0; k < 6; k++)
-                        for (j = 0; j < 64; j++)
-                            block[curBlkIdx][blockMap[k]][j] *= 2;
                 putBlocksClamped(1);
             } else {
-                if (rangeredfrm)
-                    for (k = 0; k < 6; k++)
-                        for (j = 0; j < 64; j++)
-                            block[curBlkIdx][blockMap[k]][j] = (block[curBlkIdx][blockMap[k]][j] - 64) * 2;
                 putBlocksClamped(0);
             }
             if (loopFilter)
@@ -2476,6 +2456,7 @@ void Vc1::conceal(int first, int last)
 {
     const bool bottom = fieldMode && !(secondField ^ tff);
     const bool source = lastPic.ptr && lastPic.ptr != curPic.ptr;
+    const bool rescale = source && lastPic.ptr->reduced != curPic.ptr->reduced;
     for (int index = first; index < last; index++) {
         const int x = index % mbWidth, y = index / mbWidth;
         for (int p = 0; p < 3; p++) {
@@ -2483,7 +2464,10 @@ void Vc1::conceal(int first, int last)
             const ptrdiff_t stride = curPic.linesize[p];
             const ptrdiff_t at = (bottom ? curPic.ptr->linesize[p] : 0) + ptrdiff_t(y) * size * stride + x * size;
             for (int row = 0; row < size; row++) {
-                if (source)
+                if (rescale)
+                    for (int column = 0; column < size; column++)
+                        curPic.data[p][at + row * stride + column] = rangeScaled(lastPic.data[p][at + row * stride + column], curPic.ptr->reduced);
+                else if (source)
                     memcpy(curPic.data[p] + at + row * stride, lastPic.data[p] + at + row * stride, size_t(size));
                 else
                     memset(curPic.data[p] + at + row * stride, 0x80, size_t(size));

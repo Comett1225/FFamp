@@ -13,6 +13,7 @@ const int kMaxSubframes = 32;
 const int kMaxOrder = 256;
 const int kMaxBlock = 1 << 14;
 const int kMaxFrameBytes = 32768;
+const int64_t kMostOutput = 1 << 24;
 
 int log2Of(unsigned v) { return v ? 31 - __builtin_clz(v) : 0; }
 int ceilLog2(unsigned v) { return log2Of((v - 1u) << 1); }
@@ -88,6 +89,7 @@ struct WmaLossless : PacketDecoder {
     std::vector<int32_t> pcm[kMaxChannels];
     int written[kMaxChannels] = {};
     int samples = 0;
+    int64_t framesThisBlock = 0;
     std::vector<float>* sink = nullptr;
     bool quiet = false;
     int64_t made = 0;
@@ -163,6 +165,7 @@ struct WmaLossless : PacketDecoder {
     Lms& lms(int c, int i) { return filters[size_t(c) * 9 + size_t(i)]; }
 
     void restore(const Carry& k) {
+        framesThisBlock = 0;
         putCount = k.putCount;
         savedBits = k.savedBits;
         frameOffset = k.frameOffset;
@@ -613,6 +616,7 @@ struct WmaLossless : PacketDecoder {
     void emit() {
         if (samples <= 0) return;
         made += samples;
+        ++framesThisBlock;
         if (quiet) return;
         const size_t at = sink->size();
         sink->resize(at + size_t(samples) * size_t(channels));
@@ -689,6 +693,7 @@ struct WmaLossless : PacketDecoder {
         int64_t remaining;
         if (packetDone || packetLoss) {
             packetDone = false;
+            framesThisBlock = 0;
             span = std::min(size_t(blockAlign), size);
             nextPacketStart = size - span;
             bufferBits = int64_t(span) * 8;
@@ -723,7 +728,9 @@ struct WmaLossless : PacketDecoder {
             pgb.skip(packetOffset);
             remaining = bufferBits - pgb.position();
             int64_t frameSize = 0;
-            if (lengthPrefix && remaining > log2FrameSize && (frameSize = pgb.peek(log2FrameSize)) && frameSize <= remaining) {
+            if (framesThisBlock * frameLength * channels >= kMostOutput) {
+                packetLoss = true;
+            } else if (lengthPrefix && remaining > log2FrameSize && (frameSize = pgb.peek(log2FrameSize)) && frameSize <= remaining) {
                 saveBits(data, span, frameSize, false);
                 if (!packetLoss) packetDone = !frame();
             } else if (!lengthPrefix && savedBits > gb.position()) {
@@ -743,7 +750,12 @@ struct WmaLossless : PacketDecoder {
     void run(const std::vector<uint8_t>& packet) {
         const uint8_t* data = packet.data();
         size_t size = packet.size();
+        const int64_t start = made;
         for (int turn = 0; size > 0 && turn < (1 << 16); ++turn) {
+            if ((made - start) * channels >= kMostOutput) {
+                packetLoss = true;
+                return;
+            }
             const int64_t used = call(data, size);
             if (used < 0 || size_t(used) >= size) return;
             data += used;
@@ -759,7 +771,7 @@ struct WmaLossless : PacketDecoder {
 
     void finish(std::vector<float>& to) override {
         sink = &to;
-        for (int turn = 0; turn < (1 << 16) && savedBits > gb.position(); ++turn) {
+        for (int turn = 0; turn < (1 << 16) && savedBits > gb.position() && framesThisBlock * frameLength * channels < kMostOutput; ++turn) {
             samples = 0;
             packetDone = false;
             if (!frame()) savedBits = 0;

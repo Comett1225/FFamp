@@ -782,7 +782,7 @@ def stream(path, frames, seed, configs):
         packet = bytearray()
         for cfg in configs:
             for attempt in range(40):
-                c = dict(cfg)
+                c = dict(cfg, **(cfg.get("later", {}) if i >= frames // 2 else {}))
                 c["snr"] = max(18, cfg.get("snr", 30) - attempt)
                 frame = make_frame(rng, c)
                 if frame:
@@ -815,6 +815,11 @@ KINDS = {
     "eac3_71_backonly": [dict(eac3=True, mode=7, lfe=1, sr=0), dict(eac3=True, mode=2, lfe=0, sr=0, dependent=True, chanmap=0x0200)],
     "eac3_61": [dict(eac3=True, mode=7, lfe=1, sr=1, spx=True), dict(eac3=True, mode=1, lfe=0, sr=1, dependent=True, chanmap=0x0100)],
     "eac3_enhanced": [dict(eac3=True, mode=2, lfe=0, sr=0, enhanced=True)],
+    "ac3_stereo_to_51": [dict(eac3=False, mode=2, lfe=0, sr=0, later=dict(mode=7, lfe=1))],
+    "ac3_mono_to_stereo": [dict(eac3=False, mode=1, lfe=0, sr=0, later=dict(mode=2))],
+    "ac3_30_to_31": [dict(eac3=False, mode=3, lfe=0, sr=0, later=dict(mode=5))],
+    "ac3_50_to_31": [dict(eac3=False, mode=7, lfe=0, sr=0, later=dict(mode=5))],
+    "eac3_51_centre_pair": [dict(eac3=True, mode=7, lfe=1, sr=0, remix=True), dict(eac3=True, mode=2, lfe=0, sr=0, dependent=True, chanmap=0x0400)],
 }
 
 if __name__ == "__main__":
@@ -825,4 +830,4 @@ if __name__ == "__main__":
         kind = KINDS[name]
         stream(os.path.join(folder, name + (".eac3" if kind[0]["eac3"] else ".ac3")), frames, 1000 + i, kind)
         first = kind[0]
-        print(name + (".eac3" if first["eac3"] else ".ac3"), "remix" if len(kind) == 1 and ((first["lfe"] and first["mode"] != 7) or first["mode"] in (4, 6)) else "-")
+        print(name + (".eac3" if first["eac3"] else ".ac3"), "remix" if first.get("remix") or len(kind) == 1 and ((first["lfe"] and first["mode"] != 7) or first["mode"] in (4, 6)) else "-")

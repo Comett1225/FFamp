@@ -389,7 +389,7 @@ public sample files of the plan's appendix A are tested when `WINMEDIA_SAMPLES` 
 
 | File | What it is | Result against FFmpeg's decode |
 |---|---|---|
-| `main_bframes.avi`, `simple.avi` (fixtures) | Main with B, IC, range reduction; Simple | every frame bit-exact, in order |
+| `main_bframes.avi`, `simple.avi` (fixtures) | Main with B, IC, range reduction; Simple | `simple.avi` every frame bit-exact, in order; `main_bframes.avi` bit-exact up to the first range-reduced picture (see below) |
 | `sample-wmv9-simple-SP@ML.wmv`, `sb-spl-q94.avi` | WMV3 Simple, CIF and 640x480 | 595 and 193 frames bit-exact |
 | `sample-wmv9-main-MP@LL.wmv`, `sb-main-q94.avi` | WMV3 Main | 595 and 193 frames bit-exact |
 | `sb-adv-q94.avi` | WMV3 Complex without X8 (simple IDCT) | 193 frames bit-exact |
@@ -409,6 +409,13 @@ Where FFmpeg is wrong or silent (plan section 3.6), ST 421 decides:
   FFamp applies ST 421 6.2.15 and 6.2.16 to the output pictures only (the references stay unmapped, ST 421 5.6). Test: the
   interlaced WVC1 sample with its entry point patched to `RANGE_MAPY` 2 and `RANGE_MAPUV` 5 gives FFmpeg's pictures mapped by the
   formula, every pixel of 66 frames.
+- **Range reduction** (Simple and Main `RANGEREDFRM`): FFmpeg doubles intra blocks of a reduced picture as it decodes them, leaves
+  its inter blocks at half contrast and never scales a reduced reference up. FFamp keeps a reduced picture reduced, scales each
+  reference down or up to the range of the picture that predicts from it and scales reduced pictures up only for display (ST 421).
+  Test: the range-reduced P-picture of `main_bframes.avi` equals FFmpeg's scaled up by (x - 128) * 2 + 128.
+- **DQUANT 2**: FFmpeg reads `ALTPQUANT` and never uses it. FFamp quantizes the macroblocks on the four picture edges with it, as
+  ST 421 says. Test: a `make.py` P-picture with an intra edge macroblock decodes the same with DQUANT 2 as with DQUANT 1 and the
+  four-edge profile, which FFmpeg decodes bit-exact.
 - **Pan-scan** (`PANSCAN_FLAG`): FFmpeg does not read the pan-scan windows and loses its place in the picture header. FFamp skips
   them as ST 421 8.9.1 counts them (no sample file has them).
 - **Progressive segmented frames** (`PSF`): FFmpeg refuses the stream; the flag only changes how frames are shown, so FFamp decodes

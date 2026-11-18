@@ -280,11 +280,15 @@ const char* ownVideoName(uint32_t c) {
 }
 
 std::unique_ptr<SoftDecoder> openOwnVideo(const Track& track, std::string* error) {
-    if (int64_t(track.width + 128) * int64_t(track.height + 128) >= (int64_t(1) << 28)) {
+    const std::string kind = ownVideoName(track.codec) ? ownVideoName(track.codec) : "";
+    if (kind != "png" && kind != "dnxhd" && (track.width <= 0 || track.height <= 0)) {
+        if (error) *error = "the track has no picture size";
+        return nullptr;
+    }
+    if ((int64_t(track.width) + 128) * (int64_t(track.height) + 128) >= (int64_t(1) << 28)) {
         if (error) *error = "the picture is too large";
         return nullptr;
     }
-    const std::string kind = ownVideoName(track.codec) ? ownVideoName(track.codec) : "";
     if (kind == "rawvideo" || kind == "v210") return openRawVideo(track, error);
     if (kind == "cinepak") return openCinepak(track, error);
     if (kind == "qtrle") return openQtrle(track, error);

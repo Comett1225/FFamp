@@ -204,7 +204,7 @@ private:
         const int header = int(be16(buf));
         if (header > available || be16(buf + 2) > 1) return -1;
         const int w = int(be16(buf + 8)), h = int(be16(buf + 10));
-        if (w <= 0 || h <= 0) return -1;
+        if (w <= 0 || h <= 0 || int64_t(w + 128) * int64_t(h + 128) >= (int64_t(1) << 28)) return -1;
         const int type = (buf[12] >> 2) & 3;
         const int alpha = buf[17] & 0xF;
         if (alpha > 2) return -1;
@@ -215,13 +215,13 @@ private:
         full444 = (buf[12] & 0xC0) == 0xC0;
         scan = frameType ? kInterlacedScan.data() : kProgressiveScan.data();
         const int primaries = buf[14], transfer = buf[15], matrix = buf[16];
-        auto told = [](int v) { return v != 0 && v != 2; };
+        auto told = [](int v) { return v != 0 && v != 2 && v != 3; };
         color = Color();
         color.known = told(primaries) || told(transfer) || told(matrix);
         if (color.known) {
-            color.primaries = primaries;
-            color.transfer = transfer;
-            color.matrix = matrix;
+            color.primaries = told(primaries) ? primaries : 2;
+            color.transfer = told(transfer) ? transfer : 2;
+            color.matrix = told(matrix) ? matrix : 2;
         }
         const uint8_t* ptr = buf + 20;
         const int flags = buf[19];

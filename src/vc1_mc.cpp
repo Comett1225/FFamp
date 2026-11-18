@@ -5,23 +5,23 @@ namespace absent::vc1 {
 
 
 static void scaleLuma(uint8_t *srcY,
-                                            int k, int linesize)
+                                            int k, int linesize, bool down)
 {
     int i, j;
     for (j = 0; j < k; j++) {
         for (i = 0; i < k; i++)
-            srcY[i] = ((srcY[i] - 128) >> 1) + 128;
+            srcY[i] = rangeScaled(srcY[i], down);
         srcY += linesize;
     }
 }
 static void scaleChroma(uint8_t *srcU, uint8_t *srcV,
-                                              int k, int uvlinesize)
+                                              int k, int uvlinesize, bool down)
 {
     int i, j;
     for (j = 0; j < k; j++) {
         for (i = 0; i < k; i++) {
-            srcU[i] = ((srcU[i] - 128) >> 1) + 128;
-            srcV[i] = ((srcV[i] - 128) >> 1) + 128;
+            srcU[i] = rangeScaled(srcU[i], down);
+            srcV[i] = rangeScaled(srcV[i], down);
         }
         srcU += uvlinesize;
         srcV += uvlinesize;
@@ -221,7 +221,8 @@ void Vc1::mc1mv(int dir)
         srcU = edgeEmuBuffer.data() + 18 * this->linesize;
         srcV = edgeEmuBuffer.data() + 18 * this->linesize;
     }
-    if (rangeredfrm || useIc
+    const bool rescale = rangeredfrm != (dir ? nextReduced : lastReduced);
+    if (rescale || useIc
         || hEdgePos < 22 || vEdgePos < 22
         || (unsigned)(srcPosX - mspel) > unsigned(hEdgePos - (mx&3) - 16 - mspel * 3)
         || (unsigned)(srcPosY - 1)        > unsigned(vEdgePos    - (my&3) - 16 - 3)) {
@@ -331,9 +332,9 @@ void Vc1::mc1mv(int dir)
         }
         srcU = ubuf;
         srcV = vbuf;
-        if (rangeredfrm) {
-            scaleLuma(srcY, k, this->linesize);
-            scaleChroma(srcU, srcV, 9, this->uvlinesize);
+        if (rescale) {
+            scaleLuma(srcY, k, this->linesize, rangeredfrm);
+            scaleChroma(srcU, srcV, 9, this->uvlinesize, rangeredfrm);
         }
         if (useIc) {
             lutScaleLuma(srcY,
@@ -465,7 +466,8 @@ void Vc1::mc4mvLuma(int n, int dir, int avg)
     srcY += srcPosY * this->linesize + srcPosX;
     if (fieldMode && refFieldType[dir])
         srcY += linesize;
-    if (rangeredfrm || useIc
+    const bool rescale = rangeredfrm != (dir ? nextReduced : lastReduced);
+    if (rescale || useIc
         || hEdgePos < 13 || vEdgePos < 23
         || (unsigned)(srcPosX - mspel) > unsigned(hEdgePos - (mx & 3) - 8 - mspel * 2)
         || (unsigned)(srcPosY - (mspel << fieldmv)) > unsigned(vEdgePos - (my & 3) - ((8 + mspel * 2) << fieldmv))) {
@@ -506,8 +508,8 @@ void Vc1::mc4mvLuma(int n, int dir, int avg)
                                      hEdgePos,
                                      this->vEdgePos);
         srcY = edgeEmuBuffer.data();
-        if (rangeredfrm) {
-            scaleLuma(srcY, k, this->linesize << fieldmv);
+        if (rescale) {
+            scaleLuma(srcY, k, this->linesize << fieldmv, rangeredfrm);
         }
         if (useIc) {
             lutScaleLuma(srcY,
@@ -616,7 +618,8 @@ void Vc1::mc4mvChroma(int dir)
             srcV += uvlinesize;
         }
     }
-    if (rangeredfrm || useIc
+    const bool rescale = rangeredfrm != (dir ? nextReduced : lastReduced);
+    if (rescale || useIc
         || hEdgePos < 18 || vEdgePos < 18
         || (unsigned)uvSrcPosX > unsigned((hEdgePos >> 1) - 9)
         || (unsigned)uvSrcPosY > unsigned((vEdgePos    >> 1) - 9)) {
@@ -687,8 +690,8 @@ void Vc1::mc4mvChroma(int dir)
         }
         srcU = edgeEmuBuffer.data();
         srcV = edgeEmuBuffer.data() + 16;
-        if (rangeredfrm) {
-            scaleChroma(srcU, srcV, 9, this->uvlinesize);
+        if (rescale) {
+            scaleChroma(srcU, srcV, 9, this->uvlinesize, rangeredfrm);
         }
         if (useIc) {
             lutScaleChroma(srcU, srcV,
@@ -924,7 +927,8 @@ void Vc1::interpMc()
         srcU = edgeEmuBuffer.data() + 18 * this->linesize;
         srcV = edgeEmuBuffer.data() + 18 * this->linesize;
     }
-    if (rangeredfrm || hEdgePos < 22 || vEdgePos < 22 || useIc
+    const bool rescale = rangeredfrm != nextReduced;
+    if (rescale || hEdgePos < 22 || vEdgePos < 22 || useIc
         || (unsigned)(srcPosX - 1) > unsigned(hEdgePos - (mx & 3) - 16 - 3)
         || (unsigned)(srcPosY - 1) > unsigned(vEdgePos    - (my & 3) - 16 - 3)) {
         uint8_t *ubuf = edgeEmuBuffer.data() + 19 * this->linesize;
@@ -1033,9 +1037,9 @@ void Vc1::interpMc()
         }
         srcU = ubuf;
         srcV = vbuf;
-        if (rangeredfrm) {
-            scaleLuma(srcY, k, this->linesize);
-            scaleChroma(srcU, srcV, 9, this->uvlinesize);
+        if (rescale) {
+            scaleLuma(srcY, k, this->linesize, rangeredfrm);
+            scaleChroma(srcU, srcV, 9, this->uvlinesize, rangeredfrm);
         }
         if (useIc) {
             const uint8_t (*luty )[256] = nextLuty;

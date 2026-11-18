@@ -174,7 +174,9 @@ Things a caller has to know:
   cannot store odd sizes; the stored size is printed.
 - Sound from `--audio-from` is copied when it is AAC and starts at 0, otherwise decoded and encoded to AAC (mono stays mono, anything
   else becomes stereo). It ends with the picture or at `--limit`.
-- `speech` output has exactly `round(input_samples / speed)` samples. The app keeps starting the system voice itself.
+- `speech` output has exactly `round(input_samples / speed)` samples, for any speed and pitch from 0.25 to 4 (a speed / pitch ratio
+  outside that range is stretched in two steps); a stereo or surround voice file is mixed to mono at 1 / `mixPeak` so it does not
+  clip. The app keeps starting the system voice itself.
 - `capture` never asks for access unless `--ask` is given: without it a camera or microphone that is not already authorised is an
   error. The ids are AVFoundation unique ids (or `default`); `test` is a built-in test pattern with a tone, the stand-in for the app's
   fake camera. The preview is BGRA at the asked size; without a size it is the camera size, at most 1920 wide.

@@ -409,6 +409,7 @@ static int get_last_needed_nal(H264Context *h)
     int nals_needed = 0;
     int slice_type = 0;
     int picture_intra_only = 1;
+    int picture_has_inter = 0;
     int first_slice = 0;
     int i, ret;
 
@@ -434,8 +435,10 @@ static int get_last_needed_nal(H264Context *h)
             }
             if (!get_ue_golomb_long(&gb) ||
                 !first_slice ||
-                first_slice != nal->type)
+                first_slice != nal->type) {
                 nals_needed = i;
+                picture_has_inter = 0;
+            }
             slice_type = get_ue_golomb_31(&gb);
             if (slice_type > 9)
                 slice_type = 0;
@@ -444,6 +447,10 @@ static int get_last_needed_nal(H264Context *h)
 
             slice_type = ff_h264_golomb_to_pict_type[slice_type];
             picture_intra_only &= (slice_type & 3) == AV_PICTURE_TYPE_I;
+            if ((slice_type & 3) != AV_PICTURE_TYPE_I && !picture_has_inter) {
+                nals_needed = i;
+                picture_has_inter = 1;
+            }
             if (!first_slice)
                 first_slice = nal->type;
         }
@@ -527,13 +534,10 @@ static int decode_nal_units(H264Context *h, const uint8_t *buf, int buf_size)
                 break;
             }
 
-            if (h->current_slice == 1) {
-                if (avctx->active_thread_type & FF_THREAD_FRAME &&
-                    i >= nals_needed && !h->setup_finished && h->cur_pic_ptr) {
-                    ff_thread_finish_setup(avctx);
-                    h->setup_finished = 1;
-                }
-
+            if (avctx->active_thread_type & FF_THREAD_FRAME &&
+                i >= nals_needed && !h->setup_finished && h->cur_pic_ptr) {
+                ff_thread_finish_setup(avctx);
+                h->setup_finished = 1;
             }
 
             max_slice_ctx = h->nb_slice_ctx;

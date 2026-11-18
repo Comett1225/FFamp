@@ -93,6 +93,7 @@ std::shared_ptr<Frame> FramePool::get() {
             for (auto& m : f->motionMemory) std::fill(m.begin(), m.end(), int16_t(0));
             f->interlaced = false;
             f->fieldPicture = false;
+            f->reduced = false;
             return f;
         }
     }
@@ -313,7 +314,6 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
     std::vector<Slice> slices;
     int nSlices1 = -1;
     secondField = 0;
-    broken = false;
     if (size >= 4 && readBe32(buf + size - 4) == kCodeEndOfSequence) size -= 4;
     if (size == 0) return true;
     std::vector<uint8_t> buf2;
@@ -402,8 +402,11 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
     if (!frameStart()) return false;
     curPic.ptr->fieldPicture = fieldMode;
     curPic.ptr->interlaced = fcm != kProgressive;
+    curPic.ptr->reduced = rangeredfrm;
     lastInterlaced = lastPic.ptr ? lastPic.ptr->interlaced : 0;
     nextInterlaced = nextPic.ptr ? nextPic.ptr->interlaced : 0;
+    lastReduced = lastPic.ptr ? lastPic.ptr->reduced : 0;
+    nextReduced = nextPic.ptr ? nextPic.ptr->reduced : 0;
     endMbX = mbWidth;
     if (fieldMode) {
         for (int i = 0; i < 3; i++) curPic.linesize[i] <<= 1;
@@ -411,6 +414,8 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
         uvlinesize <<= 1;
     }
     const int rows = mbHeight >> fieldMode;
+    const int fields = fieldMode ? 2 : 1;
+    std::vector<char> covered(size_t(rows) * size_t(fields), 0);
     int headerResult = 0;
     for (int i = 0; i <= nSlices; i++) {
         if (i > 0 && slices[size_t(i - 1)].mbyStart >= rows) {
@@ -443,7 +448,13 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
         if (endMbY <= startMbY) continue;
         if (((pictType == kPictureP && !pFrameSkipped) || (pictType == kPictureB && !biType)) && !cbpcyVlc) continue;
         decodeBlocks();
+        if (secondField < fields) std::fill(covered.begin() + secondField * rows + startMbY, covered.begin() + secondField * rows + endMbY, 1);
         if (i != nSlices) gb = slices[size_t(i)].gb;
+    }
+    for (size_t row = 0; row < covered.size(); row++) {
+        if (covered[row]) continue;
+        secondField = int(row) / rows;
+        conceal(int(row) % rows * mbWidth, (int(row) % rows + 1) * mbWidth);
     }
     if (fieldMode) {
         secondField = 0;
@@ -455,7 +466,7 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
             std::swap(mvFNext[1], mvF[1]);
         }
     }
-    return !broken;
+    return true;
 }
 
 }
@@ -520,10 +531,19 @@ struct Vc1Decoder : SoftDecoder {
         p.height = std::min(height, c.codedHeight);
         p.chromaWidth = (p.width + 1) / 2;
         p.chromaHeight = (p.height + 1) / 2;
+        const bool primaries = c.colorPrim == 1 || c.colorPrim == 5 || c.colorPrim == 6;
+        const bool transfer = c.transferChar == 1 || c.transferChar == 7;
+        const bool matrix = c.matrixCoef == 1 || c.matrixCoef == 6 || c.matrixCoef == 7;
+        p.color.known = primaries || transfer || matrix;
+        if (p.color.known) {
+            p.color.primaries = primaries ? c.colorPrim : 2;
+            p.color.transfer = transfer ? c.transferChar : 2;
+            p.color.matrix = matrix ? c.matrixCoef : 2;
+        }
         for (int i = 0; i < 3; i++) {
             p.plane[i] = c.curPic.ptr->data[i];
             p.stride[i] = size_t(c.curPic.ptr->linesize[i]);
-            const int factor = c.profile != vc1::kProfileAdvanced ? 0 : i ? (c.rangeMapuvFlag ? c.rangeMapuv + 9 : 0) : (c.rangeMapyFlag ? c.rangeMapy + 9 : 0);
+            const int factor = c.profile != vc1::kProfileAdvanced ? (c.curPic.ptr->reduced ? 16 : 0) : i ? (c.rangeMapuvFlag ? c.rangeMapuv + 9 : 0) : (c.rangeMapyFlag ? c.rangeMapy + 9 : 0);
             if (!factor) continue;
             const int columns = i ? p.chromaWidth : p.width, rows = i ? p.chromaHeight : p.height;
             mapped[i].resize(size_t(columns) * size_t(rows));
@@ -555,7 +575,9 @@ struct Vc1Decoder : SoftDecoder {
             job.thread = std::thread([context, running] { running->ok = context->decodeFrame(running->bytes.data(), running->bytes.size()); });
             return true;
         }
-        if (!v->decodeFrame(data, size)) return false;
+        const bool decoded = v->decodeFrame(data, size);
+        settle(&shown);
+        if (!decoded) return false;
         emit(*v, stamp, shown);
         return true;
     }

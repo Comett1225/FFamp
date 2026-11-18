@@ -80,9 +80,11 @@ struct Block {
 };
 
 const int64_t kBlockFrames = 32768;
+const int64_t kBlockSpan = 4 * kBlockFrames;
 const int64_t kRunSeconds = 20;
 const int64_t kSpareSeconds = 3600;
 const int64_t kLongestPacket = 65536;
+const size_t kMostMarkBytes = size_t(32) << 20;
 const size_t kMostBlockPackets = 1024;
 
 uint64_t statedLayout(const Track& t, int channels) {
@@ -114,6 +116,7 @@ struct AudioDecoder::Impl {
     std::unique_ptr<PacketDecoder> codec;
     MixLevels levels;
     std::vector<int64_t> starts;
+    std::vector<size_t> blockFirst;
     int64_t first = 0;
     int64_t last = 0;
     size_t blockPackets = 1;
@@ -134,9 +137,12 @@ struct AudioDecoder::Impl {
     std::vector<size_t> feeds;
     std::vector<std::vector<uint8_t>> marks;
     std::vector<char> marked;
+    size_t markStride = 1;
+    size_t markBytes = 0;
     bool marking = false;
 
     size_t count() const { return starts.size() - 1; }
+    size_t blockEnd(size_t index) const { return index + 1 < blockFirst.size() ? blockFirst[index + 1] : count(); }
 
     void place() {
         const Track& t = *track;
@@ -158,9 +164,15 @@ struct AudioDecoder::Impl {
                 starts[i] = at >= 0 ? (at + grain / 2) / grain * grain : -((grain - grain / 2 - 1 - at) / grain * grain);
             }
         } else {
-            int64_t base = scaled(t.samples[0].pts, rate, t.timescale);
-            for (size_t i = 0; i <= n; ++i) starts[i] = base + int64_t(i) * codec->packetFrames;
-            starts[n] = std::clamp(scaled(endTicks, rate, t.timescale), starts[n - 1], starts[n]);
+            const int64_t step = codec->packetFrames;
+            int64_t at = scaled(t.samples[0].pts, rate, t.timescale);
+            for (size_t i = 0; i < n; ++i) {
+                const int64_t ahead = scaled(t.samples[i].pts, rate, t.timescale) - at;
+                if (ahead > step / 2) at += (ahead + step / 2) / step * step;
+                starts[i] = at;
+                at += step;
+            }
+            starts[n] = std::clamp(scaled(endTicks, rate, t.timescale), starts[n - 1], at);
         }
         for (size_t i = 1; i <= n; ++i) starts[i] = std::max(starts[i], starts[i - 1]);
         int64_t wantedFirst = std::clamp(scaled(t.mediaStart, rate, t.timescale), starts[0], starts[n]);
@@ -198,6 +210,13 @@ struct AudioDecoder::Impl {
         int64_t average = std::max<int64_t>(1, (starts[n] - starts[0]) / int64_t(n));
         blockPackets = size_t(std::clamp<int64_t>((kBlockFrames + average - 1) / average, 1, int64_t(kMostBlockPackets)));
         int64_t blockFrames = int64_t(blockPackets) * average;
+        blockFirst.clear();
+        for (size_t i = 0; i < n;) {
+            blockFirst.push_back(i);
+            size_t j = i + 1;
+            while (j < n && j - i < blockPackets && starts[j] - starts[i] < kBlockSpan) ++j;
+            i = j;
+        }
         runPackets = codec->stateless ? blockPackets : blockPackets * size_t(std::max<int64_t>(1, kRunSeconds * rate / blockFrames));
         hidden = wantedFirst > starts[0] ? INT64_MIN : starts[0] + codec->skip;
         feeds.resize((n + runPackets - 1) / runPackets);
@@ -209,6 +228,7 @@ struct AudioDecoder::Impl {
             marked.assign(feeds.size(), 0);
             marks[0] = std::move(state);
             marked[0] = 1;
+            markBytes = marks[0].size();
         }
     }
 
@@ -222,7 +242,18 @@ struct AudioDecoder::Impl {
     void remember(size_t at) {
         for (auto it = std::lower_bound(feeds.begin(), feeds.end(), at); it != feeds.end() && *it == at; ++it) {
             size_t g = size_t(it - feeds.begin());
-            if (!marked[g]) marked[g] = codec->save(marks[g]) ? 1 : 0;
+            if (marked[g] || g % markStride) continue;
+            markBytes -= marks[g].size();
+            marked[g] = codec->save(marks[g]) ? 1 : 0;
+            markBytes += marks[g].size();
+            while (markBytes > kMostMarkBytes && markStride < marks.size()) {
+                markStride *= 2;
+                for (size_t k = markStride / 2; k < marks.size(); k += markStride) {
+                    markBytes -= marks[k].size();
+                    std::vector<uint8_t>().swap(marks[k]);
+                    marked[k] = 0;
+                }
+            }
         }
     }
 
@@ -255,12 +286,22 @@ struct AudioDecoder::Impl {
         gap = 0;
     }
 
-    void settleGap() {
+    void settleGap(int64_t needFrom, int64_t needTo) {
         const size_t channels = size_t(codec->channels);
-        if (!gap || heldFrom + int64_t(held.size() / channels) < gapAt) return;
-        held.insert(held.begin() + long(size_t(std::max<int64_t>(0, gapAt - heldFrom)) * channels), size_t(gap) * channels, 0.0f);
+        if (!gap || heldFrom + int64_t(held.size() / channels) < gapAt || gapAt + gap >= needTo) return;
+        const size_t at = size_t(std::max<int64_t>(0, gapAt - heldFrom)) * channels;
+        const int64_t unseen = std::clamp<int64_t>(needFrom - gapAt, 0, gap);
+        if (unseen) {
+            held.erase(held.begin(), held.begin() + long(at));
+            heldFrom = std::max(heldFrom, gapAt) + unseen;
+            held.insert(held.begin(), size_t(gap - unseen) * channels, 0.0f);
+        } else {
+            held.insert(held.begin() + long(at), size_t(gap) * channels, 0.0f);
+        }
         gap = 0;
     }
+
+    bool silentTail(size_t to) const { return gap && gapAt + gap >= starts[to]; }
 
     void forget(int64_t before) {
         const size_t channels = size_t(codec->channels);
@@ -282,15 +323,15 @@ struct AudioDecoder::Impl {
         }
         const size_t n = count();
         const size_t channels = size_t(codec->channels);
-        const size_t from = size_t(index) * blockPackets;
-        const size_t to = std::min(n, from + blockPackets);
+        const size_t from = blockFirst[size_t(index)];
+        const size_t to = blockEnd(size_t(index));
         const int64_t group = int64_t(from / runPackets);
         if (run != group || heldFrom > starts[from]) restart(group);
         slot->index = -1;
-        while (!ended && heldFrom + int64_t(held.size() / channels) < starts[to]) {
+        while (!ended && heldFrom + int64_t(held.size() / channels) < (silentTail(to) ? gapAt : starts[to])) {
             if (next >= n) {
                 codec->finish(held);
-                settleGap();
+                settleGap(starts[from], starts[to]);
                 ended = true;
                 break;
             }
@@ -304,17 +345,23 @@ struct AudioDecoder::Impl {
             if (marking) remember(next);
             feedOne(next, &held);
             if (held.size() == before) {
-                held.resize(before + size_t(starts[next + 1] - starts[next]) * channels, 0.0f);
+                const int64_t span = starts[next + 1] - starts[next];
+                held.resize(before + size_t(std::min(span, kBlockSpan)) * channels, 0.0f);
+                if (!lagKnown && span > kBlockSpan) {
+                    gapAt = heldFrom + int64_t(held.size() / channels);
+                    gap = span - kBlockSpan;
+                }
             } else if (!lagKnown) {
                 lag = std::clamp<int64_t>(starts[next] + codec->packetFrames - heldFrom - int64_t(held.size() / channels), 0, codec->packetFrames);
                 lagKnown = true;
             }
-            settleGap();
+            settleGap(starts[from], starts[to]);
             ++next;
             forget(starts[from]);
         }
+        const bool quietTail = silentTail(to);
         const int64_t copyFrom = std::max(starts[from], heldFrom);
-        const int64_t copyTo = std::min(starts[to], heldFrom + int64_t(held.size() / channels));
+        const int64_t copyTo = std::min({starts[to], heldFrom + int64_t(held.size() / channels), quietTail ? gapAt : starts[to]});
         slot->pcm.assign(size_t(std::max<int64_t>(0, copyTo - starts[from])) * channels, 0.0f);
         if (copyTo > copyFrom) {
             memcpy(slot->pcm.data() + size_t(copyFrom - starts[from]) * channels, held.data() + size_t(copyFrom - heldFrom) * channels,
@@ -323,6 +370,12 @@ struct AudioDecoder::Impl {
         if (starts[from] < hidden) {
             const size_t quiet = size_t(std::min<int64_t>(hidden - starts[from], int64_t(slot->pcm.size() / channels)));
             std::fill(slot->pcm.begin(), slot->pcm.begin() + long(quiet * channels), 0.0f);
+        }
+        if (quietTail) {
+            const int64_t drop = std::clamp<int64_t>(gapAt - heldFrom, 0, int64_t(held.size() / channels));
+            held.erase(held.begin(), held.begin() + long(size_t(drop) * channels));
+            heldFrom = gapAt + gap;
+            gap = 0;
         }
         forget(starts[to]);
         if (ended) run = -1;
@@ -418,10 +471,10 @@ bool AudioDecoder::read(int64_t start, size_t frames, float* out) {
     while (at < end) {
         size_t packet = size_t(std::upper_bound(a.starts.begin(), a.starts.end(), at) - a.starts.begin()) - 1;
         if (packet >= a.count()) break;
-        int64_t index = int64_t(packet / a.blockPackets);
-        const Block* block = a.block(index);
-        int64_t blockStart = a.starts[size_t(index) * a.blockPackets];
-        int64_t blockEnd = a.starts[std::min(a.count(), (size_t(index) + 1) * a.blockPackets)];
+        const size_t index = size_t(std::upper_bound(a.blockFirst.begin(), a.blockFirst.end(), packet) - a.blockFirst.begin()) - 1;
+        const Block* block = a.block(int64_t(index));
+        int64_t blockStart = a.starts[a.blockFirst[index]];
+        int64_t blockEnd = a.starts[a.blockEnd(index)];
         int64_t take = std::min(end, blockStart + int64_t(block->pcm.size() / channels)) - at;
         if (take > 0) memcpy(to, block->pcm.data() + size_t(at - blockStart) * channels, size_t(take) * channels * sizeof(float));
         int64_t next = std::min(end, blockEnd);

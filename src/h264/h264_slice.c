@@ -1180,6 +1180,8 @@ static int h264_export_frame_props(H264Context *h)
             memcpy(cur->fg, &fgp, sizeof(fgp));
         }
     }
+    if (!cur->fg || cur->fg->codec.h274.model_id)
+        cur->needs_fg = 0;
 
     h->sei.picture_timing.timecode_cnt = 0;
 

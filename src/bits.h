@@ -4,6 +4,7 @@
 #include <cstring>
 
 namespace absent {
+inline namespace bitstream {
 
 class BitReader {
 public:
@@ -48,4 +49,5 @@ private:
     int64_t at = 0;
 };
 
+}
 }

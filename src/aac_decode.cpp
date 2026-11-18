@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <mutex>
 
 namespace absent {
@@ -599,6 +600,8 @@ struct Core {
         uint64_t layout = 0;
         uint8_t idMap[kEnd][kMaxElemId] = {};
         uint8_t typeCounts[kEnd] = {};
+        uint8_t sorted[kMaxElemId * 4][3];
+        memcpy(sorted, layoutMap, size_t(tags) * sizeof sorted[0]);
         if (oc[1].layoutMap != layoutMap) {
             memcpy(oc[1].layoutMap, layoutMap, size_t(tags) * sizeof layoutMap[0]);
             oc[1].layoutMapTags = tags;
@@ -608,9 +611,9 @@ struct Core {
             idMap[type][id] = typeCounts[type]++;
             if (idMap[type][id] >= kMaxElemId) return -1;
         }
-        layout = sniffChannelOrder(layoutMap, tags);
+        layout = sniffChannelOrder(sorted, tags);
         for (int i = 0; i < tags; i++) {
-            int type = layoutMap[i][0], id = layoutMap[i][1], iid = idMap[type][id], position = layoutMap[i][2];
+            int type = sorted[i][0], id = sorted[i][1], iid = idMap[type][id], position = sorted[i][2];
             if (cheConfigure(position, type, iid, &channels) < 0) return -1;
             tagCheMap[type][id] = che[type][iid].get();
         }
@@ -1472,6 +1475,15 @@ bool take(const std::vector<uint8_t>& in, size_t& at, void* p, size_t n) {
     return true;
 }
 
+std::vector<std::pair<size_t, size_t>> sbrParts(int type, bool withPs) {
+    const size_t second = offsetof(Sbr, data) + sizeof(SbrData), ps = offsetof(Sbr, ps), tail = offsetof(Sbr, n);
+    std::vector<std::pair<size_t, size_t>> parts{{0, second}};
+    if (type == kCpe || withPs) parts.push_back({second, ps - second});
+    if (withPs) parts.push_back({ps, tail - ps});
+    parts.push_back({tail, sizeof(Sbr) - tail});
+    return parts;
+}
+
 struct AacAudio : PacketDecoder {
     std::vector<uint8_t> specific;
     std::unique_ptr<Core> core;
@@ -1508,13 +1520,15 @@ struct AacAudio : PacketDecoder {
             for (int id = 0; id < kMaxElemId; id++) {
                 const Element* e = core->che[type][id].get();
                 if (!e) continue;
-                uint8_t head[3] = {uint8_t(type), uint8_t(id), uint8_t(e->sbrUsed)};
+                const bool withPs = type == kSce && core->oc[1].m4ac.ps;
+                uint8_t head[3] = {uint8_t(type), uint8_t(id), uint8_t(e->sbrUsed ? 1 + 2 * withPs : 0)};
                 put(state, head, sizeof head);
                 for (const Sce& s : e->ch) {
                     put(state, &s.ics, sizeof s.ics);
                     put(state, s.saved, sizeof s.saved);
                 }
-                if (e->sbrUsed) put(state, &e->sbr, sizeof e->sbr);
+                if (e->sbrUsed)
+                    for (const auto& [from, length] : sbrParts(type, withPs)) put(state, reinterpret_cast<const uint8_t*>(&e->sbr) + from, length);
             }
         }
         return true;
@@ -1536,8 +1550,10 @@ struct AacAudio : PacketDecoder {
             for (Sce& s : slot->ch) {
                 if (!take(state, at, &s.ics, sizeof s.ics) || !take(state, at, s.saved, sizeof s.saved)) return;
             }
-            slot->sbrUsed = head[2];
-            if (head[2] && !take(state, at, &slot->sbr, sizeof slot->sbr)) return;
+            slot->sbrUsed = head[2] & 1;
+            if (slot->sbrUsed)
+                for (const auto& [from, length] : sbrParts(head[0], head[2] & 2))
+                    if (!take(state, at, reinterpret_cast<uint8_t*>(&slot->sbr) + from, length)) return;
         }
     }
 };

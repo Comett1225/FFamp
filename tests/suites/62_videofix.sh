@@ -129,6 +129,19 @@ print(f'{sys.argv[1]}: mean RGB difference {gap:.2f}')
 sys.exit(0 if gap < 6 else 1)" $VF/$1 $VF/compressed_$1.mp4 "$FFMPEG"
 }
 for f in qtrle24.mov png.avi rawbgr.avi; do check "compress of $f keeps its colours (RGB pictures converted, not read as YCbCr)" vf_colours $f; done
+vf_make dnxhd_1080i.mov "testsrc2=size=1920x1080:rate=25" -t 0.2 -c:v dnxhd -b:v 120M -pix_fmt yuv422p -flags +ildct
+check "interlaced DNxHD decodes bit-exact against ffmpeg" $VC planes $VF/dnxhd_1080i.mov yuv422p
+check "DNxHD whose second field claims more rows than its first is refused, not written past the picture" $VC taller $VF/dnxhd_1080i.mov $VF/dnxhd_taller.mov
+vf_make ffv1_gray.avi "$S" -t 0.4 -c:v ffv1 -pix_fmt gray
+check "gray FFV1 with no range label is full range: BGRA equals ffmpeg's" $VC rgb $VF/ffv1_gray.avi
+vf_make prores4444.mov "testsrc2=size=320x240:rate=25" -t 0.4 -c:v prores_ks -profile:v 4 -pix_fmt yuv444p10le
+check "ProRes 4444 whose frame header gives a colour but matrix 0 (unknown) is not taken as RGB" $VC prores-matrix $VF/prores4444.mov $VF/prores4444_m0.mov
+vf_make yuv9.avi "$S" -t 0.4 -c:v rawvideo -pix_fmt yuv410p
+vf_make ffv1_410.mkv "$S" -t 0.4 -c:v ffv1 -pix_fmt yuv410p
+for f in yuv9.avi ffv1_410.mkv; do check "4:1:0 $f through SoftVideo: chroma rows where ffmpeg puts them (mean within 3)" $VC soft-chroma $VF/$f 3; done
+vf_make h264_10_slices.mp4 "testsrc2=size=320x240:rate=25" -t 0.2 -c:v libx264 -preset veryfast -pix_fmt yuv420p10le -x264-params slices=4:keyint=1
+if [ -s $VF/h264_10_slices.mp4 ]; then check "10-bit H.264 with a damaged slice: concealment leaves its macroblocks decoded before the damage alone" $VC damaged-slice $VF/h264_10_slices.mp4 $VF/h264_10_damaged.mp4
+else skip "10-bit H.264 concealment (no libx264 here)"; fi
 for f in qtrle.mov ffv1.mkv ffv1_range.mkv; do check "random frames of $f equal the straight decode" python3 comparex.py selfseek $VF/$f 8 3; done
 for pair in dnxhr_hq.mov:dnxhd qtrle.mov:qtrle png.mov:png v210.mov:v210 raw.avi:rawvideo ut.avi:utvideo ffv1.mkv:ffv1; do
     check "probe names ${pair%%:*} as ffprobe does (${pair##*:})" vf_named ${pair%%:*} ${pair##*:}

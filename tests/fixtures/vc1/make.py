@@ -50,6 +50,7 @@ class Stream:
         self.max_b = 0 if simple else 1
         self.loop = 0 if simple else 1
         self.overlap = 1
+        self.dquant = 0
 
     def sequence(self):
         b = Bits()
@@ -63,7 +64,7 @@ class Stream:
         b.put(1, 1)
         b.put(1, 1)
         b.put(0, 1)
-        b.put(0, 2)
+        b.put(self.dquant, 2)
         b.put(0, 1)
         b.put(0, 1)
         b.put(self.overlap, 1)
@@ -198,6 +199,43 @@ class Stream:
             b.put(value, size)
         return b.data()
 
+    def edge_intra(self, pqindex, absolute, dc):
+        b = Bits()
+        self.head(b, "P", pqindex)
+        modes = ["1mv", "mixed", "hpel", "ic", "bilinear"] if PQUANT[pqindex] <= 12 else ["bilinear", "1mv", "hpel", "ic", "mixed"]
+        b.put(1, modes.index("1mv") + 1)
+        rows = [[1 if (x, y) == (0, 0) else 0 for x in range(self.mbw)] for y in range(self.mbh)]
+        self.plane(b, 1, "colskip", rows)
+        b.put(0, 2)
+        b.put(0, 2)
+        if self.dquant == 1:
+            b.put(1, 1)
+            b.put(0, 2)
+        b.put(7, 3)
+        b.put(absolute, 5)
+        b.put(0, 1)
+        b.put(0, 1)
+        b.put(MV_CODES[35], MV_BITS[35])
+        b.put(0, 1)
+        for n, diff in enumerate([dc, 0, 0, 0, dc // 2, -dc // 2]):
+            table = DC[0][1 if n >= 4 else 0]
+            b.put(table[abs(diff) * 2], table[abs(diff) * 2 + 1])
+            if diff:
+                b.put(1 if diff < 0 else 0, 1)
+        return b.data()
+
+    def still(self, pqindex, reduced=0):
+        b = Bits()
+        self.head(b, "P", pqindex, reduced)
+        modes = ["1mv", "mixed", "hpel", "ic", "bilinear"] if PQUANT[pqindex] <= 12 else ["bilinear", "1mv", "hpel", "ic", "mixed"]
+        b.put(1, modes.index("1mv") + 1)
+        self.plane(b, 1, "colskip", [[0] * self.mbw for _ in range(self.mbh)])
+        b.put(0, 2)
+        b.put(0, 2)
+        b.put(0, 1)
+        b.put(0, 1)
+        return b.data()
+
     def bidirectional(self, pqindex, interpolated):
         b = Bits()
         self.head(b, "B", pqindex)
@@ -241,22 +279,26 @@ def seed(path, sequence, frames):
     open(path, "wb").write(bytes([0]) + sequence + b"".join(struct.pack(">H", len(f)) + f for _, f in frames))
 
 
-def main(folder):
-    main_profile = Stream(False, 176, 144)
-    frames = [
+def bframes(main_profile, reduced):
+    return [
         (True, main_profile.intra(0, 12)),
         (False, main_profile.predicted(12, ((2, 4), (2, 0)), "1mv")),
         (False, main_profile.bidirectional(12, False)),
         (False, main_profile.predicted(13, ((1, 2), (3, 3)), "1mv", light=(36, 5))),
         (False, main_profile.bidirectional(13, True)),
-        (False, main_profile.predicted(12, ((2, 1), (1, 0)), "hpel", reduced=1)),
+        (False, main_profile.predicted(12, ((2, 1), (1, 0)), "hpel", reduced=reduced)),
         (False, main_profile.bidirectional(12, False)),
-        (True, main_profile.intra(3, 14, reduced=1)),
+        (True, main_profile.intra(3, 14, reduced=reduced)),
         (False, main_profile.predicted(10, ((3, 5), (2, 6)), "1mv")),
         (False, main_profile.bidirectional(10, False)),
         (False, main_profile.predicted(12, ((1, 1), (1, 3)), "bilinear", light=(20, 40))),
         (False, main_profile.bidirectional(12, True)),
     ]
+
+
+def main(folder):
+    main_profile = Stream(False, 176, 144)
+    frames = bframes(main_profile, 1)
     avi(os.path.join(folder, "main_bframes.avi"), 176, 144, main_profile.sequence(), frames)
     seed(os.path.join(folder, "..", "fuzz", "vc1", "main_bframes.bin"), main_profile.sequence(), frames)
     simple = Stream(True, 160, 112)
@@ -269,5 +311,27 @@ def main(folder):
     seed(os.path.join(folder, "..", "fuzz", "vc1", "simple.bin"), simple.sequence(), frames)
 
 
+def edges(folder):
+    for dquant in (1, 2):
+        stream = Stream(False, 64, 48)
+        stream.dquant = dquant
+        frames = [(True, stream.intra(2, 12)), (False, stream.edge_intra(12, 20, 24))]
+        avi(os.path.join(folder, f"dquant{dquant}.avi"), 64, 48, stream.sequence(), frames)
+
+
+def ranges(folder):
+    plain = Stream(False, 176, 144)
+    avi(os.path.join(folder, "main_plain.avi"), 176, 144, plain.sequence(), bframes(plain, 0))
+    stream = Stream(False, 64, 48)
+    frames = [(True, stream.intra(1, 12, reduced=1)), (False, stream.still(12, reduced=1)), (False, stream.still(12)), (False, stream.still(12))]
+    avi(os.path.join(folder, "rangeup.avi"), 64, 48, stream.sequence(), frames)
+
+
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else HERE)
+    folder = sys.argv[1] if len(sys.argv) > 1 else HERE
+    if sys.argv[2:] == ["dquant"]:
+        edges(folder)
+    elif sys.argv[2:] == ["ranges"]:
+        ranges(folder)
+    else:
+        main(folder)

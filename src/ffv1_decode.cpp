@@ -208,7 +208,7 @@ struct Ffv1Decoder : SoftDecoder {
         shiftX = c.symbol(state, false);
         shiftY = c.symbol(state, false);
         transparency = c.bit(state);
-        if (colorspace == 2) return false;
+        if (colorspace < 0 || colorspace > 1) return false;
         planeCount = 1 + (chroma || version < 4) + transparency;
         hSlices = 1 + c.symbol(state, false);
         vSlices = 1 + c.symbol(state, false);
@@ -287,7 +287,8 @@ struct Ffv1Decoder : SoftDecoder {
             planeCount = 2 + transparency;
             if (shiftX > 4 || shiftY > 4 || shiftX < 0 || shiftY < 0) return false;
         }
-        if (bits <= 0 || bits > 16 || colorspace > 1 || flt) return false;
+        if (bits == 0) bits = 8;
+        if (bits < 0 || bits > 16 || colorspace < 0 || colorspace > 1 || flt) return false;
         if (colorspace == 1 && (shiftX || shiftY)) return false;
         if (colorspace == 0 && transparency && !chroma) return false;
         if (colorspace == 0 && bits > 8 && bits != 9 && bits != 10 && bits != 12 && bits != 14 && bits != 16) return false;
@@ -665,7 +666,9 @@ struct Ffv1Decoder : SoftDecoder {
             const int cw = chroma ? -((-width) >> shiftX) : (width + 1) / 2, ch = chroma ? -((-height) >> shiftY) : (height + 1) / 2;
             out.shape(width, height, cw, ch, bits <= 8 ? 8 : bits, transparency);
             out.color = trackColor;
+            if (!out.color.matrix) out.color.matrix = 1;
             if (!chroma) {
+                out.color.full = true;
                 const uint16_t middle = uint16_t(1 << ((bits <= 8 ? 8 : bits) - 1));
                 for (int plane = 1; plane <= 2; ++plane) {
                     if (bits <= 8) std::fill(out.data[plane].begin(), out.data[plane].end(), uint8_t(128));

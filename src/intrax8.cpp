@@ -602,14 +602,14 @@ bool IntraX8::intraBlock(int chroma) {
     return true;
 }
 
-void IntraX8::decode(BitReader& in, uint8_t* const data[3], const int linesize[3], int8_t* qscaleTable, int dq, int quantOffset, bool filter) {
+int IntraX8::decode(BitReader& in, uint8_t* const data[3], const int linesize[3], int8_t* qscaleTable, int dq, int quantOffset, bool filter) {
     gb = &in;
     dquant = dq;
     quant = dq >> 1;
     qsum = quantOffset;
     loopFilter = filter;
     useQuantMatrix = int(in.read(1));
-    if (quant <= 0) return;
+    if (quant <= 0) return 0;
     for (int i = 0; i < 3; i++) lines[i] = linesize[i];
     divideQuantDcLuma = ((1 << 16) + (quant >> 1)) / quant;
     if (quant < 5) {
@@ -622,21 +622,23 @@ void IntraX8::decode(BitReader& in, uint8_t* const data[3], const int linesize[3
     std::fill(std::begin(acTable), std::end(acTable), nullptr);
     std::fill(std::begin(dcTable), std::end(dcTable), nullptr);
     orientTable = nullptr;
+    auto stopped = [&] { return (mbY >> 1) * mbWidth + ((mbY & 1) ? mbX >> 1 : 0); };
     for (mbY = 0; mbY < mbHeight * 2; mbY++) {
         dest[0] = data[0] + ptrdiff_t(mbY) * linesize[0] * 8;
         dest[1] = data[1] + ptrdiff_t(mbY & ~1) * linesize[1] * 4;
         dest[2] = data[2] + ptrdiff_t(mbY & ~1) * linesize[2] * 4;
         int mbXy = (mbY >> 1) * (mbWidth + 1);
-        if (in.left() < 1) return;
-        for (mbX = 0; mbX < mbWidth * 2; mbX++) {
+        mbX = 0;
+        if (in.left() < 1) return stopped();
+        for (; mbX < mbWidth * 2; mbX++) {
             prediction();
-            if (!spatialPredictor(0) || !intraBlock(0)) return;
+            if (!spatialPredictor(0) || !intraBlock(0)) return stopped();
             if (mbX & mbY & 1) {
                 chromaPrediction();
                 spatialPredictor(1);
-                if (!intraBlock(1)) return;
+                if (!intraBlock(1)) return stopped();
                 spatialPredictor(2);
-                if (!intraBlock(2)) return;
+                if (!intraBlock(2)) return stopped();
                 dest[1] += 8;
                 dest[2] += 8;
                 if (qscaleTable) qscaleTable[mbXy] = int8_t(quant);
@@ -645,6 +647,7 @@ void IntraX8::decode(BitReader& in, uint8_t* const data[3], const int linesize[3
             dest[0] += 8;
         }
     }
+    return mbWidth * mbHeight;
 }
 
 }

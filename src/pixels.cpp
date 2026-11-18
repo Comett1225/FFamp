@@ -202,8 +202,9 @@ void pictureToI420(const Picture& p, std::vector<uint8_t>& out) {
         const uint8_t* source = whole.data() + luma + size_t(plane) * from;
         uint8_t* to = out.data() + luma + size_t(plane) * size_t(cw) * size_t(ch);
         for (int y = 0; y < ch; ++y) {
-            const uint8_t* a = source + size_t(std::min(y * stepY, p.chromaHeight - 1)) * size_t(p.chromaWidth);
-            const uint8_t* b = source + size_t(std::min(y * stepY + stepY - 1, p.chromaHeight - 1)) * size_t(p.chromaWidth);
+            const int rowA = p.chromaHeight < ch ? y * p.chromaHeight / ch : y * stepY, rowB = p.chromaHeight < ch ? rowA : rowA + stepY - 1;
+            const uint8_t* a = source + size_t(std::min(rowA, p.chromaHeight - 1)) * size_t(p.chromaWidth);
+            const uint8_t* b = source + size_t(std::min(rowB, p.chromaHeight - 1)) * size_t(p.chromaWidth);
             for (int x = 0; x < cw; ++x) {
                 if (p.chromaWidth < cw) {
                     const int c = std::min(x / 2, p.chromaWidth - 1), side = x % 2 ? std::min(c + 1, p.chromaWidth - 1) : std::max(c - 1, 0);
@@ -246,7 +247,7 @@ void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, in
     const float top = float((1 << p.bits) - 1), unit = float(1 << (p.bits - 8));
     const float lumaBase = p.color.full ? 0 : 16 * unit, lumaScale = p.color.full ? 1 / top : 1 / (219 * unit);
     const float chromaBase = 128 * unit, chromaScale = p.color.full ? 1 / top : 1 / (224 * unit);
-    const bool halfRows = p.chromaHeight < p.height, halfColumns = p.chromaWidth < p.width, quarterColumns = p.chromaWidth * 2 < p.width;
+    const bool halfRows = p.chromaHeight < p.height, quarterRows = p.chromaHeight * 2 < p.height, halfColumns = p.chromaWidth < p.width, quarterColumns = p.chromaWidth * 2 < p.width;
     const std::vector<float>& linear = hlg ? levels.hlg : levels.pq;
 
 
@@ -264,7 +265,11 @@ void rowsToBGRA(const Picture& p, uint8_t* out, size_t stride, bool redFirst, in
         rowOf(p, 0, y, luma.data());
         int near = y, far = y;
         float nearWeight = 1;
-        if (halfRows) {
+        if (quarterRows) {
+            near = y / 4;
+            far = std::clamp(y % 4 >= 2 ? near + 1 : near - 1, 0, p.chromaHeight - 1);
+            nearWeight = y % 4 == 0 || y % 4 == 3 ? 0.625f : 0.875f;
+        } else if (halfRows) {
             near = y / 2;
             far = std::clamp(y % 2 ? near + 1 : near - 1, 0, p.chromaHeight - 1);
             nearWeight = 0.75f;

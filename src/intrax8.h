@@ -13,7 +13,7 @@ void wmv2IdctPut(uint8_t* dest, ptrdiff_t stride, int16_t* block);
 class IntraX8 {
 public:
     void setSize(int mbWidth, int mbHeight);
-    void decode(BitReader& in, uint8_t* const data[3], const int linesize[3], int8_t* qscaleTable, int dquant, int quantOffset, bool loopFilter);
+    int decode(BitReader& in, uint8_t* const data[3], const int linesize[3], int8_t* qscaleTable, int dquant, int quantOffset, bool loopFilter);
 
 private:
     int dcLevel(int mode, int& level, int& final);

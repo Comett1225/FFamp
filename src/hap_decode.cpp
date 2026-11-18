@@ -167,17 +167,16 @@ struct HapDecoder : SoftDecoder {
     const char* name() const override { return "hap"; }
     void reset() override {}
 
-    bool unpack(const uint8_t* data, size_t size, size_t at, int ratio, int wantFormat, size_t& sectionSize) {
+    bool unpack(const uint8_t* data, size_t size, size_t at, int ratio, int wantFormat, size_t& sectionEnd) {
         Section head;
         if (!section(data, size, at, head)) return false;
-        sectionSize = head.size;
+        sectionEnd = at + head.size;
         if (wantFormat >= 0 && (head.type & 15) != wantFormat) return false;
         struct Chunk {
             int compressor = 0;
             size_t offset = 0, size = 0;
         };
         std::vector<Chunk> chunks;
-        const size_t body = at;
         const int kind = head.type & 0xF0;
         if (kind == 0xA0 || kind == 0xB0) {
             chunks.push_back({kind, 0, head.size});
@@ -236,7 +235,6 @@ struct HapDecoder : SoftDecoder {
                 return false;
             }
         }
-        (void)body;
         return total == expected;
     }
 
@@ -247,19 +245,18 @@ struct HapDecoder : SoftDecoder {
         if (twoTextures) {
             Section outer;
             if (!section(data, size, start, outer) || (outer.type & 15) != 0x0D) return false;
-            start = 4;
         }
         const int format = tag == fourcc("Hap1") ? 0xB : tag == fourcc("Hap5") ? 0xE : tag == fourcc("HapY") ? 0xF : tag == fourcc("HapA") ? 0x1 : -1;
         const int ratio = tag == fourcc("Hap1") || alphaOnly ? 8 : 16;
-        size_t first = 0;
-        if (!unpack(data, size, start, ratio, format, first)) return false;
+        size_t firstEnd = 0;
+        if (!unpack(data, size, start, ratio, format, firstEnd)) return false;
         const size_t blocksWide = size_t((width + 3) / 4), blocksHigh = size_t((height + 3) / 4);
         out.rgb(width, height, 8, withAlpha);
         std::vector<uint8_t> second;
         if (twoTextures) {
             std::vector<uint8_t> colour = std::move(texture);
             size_t ignored = 0;
-            if (!unpack(data, size, start + first + 4, 8, 0x1, ignored)) return false;
+            if (!unpack(data, size, firstEnd, 8, 0x1, ignored)) return false;
             second = std::move(texture);
             texture = std::move(colour);
         }

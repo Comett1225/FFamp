@@ -1,7 +1,10 @@
 #include "../src/aac_config.h"
+#include "../src/audio_codec.h"
 #include "../src/capture.h"
 #include "../src/frames.h"
 #include "../src/nal.h"
+#include "../src/own_video.h"
+#include "../src/resample.h"
 #include "../src/tools_common.h"
 #include "absent/android.h"
 #include "absent/audio.h"
@@ -15,6 +18,9 @@
 #include <cstring>
 #include <functional>
 #include <numbers>
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 namespace {
 
@@ -167,6 +173,135 @@ bool codedGap() {
         if (!sameSound(*clean, clean->length() * 6 / 10, *apart, clean->length() * 6 / 10 + gapFrames)) return false;
     }
     return true;
+}
+
+Track retimed(const Track& from, int64_t timescale, size_t lateFrom, int64_t lateTicks) {
+    Track t = from;
+    auto move = [&](int64_t ticks) { return std::llround(double(ticks) * double(timescale) / double(from.timescale)); };
+    t.timescale = uint32_t(timescale);
+    t.mediaStart = move(from.mediaStart);
+    if (from.mediaEnd >= 0) t.mediaEnd = move(from.mediaEnd) + lateTicks;
+    for (size_t i = 0; i < t.samples.size(); ++i) {
+        Sample& s = t.samples[i];
+        s.pts = move(s.pts) + (i >= lateFrom ? lateTicks : 0);
+        s.dts = move(s.dts) + (i >= lateFrom ? lateTicks : 0);
+        s.duration = uint32_t(move(s.duration));
+    }
+    return t;
+}
+
+bool emptyFirstGap() {
+    for (const char* name : {"aac_stereo_44k.m4a", "mp3_stereo_44k.mp4"}) {
+        auto reader = Reader::open(fixtures + "/audio/" + name);
+        const Track* track = reader ? reader->first(Kind::Audio) : nullptr;
+        if (!track) return false;
+        LossyReader lossy;
+        lossy.inner = reader.get();
+        lossy.lost = UINT32_MAX;
+        Track late = *track;
+        const int64_t gapTicks = int64_t(late.timescale) * 5;
+        for (size_t i = 1; i < late.samples.size(); ++i) {
+            late.samples[i].pts += gapTicks;
+            late.samples[i].dts += gapTicks;
+        }
+        if (late.mediaEnd >= 0) late.mediaEnd += gapTicks;
+        auto clean = AudioDecoder::open(lossy, *track);
+        auto apart = AudioDecoder::open(lossy, late);
+        if (!clean || !apart) return false;
+        lossy.lost = 0;
+        const int64_t gapFrames = int64_t(clean->sampleRate()) * 5;
+        if (apart->length() != clean->length() + gapFrames) return false;
+        std::vector<float> quiet(size_t(4096 * apart->channels()));
+        if (!apart->read(gapFrames * 3 / 4, 4096, quiet.data())) return false;
+        for (float v : quiet) if (v != 0) return false;
+        if (!sameSound(*clean, clean->length() * 6 / 10, *apart, clean->length() * 6 / 10 + gapFrames)) return false;
+    }
+    return true;
+}
+
+bool codedGapTs() {
+    for (const char* name : {"aac_stereo_44k.m4a", "mp3_stereo_44k.mp4"}) {
+        auto reader = Reader::open(fixtures + "/audio/" + name);
+        const Track* track = reader ? reader->first(Kind::Audio) : nullptr;
+        if (!track) return false;
+        const Track even = retimed(*track, 90000, 0, 0);
+        auto clean = AudioDecoder::open(*reader, even);
+        if (!clean) return false;
+        const int64_t gapFrames = 9216;
+        const Track late = retimed(*track, 90000, track->samples.size() / 4, std::llround(double(gapFrames) * 90000.0 / clean->sampleRate()));
+        auto apart = AudioDecoder::open(*reader, late);
+        if (!apart || apart->length() != clean->length() + gapFrames) return false;
+        if (!sameSound(*clean, clean->length() / 10, *apart, clean->length() / 10)) return false;
+        if (!sameSound(*clean, clean->length() * 6 / 10, *apart, clean->length() * 6 / 10 + gapFrames)) return false;
+    }
+    return true;
+}
+
+int64_t peakBytes() {
+#ifdef _WIN32
+    return 0;
+#else
+    rusage use{};
+    getrusage(RUSAGE_SELF, &use);
+#ifdef __APPLE__
+    return int64_t(use.ru_maxrss);
+#else
+    return int64_t(use.ru_maxrss) * 1024;
+#endif
+#endif
+}
+
+bool longSilence() {
+    CountingReader reader;
+    std::vector<Span> spans;
+    const int64_t gapFrames = int64_t(48000) * 3000;
+    for (int i = 0; i < 40; ++i) spans.push_back({int64_t(i) * 1024 + (i > 10 ? gapFrames : 0), 1024});
+    fill(reader, 1, spans);
+    auto decoder = AudioDecoder::open(reader, reader.list[0]);
+    if (!decoder || decoder->length() != 40 * 1024 + gapFrames) return false;
+    const int64_t before = peakBytes();
+    const bool right = valueAt(*decoder, 10 * 1024 + 5) == 11 && valueAt(*decoder, 11 * 1024 + 5) == 0 && valueAt(*decoder, gapFrames / 2) == 0
+        && valueAt(*decoder, 11 * 1024 + gapFrames - 1) == 0 && valueAt(*decoder, 11 * 1024 + gapFrames + 5) == 12 && valueAt(*decoder, 39 * 1024 + gapFrames + 1023) == 40
+        && valueAt(*decoder, 10 * 1024 + 7) == 11;
+    return right && peakBytes() - before < (int64_t(64) << 20);
+}
+
+bool aacMarks() {
+#ifdef _WIN32
+    _putenv_s("FFAMP_NO_SYSTEM_AUDIO", "1");
+#else
+    setenv("FFAMP_NO_SYSTEM_AUDIO", "1", 1);
+#endif
+    auto reader = Reader::open(fixtures + "/audio/he_aac_v2_stereo_44k.m4a");
+    const Track* track = reader ? reader->first(Kind::Audio) : nullptr;
+    if (!track || track->samples.size() < 4) return false;
+    Track looped = *track;
+    looped.samples.clear();
+    looped.mediaStart = 0;
+    looped.mediaEnd = -1;
+    const int64_t step = int64_t(track->samples[1].pts - track->samples[0].pts);
+    for (int64_t i = 0; int64_t(looped.samples.size()) * step < int64_t(track->timescale) * 4500; ++i) {
+        Sample s = track->samples[size_t(i) % track->samples.size()];
+        s.pts = s.dts = i * step;
+        s.duration = uint32_t(step);
+        looped.samples.push_back(s);
+    }
+    auto decoder = AudioDecoder::open(*reader, looped);
+    if (!decoder) return false;
+    const int64_t before = peakBytes();
+    const size_t channels = size_t(decoder->channels());
+    std::vector<float> chunk(size_t(1) << 18), probe(64 * channels);
+    std::vector<std::pair<int64_t, std::vector<float>>> seen;
+    const int64_t frames = int64_t(chunk.size() / channels);
+    for (int64_t at = 0, n = 0; at < decoder->length(); at += frames, ++n) {
+        if (!decoder->read(at, size_t(frames), chunk.data())) return false;
+        if (n % 151 == 75) seen.push_back({at + 1000, std::vector<float>(chunk.begin() + ptrdiff_t(1000 * channels), chunk.begin() + ptrdiff_t(1064 * channels))});
+    }
+    const bool small = peakBytes() - before < (int64_t(48) << 20);
+    for (auto it = seen.rbegin(); it != seen.rend(); ++it) {
+        if (!decoder->read(it->first, 64, probe.data()) || probe != it->second) return false;
+    }
+    return small && seen.size() > 4;
 }
 
 bool audioNegative() {
@@ -1299,6 +1434,227 @@ bool copyTags() {
     return true;
 }
 
+struct Shown {
+    int64_t stamp = 0;
+    std::vector<uint8_t> luma, alpha;
+    int width = 0, height = 0;
+};
+
+PictureSink keeper(std::vector<Shown>& list) {
+    return [&list](const absent::Picture& p) {
+        Shown s;
+        s.stamp = p.stamp;
+        s.width = p.width;
+        s.height = p.height;
+        for (int y = 0; y < p.height; ++y) s.luma.insert(s.luma.end(), p.plane[0] + size_t(y) * p.stride[0], p.plane[0] + size_t(y) * p.stride[0] + p.width);
+        for (int y = 0; p.alpha && y < p.height; ++y) s.alpha.insert(s.alpha.end(), p.alpha + size_t(y) * p.alphaStride, p.alpha + size_t(y) * p.alphaStride + p.width);
+        list.push_back(std::move(s));
+    };
+}
+
+std::vector<uint8_t> hapSection(int type, const std::vector<uint8_t>& body, bool longHeader) {
+    std::vector<uint8_t> out;
+    if (longHeader) out = {0, 0, 0, uint8_t(type), uint8_t(body.size()), uint8_t(body.size() >> 8), uint8_t(body.size() >> 16), uint8_t(body.size() >> 24)};
+    else out = {uint8_t(body.size()), uint8_t(body.size() >> 8), uint8_t(body.size() >> 16), uint8_t(type)};
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+bool ownVideoShapes() {
+    Track hap;
+    hap.codec = fourcc("HapM");
+    hap.width = hap.height = 8;
+    std::vector<uint8_t> colour, veil;
+    for (int block = 0; block < 4; ++block) {
+        const uint8_t texture[16] = {255, 255, 0, 0, 0, 0, 0, 0, uint8_t(block * 60), 0x80, uint8_t(block * 60), 0x80, 0, 0, 0, 0};
+        colour.insert(colour.end(), texture, texture + 16);
+        const uint8_t alpha[8] = {uint8_t(40 + block * 50), uint8_t(40 + block * 50), 0, 0, 0, 0, 0, 0};
+        veil.insert(veil.end(), alpha, alpha + 8);
+    }
+    std::vector<std::vector<Shown>> results(2);
+    for (int longHeader = 0; longHeader < 2; ++longHeader) {
+        std::vector<uint8_t> inner = hapSection(0xAF, colour, longHeader);
+        const std::vector<uint8_t> second = hapSection(0xA1, veil, longHeader);
+        inner.insert(inner.end(), second.begin(), second.end());
+        const std::vector<uint8_t> frame = hapSection(0x0D, inner, longHeader);
+        auto decoder = openOwnVideo(hap, nullptr);
+        if (!decoder || !decoder->decode(frame.data(), frame.size(), 0, keeper(results[size_t(longHeader)]))) return false;
+    }
+    const std::vector<Shown>& a = results[0];
+    const std::vector<Shown>& b = results[1];
+    if (a.size() != 1 || b.size() != 1 || a[0].luma != b[0].luma || a[0].alpha != b[0].alpha || a[0].alpha.size() != 64) return false;
+    if (a[0].alpha[0] != 40 || a[0].alpha[63] != 190) return false;
+    for (uint32_t tag : {fourcc("ULY0"), fourcc("Hap1"), fourcc("rle "), fourcc("FFV1")}) {
+        Track empty;
+        empty.codec = tag;
+        empty.width = 0;
+        empty.height = 16;
+        empty.bits = 24;
+        if (openOwnVideo(empty, nullptr)) return false;
+    }
+    return true;
+}
+
+bool vc1Concealed() {
+    auto reader = Reader::open(fixtures + "/vc1/main_bframes.avi");
+    const Track* track = reader ? reader->first(Kind::Video) : nullptr;
+    if (!track || track->samples.size() < 8) return false;
+    std::vector<Shown> clean, cut;
+    for (int pass = 0; pass < 2; ++pass) {
+        auto decoder = openVc1(track->codec, track->config, track->width, track->height, nullptr);
+        if (!decoder) return false;
+        for (uint32_t index : {0u, 7u}) {
+            std::vector<uint8_t> packet(track->samples[index].size);
+            if (!reader->read(*track, index, packet.data())) return false;
+            if (pass && index) packet.resize(packet.size() / 3);
+            if (!decoder->decode(packet.data(), packet.size(), index, keeper(pass ? cut : clean))) return false;
+        }
+    }
+    if (clean.size() != 2 || cut.size() != 2) return false;
+    const auto band = [](const Shown& s, bool bottom) {
+        const size_t rows = 16 * size_t(s.width);
+        return std::vector<uint8_t>(bottom ? s.luma.end() - ptrdiff_t(rows) : s.luma.begin(), bottom ? s.luma.end() : s.luma.begin() + ptrdiff_t(rows));
+    };
+    std::vector<uint8_t> reduced = band(cut[0], true);
+    for (uint8_t& value : reduced) value &= 0xFE;
+    return band(cut[1], false) == band(clean[1], false) && band(cut[1], true) == reduced && band(clean[1], true) != band(clean[0], true);
+}
+
+bool vc1BeforeAnchor() {
+    auto reader = Reader::open(fixtures + "/vc1/main_bframes.avi");
+    const Track* track = reader ? reader->first(Kind::Video) : nullptr;
+    auto decoder = track ? openVc1(track->codec, track->config, track->width, track->height, nullptr) : nullptr;
+    if (!decoder) return false;
+    std::vector<Shown> shown;
+    std::vector<int64_t> sent;
+    for (size_t i = 0; i < track->samples.size(); ++i) {
+        std::vector<uint8_t> packet(track->samples[i].size);
+        if (!reader->read(*track, uint32_t(i), packet.data())) return false;
+        sent.push_back(track->samples[i].pts);
+        if (!decoder->decode(packet.data(), packet.size(), track->samples[i].pts, keeper(shown))) return false;
+    }
+    decoder->drain(keeper(shown));
+    if (shown.size() != sent.size()) return false;
+    for (size_t i = 0; i < sent.size(); ++i) if (shown[i].stamp != sent[i]) return false;
+    return true;
+}
+
+struct PacketList : Reader {
+    std::vector<Track> list;
+    std::vector<std::vector<uint8_t>> packets;
+
+    const char* format() const override { return "packets"; }
+    const std::vector<Track>& tracks() const override { return list; }
+    bool read(const Track&, uint32_t index, uint8_t* out) override {
+        if (index >= packets.size()) return false;
+        memcpy(out, packets[index].data(), packets[index].size());
+        return true;
+    }
+};
+
+bool eac3Substreams() {
+    auto reader = Reader::open(fixtures + "/probe/h264_eac3.ts");
+    const Track* track = reader ? reader->first(Kind::Audio) : nullptr;
+    if (!track || track->codec != fourcc("ec-3") || track->samples.size() < 8) return false;
+    std::vector<std::vector<uint8_t>> plain, joined;
+    for (uint32_t i = 0; i < track->samples.size(); ++i) {
+        std::vector<uint8_t> packet(track->samples[i].size);
+        if (packet.size() < 8 || !reader->read(*track, i, packet.data())) return false;
+        std::vector<uint8_t> both = packet;
+        both.insert(both.end(), packet.begin(), packet.end());
+        both[packet.size() + 2] = uint8_t((both[packet.size() + 2] & ~0x38) | 0x08);
+        plain.push_back(std::move(packet));
+        joined.push_back(std::move(both));
+    }
+    std::vector<float> want, got;
+    for (int pass = 0; pass < 2; ++pass) {
+        const std::vector<std::vector<uint8_t>>& packets = pass ? joined : plain;
+        auto decoder = openAc3Audio(*track, packets[0], nullptr);
+        if (!decoder) return false;
+        for (const std::vector<uint8_t>& packet : packets) decoder->feed(packet, pass ? got : want);
+    }
+    return !want.empty() && got == want;
+}
+
+bool mixWide() {
+    auto gains = [](int from, int to, uint64_t mask, int lit) {
+        ChannelMix mix(from, to, mask);
+        std::vector<float> in(size_t(from), 0.0f), out(size_t(to), 0.0f);
+        in[size_t(lit)] = 1.0f;
+        mix.apply(in.data(), 1, out.data());
+        return out;
+    };
+    const float half = float(std::sqrt(0.5));
+    auto near = [](float a, float b) { return std::fabs(a - b) < 1e-5f; };
+    const std::vector<float> side = gains(8, 6, 0x63F, 6);
+    if (!near(side[4], half) || !near(side[0], 0) || !near(side[5], 0)) return false;
+    const std::vector<float> back = gains(6, 4, 0x3F, 5);
+    if (!near(back[3], half) || !near(back[1], 0)) return false;
+    const std::vector<float> sideOnly = gains(6, 5, 0x60F, 5);
+    if (!near(sideOnly[4], 1)) return false;
+    const std::vector<float> centre = gains(7, 8, 0x13F, 6);
+    if (!near(centre[4], half) || !near(centre[5], half)) return false;
+    const std::vector<float> wide = gains(10, 2, 0, 9);
+    if (!(wide[1] > 0.4f) || !near(wide[0], 0)) return false;
+    if (!near(gains(10, 4, 0, 0)[0], 1 / std::sqrt(3.0f)) || !near(gains(10, 4, 0, 3)[3], half) || !near(gains(10, 4, 0, 7)[3], half)) return false;
+    return gains(16, 1, 0, 15)[0] > 0.2f;
+}
+
+float loudness(const std::vector<float>& sound, size_t from, size_t to) {
+    double sum = 0;
+    for (size_t i = from; i < to && i < sound.size(); ++i) sum += double(sound[i]) * sound[i];
+    return to > from ? float(std::sqrt(sum / double(to - from))) : 0.0f;
+}
+
+bool speechShapes() {
+    const int rate = 48000;
+    std::vector<float> late(size_t(rate) * 2, 0.0f);
+    for (size_t i = late.size() / 2; i < late.size(); ++i) late[i] = 0.5f * float(std::sin(double(i) * 0.05));
+    const std::vector<float> quick = shapeSpeech(late, rate, 2, 0.25);
+    if (quick.size() != late.size() / 2 || !(loudness(quick, quick.size() * 3 / 4, quick.size()) > 0.1f)) return false;
+    std::vector<float> tone(size_t(rate), 0.0f);
+    for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.5f * float(std::sin(double(i) * 0.05));
+    const std::vector<float> slow = shapeSpeech(tone, rate, 0.5, 4);
+    if (slow.size() != tone.size() * 2 || !(loudness(slow, slow.size() * 3 / 4, slow.size()) > 0.1f)) return false;
+    std::vector<float> blip(size_t(rate) * 60 / 1000, 0.0f);
+    for (size_t i = blip.size() * 2 / 3; i < blip.size(); ++i) blip[i] = 0.5f * float(std::sin(double(i) * 0.05));
+    const std::vector<float> short2 = stretchSound(blip, rate, 2);
+    if (short2.size() != blip.size() / 2 || !(loudness(short2, short2.size() / 2, short2.size()) > 0.03f)) return false;
+    auto writer = AudioFileWriter::open(scratch("voice_stereo.wav"), AudioFormat::Wav16, rate, 2, 0);
+    if (!writer) return false;
+    std::vector<float> both(tone.size() * 2);
+    for (size_t i = 0; i < tone.size(); ++i) both[2 * i] = both[2 * i + 1] = 0.9f * float(std::sin(double(i) * 0.05));
+    if (!writer->write(both.data(), tone.size()) || !writer->finish()) return false;
+    if (!convertSpeech(scratch("voice_stereo.wav"), scratch("voice_mono.wav"), rate, 1, 1)) return false;
+    auto voice = PcmReader::open(scratch("voice_mono.wav"), rate, 1);
+    if (!voice || voice->length() <= 0) return false;
+    std::vector<float> mono(size_t(voice->length()));
+    if (!voice->read(0, mono.size(), mono.data())) return false;
+    float peak = 0;
+    for (float v : mono) peak = std::max(peak, std::fabs(v));
+    return peak > 0.85f && peak < 0.95f;
+}
+
+bool quarterChroma() {
+    const int size = 8;
+    std::vector<uint8_t> luma(size * size, 128), cb(4, 128), cr = {220, 220, 36, 36};
+    absent::Picture p;
+    p.width = p.height = size;
+    p.chromaWidth = p.chromaHeight = 2;
+    p.plane[0] = luma.data();
+    p.plane[1] = cb.data();
+    p.plane[2] = cr.data();
+    p.stride[0] = size;
+    p.stride[1] = p.stride[2] = 2;
+    std::vector<uint8_t> bgra(size * size * 4);
+    if (!pictureToBGRA(p, bgra.data(), size * 4)) return false;
+    auto red = [&](int y) { return int(bgra[size_t(y) * size * 4 + 2]); };
+    std::vector<uint8_t> i420;
+    pictureToI420(p, i420);
+    const uint8_t* v = i420.data() + size * size + 16;
+    return red(0) == red(1) && red(2) > red(5) + 60 && red(3) > red(4) && red(6) == red(7) && v[0] == 220 && v[4] == 220 && v[8] == 36 && v[12] == 36;
+}
+
 bool mkvRotation() {
     auto source = Reader::open(fixtures + "/probe/rot90.mp4");
     const Track* from = source ? source->first(Kind::Video) : nullptr;
@@ -2053,7 +2409,7 @@ bool probeRateBudget() {
 }
 
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
-    {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre}, {"s16-gain", s16Gain},
+    {"audio-gap", audioGap}, {"coded-gap-ts", codedGapTs}, {"empty-first-gap", emptyFirstGap}, {"aac-marks", aacMarks}, {"eac3-substreams", eac3Substreams}, {"long-silence", longSilence}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre}, {"s16-gain", s16Gain},
     {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"encoder-names", encoderNames}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
     {"aac-rate", aacRate}, {"rf64-size", rf64Size}, {"aifc-flip", aifcFlip}, {"trun-offset", trunOffset}, {"decode-time-limit", decodeTimeLimit},
     {"flac-rate", flacRate}, {"lace-bounds", laceBounds}, {"vorbis-modes", vorbisModes}, {"sps-limits", spsLimits}, {"tag-flags", tagFlags},
@@ -2075,6 +2431,7 @@ const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"mkv-track-cap", mkvTrackCap}, {"late-opus", lateOpus}, {"frames-from-zero", framesFromZero}, {"leading-pictures", leadingPictures},
     {"flac-successors", flacSuccessors}, {"compress-lead", compressLead}, {"ivf-shared-stamp", ivfSharedStamp}, {"kept-on-failure", keptOnFailure},
     {"same-input", sameInput}, {"layer-one", layerOne}, {"probe-rate-budget", probeRateBudget},
+    {"own-video-shapes", ownVideoShapes}, {"vc1-concealed", vc1Concealed}, {"vc1-before-anchor", vc1BeforeAnchor}, {"mix-wide", mixWide}, {"speech-shapes", speechShapes}, {"quarter-chroma", quarterChroma},
 };
 
 int fixcheck(const Args& args) {

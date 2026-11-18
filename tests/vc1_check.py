@@ -136,6 +136,16 @@ def reduced(path, same, expanded):
     return before and scaled
 
 
+def same(path, count):
+    size = frame_size(path)
+    data = subprocess.run([AMEDIA, "decode", path], capture_output=True).stdout
+    pictures = [data[i:i + size] for i in range(0, len(data), size)]
+    spread = len(set(pictures[0][:size * 2 // 3])) if pictures else 0
+    alike = len(set(pictures))
+    print(f"{os.path.basename(path)}: {len(pictures)} frames, {alike} different, {spread} luma levels in the first")
+    return len(pictures) == count and alike == 1 and spread > 40
+
+
 if __name__ == "__main__":
     mode = sys.argv[1]
     if mode == "ordered":
@@ -148,6 +158,8 @@ if __name__ == "__main__":
         ok = seed(sys.argv[2], sys.argv[3], int(sys.argv[4]))
     elif mode == "rangemap":
         ok = rangemap(sys.argv[2], sys.argv[3])
+    elif mode == "same":
+        ok = same(sys.argv[2], int(sys.argv[3]))
     elif mode == "reduced":
         ok = reduced(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     elif mode == "unordered":

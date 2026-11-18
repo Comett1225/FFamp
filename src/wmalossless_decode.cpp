@@ -750,7 +750,12 @@ struct WmaLossless : PacketDecoder {
     void run(const std::vector<uint8_t>& packet) {
         const uint8_t* data = packet.data();
         size_t size = packet.size();
+        const int64_t start = made;
         for (int turn = 0; size > 0 && turn < (1 << 16); ++turn) {
+            if ((made - start) * channels >= kMostOutput) {
+                packetLoss = true;
+                return;
+            }
             const int64_t used = call(data, size);
             if (used < 0 || size_t(used) >= size) return;
             data += used;

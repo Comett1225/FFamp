@@ -210,12 +210,12 @@ ChannelMix::ChannelMix(int inChannels, int outChannels, uint64_t inLayout, const
         stereoShare(p, levels, 0, frontPair, surrounds, l, r);
         return t == FL ? l : t == FR ? r : 0.0f;
     };
-    const int spread = (from + to - 1) / to;
     for (int o = 0; o < to; ++o) {
+        const int sharing = from / to + (o < from % to ? 1 : 0);
         for (int i = 0; i < from; ++i) {
             float& gain = matrix[size_t(o) * size_t(from) + size_t(i)];
             if (source.empty() && from > to) {
-                gain = i % to == o ? float(1 / std::sqrt(double(spread))) : 0.0f;
+                gain = i % to == o ? float(1 / std::sqrt(double(sharing))) : 0.0f;
             } else if (identity || source.empty() || target.empty()) {
                 gain = i == o ? 1.0f : 0.0f;
             } else if (to == 1 && source[size_t(i)] == BC) {

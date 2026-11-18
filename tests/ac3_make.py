@@ -817,6 +817,8 @@ KINDS = {
     "eac3_enhanced": [dict(eac3=True, mode=2, lfe=0, sr=0, enhanced=True)],
     "ac3_stereo_to_51": [dict(eac3=False, mode=2, lfe=0, sr=0, later=dict(mode=7, lfe=1))],
     "ac3_mono_to_stereo": [dict(eac3=False, mode=1, lfe=0, sr=0, later=dict(mode=2))],
+    "ac3_30_to_31": [dict(eac3=False, mode=3, lfe=0, sr=0, later=dict(mode=5))],
+    "ac3_50_to_31": [dict(eac3=False, mode=7, lfe=0, sr=0, later=dict(mode=5))],
     "eac3_51_centre_pair": [dict(eac3=True, mode=7, lfe=1, sr=0, remix=True), dict(eac3=True, mode=2, lfe=0, sr=0, dependent=True, chanmap=0x0400)],
 }
 

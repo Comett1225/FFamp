@@ -417,7 +417,8 @@ list; `Sample.offset` is then free for the reader's use.
     own start skip (`mediaStart` after the first packet, as Matroska's CodecDelay) replaces it, as in FFmpeg.
   - `save` / `load`: the bitstream state that a restart a few packets back cannot rebuild (for WMA the noise generator's position,
     the bit reservoir and the block sizes). `AudioDecoder` keeps one mark per 20-second run, taken while decoding passes it; a jump to
-    a run with no mark loads the nearest earlier one and brings the decoder forward with `skim`.
+    a run with no mark loads the nearest earlier one and brings the decoder forward with `skim`. Past 32 MB of marks (long HE-AAC)
+    every other mark is dropped and only every second, fourth, ... run is marked from then on.
   - `skim(packet)`: advance the state through a packet without making sound (WMA parses the packet and moves the noise generator but
     skips the transforms).
   - `refusal`: set by `counts` when the stream turns out to use a mode the decoder refuses; `AudioDecoder::open` then fails with it.
@@ -731,7 +732,7 @@ list; `Sample.offset` is then free for the reader's use.
   dequantizes to whole numbers (each mantissa shifted right by its exponent) and uncouples in fixed point, not the float coefficients
   of the 8.0 sources. Every acmode with and without LFE, 32, 44.1 and 48 kHz and AC-3's halved rates, coupling, rematrixing, block
   switching, dither from FFmpeg's generator (seed 0, continuing across packets), dynamic range at FFmpeg's default scale, and for
-  E-AC-3 AHT, SPX and dependent substreams with FFmpeg's channel map. A block with enhanced coupling (FFmpeg refuses it) repeats the
+  E-AC-3 AHT, SPX and dependent substreams with FFmpeg's channel map; independent substreams 1 to 7 are skipped. A block with enhanced coupling (FFmpeg refuses it) repeats the
   last good block as FFmpeg's concealment does; E-AC-3 at a reduced sample rate (FFmpeg decodes none of it) is refused at open.
   The dither generator, the delay upmix FFmpeg does once per stream (on the first block whose channels switch block size differently)
   and the E-AC-3 band structures are kept in the 20-second marks, so random reads equal the straight decode. Long transforms of up

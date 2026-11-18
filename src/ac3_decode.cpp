@@ -1391,6 +1391,7 @@ struct Ac3Audio : PacketDecoder {
     int frameHeader() {
         Header h;
         int err = parseHeader(r, h);
+        if (err == kParseType) s.substreamId = h.substreamId;
         if (err) return err;
         if (h.frameType != kDependent) frameLevels = mixLevelsOf(h);
         s.allocation.srCode = h.srCode;
@@ -1507,8 +1508,9 @@ struct Ac3Audio : PacketDecoder {
                 }
                 r = BitReader(buf + s.frameSize, size_t(std::min(bufSize - s.frameSize, kInputSize)));
                 Header next;
-                if (parseHeader(r, next)) return -1;
-                if (next.frameType == kDependent && next.numBlocks == s.numBlocks && s.sampleRate == next.sampleRate) {
+                const int nextError = parseHeader(r, next);
+                if (nextError && !(nextError == kParseType && next.substreamId)) return -1;
+                if (!nextError && next.frameType == kDependent && next.numBlocks == s.numBlocks && s.sampleRate == next.sampleRate) {
                     buf += s.frameSize;
                     bufSize -= s.frameSize;
                     s.previousOutputMode = s.outputMode;
@@ -1610,6 +1612,8 @@ struct Ac3Audio : PacketDecoder {
             float firstGain;
             uint64_t second;
             float secondGain;
+            uint64_t third = 0;
+            float thirdGain = 0;
         };
         const float half = float(M_SQRT1_2);
         static const Move moves[] = {
@@ -1622,11 +1626,12 @@ struct Ac3Audio : PacketDecoder {
             {0x200000000ULL, kSideLeft, half, kBackLeft, half}, {0x400000000ULL, kSideRight, half, kBackRight, half},
             {0x8000, kBackLeft, half, kSideLeft, half}, {0x20000, kBackRight, half, kSideRight, half},
             {0x800000000ULL, kLowFrequency, 1.0f, 0, 0},
+            {kBackCenter, kBackLeft, half, kSideLeft, half, kFrontLeft, 0.5f}, {kBackCenter, kBackRight, half, kSideRight, half, kFrontRight, 0.5f},
         };
         for (const Move& move : moves) {
             const float* from = (lastMask & move.bit & ~used) ? sourceOf(move.bit) : nullptr;
             if (!from) continue;
-            for (const auto& [target, gain] : {std::pair{move.first, move.firstGain}, std::pair{move.second, move.secondGain}}) {
+            for (const auto& [target, gain] : {std::pair{move.first, move.firstGain}, std::pair{move.second, move.secondGain}, std::pair{move.third, move.thirdGain}}) {
                 const uint64_t* place = std::find(want, want + count, target);
                 if (!target || place == want + count) continue;
                 float* dst = to + (place - want);

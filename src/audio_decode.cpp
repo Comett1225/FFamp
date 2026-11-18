@@ -84,6 +84,7 @@ const int64_t kBlockSpan = 4 * kBlockFrames;
 const int64_t kRunSeconds = 20;
 const int64_t kSpareSeconds = 3600;
 const int64_t kLongestPacket = 65536;
+const size_t kMostMarkBytes = size_t(32) << 20;
 const size_t kMostBlockPackets = 1024;
 
 uint64_t statedLayout(const Track& t, int channels) {
@@ -136,6 +137,8 @@ struct AudioDecoder::Impl {
     std::vector<size_t> feeds;
     std::vector<std::vector<uint8_t>> marks;
     std::vector<char> marked;
+    size_t markStride = 1;
+    size_t markBytes = 0;
     bool marking = false;
 
     size_t count() const { return starts.size() - 1; }
@@ -225,6 +228,7 @@ struct AudioDecoder::Impl {
             marked.assign(feeds.size(), 0);
             marks[0] = std::move(state);
             marked[0] = 1;
+            markBytes = marks[0].size();
         }
     }
 
@@ -238,7 +242,18 @@ struct AudioDecoder::Impl {
     void remember(size_t at) {
         for (auto it = std::lower_bound(feeds.begin(), feeds.end(), at); it != feeds.end() && *it == at; ++it) {
             size_t g = size_t(it - feeds.begin());
-            if (!marked[g]) marked[g] = codec->save(marks[g]) ? 1 : 0;
+            if (marked[g] || g % markStride) continue;
+            markBytes -= marks[g].size();
+            marked[g] = codec->save(marks[g]) ? 1 : 0;
+            markBytes += marks[g].size();
+            while (markBytes > kMostMarkBytes && markStride < marks.size()) {
+                markStride *= 2;
+                for (size_t k = markStride / 2; k < marks.size(); k += markStride) {
+                    markBytes -= marks[k].size();
+                    std::vector<uint8_t>().swap(marks[k]);
+                    marked[k] = 0;
+                }
+            }
         }
     }
 
@@ -330,7 +345,12 @@ struct AudioDecoder::Impl {
             if (marking) remember(next);
             feedOne(next, &held);
             if (held.size() == before) {
-                held.resize(before + size_t(std::min(starts[next + 1] - starts[next], kBlockSpan)) * channels, 0.0f);
+                const int64_t span = starts[next + 1] - starts[next];
+                held.resize(before + size_t(std::min(span, kBlockSpan)) * channels, 0.0f);
+                if (!lagKnown && span > kBlockSpan) {
+                    gapAt = heldFrom + int64_t(held.size() / channels);
+                    gap = span - kBlockSpan;
+                }
             } else if (!lagKnown) {
                 lag = std::clamp<int64_t>(starts[next] + codec->packetFrames - heldFrom - int64_t(held.size() / channels), 0, codec->packetFrames);
                 lagKnown = true;

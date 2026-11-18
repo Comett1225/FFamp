@@ -18,6 +18,8 @@ done
 check "make.py writes the committed fixtures again byte for byte" vc_remade
 check "B-pictures in AVI get their shown order from the picture types" vc_shown
 check "DQUANT 2 quantizes the picture's edge macroblocks with ALTPQUANT, as DQUANT 1 with the four-edge profile does (ST 421; ffmpeg uses PQUANT)" vc_edges
+rm -rf $O/vc_rg && mkdir -p $O/vc_rg && python3 $VC/make.py $O/vc_rg ranges
+check "still P-pictures after a range-reduced I-picture show it unchanged: a reduced one predicts unscaled, a full one scales its reference up (ST 421)" python3 vc1_check.py same $O/vc_rg/rangeup.avi 4
 check "six threads decoding the B-picture fixture at once each get the straight decode" vc_threads $VC/main_bframes.avi
 if command -v leaks > /dev/null; then
     check "jumping around the B-picture fixture leaks nothing (B-pictures go to worker threads)" eval "leaks --atExit -- $A frames $VC/main_bframes.avi --list 9,3,11,0,6,2,10,1 2> /dev/null | LC_ALL=C grep -aq ': 0 leaks for 0 total leaked bytes'"
@@ -27,8 +29,9 @@ if have_ffmpeg; then
     check "random frames of simple.avi against ffmpeg" python3 comparex.py seek $VC/simple.avi 8 7
     check "main_bframes.avi against ffmpeg: frames before range reduction bit-exact, the range-reduced P-picture scaled up for display as ST 421 says (ffmpeg shows it at half contrast)" python3 vc1_check.py reduced $VC/main_bframes.avi 5 6
     check "the four-edge DQUANT 1 picture bit-exact against ffmpeg" python3 vc1_check.py ordered $O/vc_dq/dquant1.avi
+    check "main_bframes.avi made without range reduction bit-exact against ffmpeg (bilinear and intensity-compensated P, interpolated B)" python3 vc1_check.py ordered $O/vc_rg/main_plain.avi
 fi
-rm -rf $O/vc_made $O/vc_dq
+rm -rf $O/vc_made $O/vc_dq $O/vc_rg
 
 echo "== VC-1: WMV3 Simple, Main and Complex (with and without X8 intra pictures), WVC1 and WMVA Advanced from WINMEDIA_SAMPLES (not committed)"
 VS="${WINMEDIA_SAMPLES:-}"

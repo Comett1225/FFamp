@@ -172,6 +172,7 @@ struct H263 : Mpv {
             } else if (ufep != 0) {
                 return -1;
             }
+            pbFrame = 0;
             switch (gb.bits(3)) {
             case 0:
             case 7:

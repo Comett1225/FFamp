@@ -313,7 +313,6 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
     std::vector<Slice> slices;
     int nSlices1 = -1;
     secondField = 0;
-    broken = false;
     if (size >= 4 && readBe32(buf + size - 4) == kCodeEndOfSequence) size -= 4;
     if (size == 0) return true;
     std::vector<uint8_t> buf2;
@@ -455,7 +454,7 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
             std::swap(mvFNext[1], mvF[1]);
         }
     }
-    return !broken;
+    return true;
 }
 
 }
@@ -520,6 +519,15 @@ struct Vc1Decoder : SoftDecoder {
         p.height = std::min(height, c.codedHeight);
         p.chromaWidth = (p.width + 1) / 2;
         p.chromaHeight = (p.height + 1) / 2;
+        const bool primaries = c.colorPrim == 1 || c.colorPrim == 5 || c.colorPrim == 6;
+        const bool transfer = c.transferChar == 1 || c.transferChar == 7;
+        const bool matrix = c.matrixCoef == 1 || c.matrixCoef == 6 || c.matrixCoef == 7;
+        p.color.known = primaries || transfer || matrix;
+        if (p.color.known) {
+            p.color.primaries = primaries ? c.colorPrim : 2;
+            p.color.transfer = transfer ? c.transferChar : 2;
+            p.color.matrix = matrix ? c.matrixCoef : 2;
+        }
         for (int i = 0; i < 3; i++) {
             p.plane[i] = c.curPic.ptr->data[i];
             p.stride[i] = size_t(c.curPic.ptr->linesize[i]);
@@ -555,7 +563,9 @@ struct Vc1Decoder : SoftDecoder {
             job.thread = std::thread([context, running] { running->ok = context->decodeFrame(running->bytes.data(), running->bytes.size()); });
             return true;
         }
-        if (!v->decodeFrame(data, size)) return false;
+        const bool decoded = v->decodeFrame(data, size);
+        settle(&shown);
+        if (!decoded) return false;
         emit(*v, stamp, shown);
         return true;
     }

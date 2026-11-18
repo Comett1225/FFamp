@@ -301,7 +301,6 @@ struct Vc1 {
     uint8_t bfractionLutIndex = 0, brokenLink = 0, closedEntry = 0;
     int endMbX = 0, resyncMarker = 0;
     alignas(32) int16_t blocks[6][64] = {};
-    bool broken = false;
     FramePool pool;
     IntraX8 x8;
     int lumaLines = 0, chromaLines = 0;
@@ -343,6 +342,7 @@ struct Vc1 {
     void decodeBBlocks();
     void decodeSkipBlocks();
     void decodeBlocks();
+    void conceal(int first, int last);
     int scaleforsameX(const int n, int dir);
     int scaleforsameY(const int n, int dir);
     int scaleforoppX(const int n);

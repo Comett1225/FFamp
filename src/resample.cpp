@@ -194,10 +194,29 @@ ChannelMix::ChannelMix(int inChannels, int outChannels, uint64_t inLayout, const
         frontPair = frontPair || p == FL || p == FR;
         surrounds = surrounds || p == BL || p == BR || p == SL || p == SR;
     }
+    auto has = [](const std::vector<Place>& list, Place p) { return std::find(list.begin(), list.end(), p) != list.end(); };
+    const float half = float(std::sqrt(0.5));
+    auto fold = [&](Place p, Place t) {
+        if (p == t) return 1.0f;
+        if (has(target, p)) return 0.0f;
+        const bool left = p == BL || p == SL;
+        if ((p == SL || p == SR) && has(target, BL)) return t == (left ? BL : BR) ? (has(source, BL) ? half : 1.0f) : 0.0f;
+        if ((p == BL || p == BR) && has(target, SL)) return t == (left ? SL : SR) ? (has(source, SL) ? half : 1.0f) : 0.0f;
+        if ((p == SL || p == SR || p == BL || p == BR) && has(target, BC)) return t == BC ? half : 0.0f;
+        if (p == BC && has(target, BL)) return t == BL || t == BR ? half : 0.0f;
+        if (p == BC && has(target, SL)) return t == SL || t == SR ? half : 0.0f;
+        if (p == LFE) return t == FC ? levels.lfe : 0.0f;
+        float l, r;
+        stereoShare(p, levels, 0, frontPair, surrounds, l, r);
+        return t == FL ? l : t == FR ? r : 0.0f;
+    };
+    const int spread = (from + to - 1) / to;
     for (int o = 0; o < to; ++o) {
         for (int i = 0; i < from; ++i) {
             float& gain = matrix[size_t(o) * size_t(from) + size_t(i)];
-            if (identity || source.empty() || target.empty()) {
+            if (source.empty() && from > to) {
+                gain = i % to == o ? float(1 / std::sqrt(double(spread))) : 0.0f;
+            } else if (identity || source.empty() || target.empty()) {
                 gain = i == o ? 1.0f : 0.0f;
             } else if (to == 1 && source[size_t(i)] == BC) {
                 gain = levels.surround * float(std::sqrt(0.5));
@@ -206,7 +225,7 @@ ChannelMix::ChannelMix(int inChannels, int outChannels, uint64_t inLayout, const
                 stereoShare(source[size_t(i)], levels, encoding, frontPair, surrounds, left, right);
                 gain = to == 2 ? (o == 0 ? left : right) : (left + right) * float(std::sqrt(0.5));
             } else {
-                gain = source[size_t(i)] == target[size_t(o)] ? 1.0f : 0.0f;
+                gain = fold(source[size_t(i)], target[size_t(o)]);
             }
         }
     }

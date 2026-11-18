@@ -2388,20 +2388,21 @@ void Vc1::decodeBBlocks()
                 if (gb.left() < 1) {
                     return;
                 }
+            int ret;
             if (fcm == kIlaceField) {
-                decodeBMbIntfi();
+                ret = decodeBMbIntfi();
                 if (loopFilter)
                     bIntfiLoopFilter();
             } else if (fcm == kIlaceFrame) {
-                decodeBMbIntfr();
+                ret = decodeBMbIntfr();
                 if (loopFilter)
                     pIntfrLoopFilter();
             } else {
-                decodeBMb();
+                ret = decodeBMb();
                 if (loopFilter)
                     iLoopFilter();
             }
-            if (gb.left() < 0 || gb.count() < 0) {
+            if (ret < 0 || gb.left() < 0 || gb.count() < 0) {
                 return;
             }
         }
@@ -2436,12 +2437,14 @@ void Vc1::decodeBlocks()
 {
     esc3LevelLength = 0;
     if (x8Type) {
-        x8.decode(gb, curPic.data, curPic.linesize, curPic.qscaleTable, 2 * pq + halfpq, pq * !pquantizer, loopFilter);
+        conceal(x8.decode(gb, curPic.data, curPic.linesize, curPic.qscaleTable, 2 * pq + halfpq, pq * !pquantizer, loopFilter), mbWidth * mbHeight);
     } else {
         curBlkIdx     =  0;
         leftBlkIdx    = -1;
         topleftBlkIdx =  1;
         topBlkIdx     =  2;
+        mbX = 0;
+        mbY = startMbY;
         switch (pictType) {
         case kPictureI:
             if (profile == kProfileAdvanced)
@@ -2464,6 +2467,27 @@ void Vc1::decodeBlocks()
             } else
                 decodeBBlocks();
             break;
+        }
+        if (mbY < endMbY)
+            conceal(std::max(startMbY * mbWidth, (mbY - 1) * mbWidth + std::max(mbX - 1, 0)), endMbY * mbWidth);
+    }
+}
+void Vc1::conceal(int first, int last)
+{
+    const bool bottom = fieldMode && !(secondField ^ tff);
+    const bool source = lastPic.ptr && lastPic.ptr != curPic.ptr;
+    for (int index = first; index < last; index++) {
+        const int x = index % mbWidth, y = index / mbWidth;
+        for (int p = 0; p < 3; p++) {
+            const int size = p ? 8 : 16;
+            const ptrdiff_t stride = curPic.linesize[p];
+            const ptrdiff_t at = (bottom ? curPic.ptr->linesize[p] : 0) + ptrdiff_t(y) * size * stride + x * size;
+            for (int row = 0; row < size; row++) {
+                if (source)
+                    memcpy(curPic.data[p] + at + row * stride, lastPic.data[p] + at + row * stride, size_t(size));
+                else
+                    memset(curPic.data[p] + at + row * stride, 0x80, size_t(size));
+            }
         }
     }
 }

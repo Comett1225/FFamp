@@ -25,7 +25,7 @@ std::vector<float> stretchSound(const std::vector<float>& in, int rate, double s
     const size_t hop = size_t(std::max(8, int(std::lround(rate * 0.020))));
     const size_t window = hop * 2;
     const long reach = std::max(4L, std::lround(rate * 0.010));
-    if (std::fabs(speed - 1.0) < 1e-9 || total < window * 2) return fitted(in, wanted);
+    if (std::fabs(speed - 1.0) < 1e-9) return fitted(in, wanted);
     std::vector<float> source(total + window * 2 + size_t(reach) * 2, 0.0f);
     std::copy(in.begin(), in.end(), source.begin());
     const long last = long(total);
@@ -73,8 +73,8 @@ std::vector<float> shapeSpeech(const std::vector<float>& mono, int rate, double 
     const size_t wanted = size_t(std::llround(double(mono.size()) / speed));
     const int played = int(std::lround(rate * pitch));
     if (played == rate) return stretchSound(mono, rate, speed);
-    const double first = std::clamp(speed / pitch, kSlowest, kFastest);
-    std::vector<float> stretched = stretchSound(mono, rate, first);
+    const double first = speed / pitch;
+    std::vector<float> stretched = first >= kSlowest && first <= kFastest ? stretchSound(mono, rate, first) : stretchSound(stretchSound(mono, rate, std::sqrt(first)), rate, std::sqrt(first));
     Resampler resampler(played, 1, rate, 1);
     resampler.push(stretched.data(), stretched.size());
     resampler.finish();
@@ -103,6 +103,8 @@ bool convertSpeech(const std::string& in, const std::string& out, int rate, doub
     if (reader->length() > kLongest) return fail("the voice file is too long");
     std::vector<float> voice(static_cast<size_t>(reader->length()));
     if (!reader->read(0, voice.size(), voice.data())) return fail("the voice file did not decode");
+    const float gain = float(1 / std::max(1.0, reader->mixPeak()));
+    for (float& sample : voice) sample *= gain;
     const std::vector<float> shaped = shapeSpeech(voice, rate, speed, pitch);
     if (shaped.empty()) return fail("the voice came out empty");
     auto writer = AudioFileWriter::open(out, AudioFormat::Wav16, rate, 1, 0, error);

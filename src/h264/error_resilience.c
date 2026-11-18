@@ -861,6 +861,7 @@ void ff_er_frame_end(ERContext *s, int *decode_error_flags)
     int is_intra_likely;
     int size = s->b8_stride * 2 * s->mb_height;
     int guessed_mb_type;
+    int bytes;
 
     if (!s->avctx->error_concealment || !atomic_load(&s->error_count)  ||
         s->avctx->lowres                                               ||
@@ -1069,7 +1070,13 @@ void ff_er_frame_end(ERContext *s, int *decode_error_flags)
     else
         s->cur_pic.f->decode_error_flags |= FF_DECODE_ERROR_CONCEALMENT_ACTIVE;
 
-    is_intra_likely = is_intra_more_likely(s);
+    bytes = s->cur_pic.f->format == AV_PIX_FMT_YUV420P || s->cur_pic.f->format == AV_PIX_FMT_YUVJ420P;
+    if (s->last_pic.tf && s->last_pic.f && s->last_pic.f->data[0]) {
+        ff_thread_await_progress(s->last_pic.tf, INT_MAX, 0);
+        if (s->last_pic.field_picture)
+            ff_thread_await_progress(s->last_pic.tf, INT_MAX, 1);
+    }
+    is_intra_likely = bytes ? is_intra_more_likely(s) : 0;
 
     guessed_mb_type = is_intra_likely ? MB_TYPE_INTRA4x4 :
                          (MB_TYPE_16x16 | (s->avctx->codec_id == AV_CODEC_ID_H264 ? MB_TYPE_L0 : MB_TYPE_FORWARD_MV));
@@ -1173,6 +1180,9 @@ void ff_er_frame_end(ERContext *s, int *decode_error_flags)
     } else
         guess_mv(s);
 
+    if (!bytes)
+        goto finish;
+
     for (mb_y = 0; mb_y < s->mb_height; mb_y++) {
         for (mb_x = 0; mb_x < s->mb_width; mb_x++) {
             int dc, dcu, dcv, y, n;
@@ -1270,6 +1280,7 @@ void ff_er_frame_end(ERContext *s, int *decode_error_flags)
         }
     }
 
+finish:
     for (i = 0; i < s->mb_num; i++) {
         const int mb_xy = s->mb_index2xy[i];
         int       error = s->error_status_table[mb_xy];

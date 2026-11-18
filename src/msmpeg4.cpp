@@ -320,7 +320,7 @@ struct Msmpeg4 : Mpv {
         }
         esc3LevelLength = esc3RunLength = 0;
         if (jType) {
-            x8.decode(gb, cur.data, cur.linesize, cur.qscaleTable, 2 * qscale, (qscale - 1) | 1, loopFilterOn);
+            conceal(x8.decode(gb, cur.data, cur.linesize, cur.qscaleTable, 2 * qscale, (qscale - 1) | 1, loopFilterOn));
             return 1;
         }
         return 0;

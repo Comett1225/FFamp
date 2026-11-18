@@ -167,6 +167,12 @@ list; `Sample.offset` is then free for the reader's use.
   preferred Lt/Rt or Pro Logic II downmix, which only stereo output uses), LFE dropped unless a level is stated, a back centre to mono
   at `surround * sqrt(0.5)`. `PcmReader::mixPeak()` is the largest row sum of the reader's matrix; 16-bit output divides by it when it
   is above 1, as swresample normalises a downmix for integer output (the `pcm --format s16le` command does).
+- Mixing to 3 to 8 channels (the layout by count) keeps every speaker the target has and moves the others to their nearest: side to
+  back (or back to side) at full level when the source has no such pair, at -3 dB when it has; a pair the target has neither of goes to
+  the back centre at -3 dB, a back centre to the back (or side) pair at -3 dB, LFE to the centre at the stated LFE level (none by
+  default), anything else as in the stereo fold onto FL and FR. The same count with a stated layout is passed through in the
+  decoder's order. More than eight channels with no layout are spread over fewer outputs in turn (channel i to output i mod N, at
+  1 / sqrt of the number sharing an output).
 - Off the Mac every decoder gives FFmpeg's order, which differs from the order by count where FFmpeg's layout does: 6.1 ALAC and AAC
   come out as FL FR FC LFE BL BR BC (`6.1(back)`), AAC with a program config element in FFmpeg's order for its layout. Such decoders
   state their layout as an FFmpeg channel mask (`AudioDecoder::layout()`, 0 when the order is the one by count), and `PcmReader`'s
@@ -374,12 +380,17 @@ list; `Sample.offset` is then free for the reader's use.
 - Every sample's picture comes out with that sample's time: B-pictures need no reorder delay because the reader's presentation times
   put them in order. Output is 8-bit 4:2:0 at the coded size, cut to the track size when the track is smaller.
 - Frame threads: a B or BI picture (nothing refers to it) is decoded on one of two worker threads, from a copy of the decoder state
-  and the shared reference pictures, while the caller's thread goes on with the next anchor. Its picture is handed to the sink at a
-  later `decode` (on the caller's thread) or at `drain`. A Simple or Main profile BI picture still sets the rounding control of the
+  and the shared reference pictures, while the caller's thread goes on with the next anchor. Its picture is handed to the sink (on the
+  caller's thread) before the next anchor's picture, when its worker is needed for a later B-picture, or at `drain`. A Simple or Main profile BI picture still sets the rounding control of the
   anchors that follow, as in a straight decode. I and P pictures, and Advanced profile samples that carry a sequence header or entry
   point, are decoded on the caller's thread. A jump waits for the workers and drops their pictures.
 - A B-picture with no earlier reference (right after a jump) and a picture that does not decode return `false`, so `VideoDecoder`
   shows the nearest earlier picture as FFmpeg's concealment does; a jump destroys the decoder state and starts again at a key frame.
+- Macroblocks that do not decode (a cut or damaged slice, an X8 picture that stops part way, a macroblock that fails, such as direct
+  mode in a field B-picture whose anchor is a frame) are filled from the reference picture before (grey at the start), from one
+  macroblock row above where decoding stopped to the end of that slice, and the picture is shown; FFmpeg's error resilience differs.
+- The display extension's colour description is given on each picture where FFmpeg exports it (primaries 1, 5, 6; transfer 1, 7;
+  matrix 1, 6, 7); the other fields are unspecified (2).
 - Frame buffers come from a small pool owned by the decoder: a picture handed to the sink stays valid until the next `decode`.
 - Bits and VLC tables: the shared `BitReader` and `Vlc` of `src/bits.h` and `src/vlc.h` (the WMA framework), with the few VC-1
   readers (unary, 0-1-2 codes) on top in `src/vc1.h`; the VC-1 tables are built from FFmpeg's code and length tables.
@@ -694,7 +705,8 @@ list; `Sample.offset` is then free for the reader's use.
   (`h264_ffamp.c`, API in `h264_ffamp.h`), FFmpeg's x86-64 assembly (NASM, `x86/`, built when CMake finds NASM; `ABSENT_H264_ASM=OFF` turns
   it off) and AArch64 NEON (`aarch64/`). `h264_soft.cpp` is the `SoftDecoder` (backend `h264`). Every profile FFmpeg decodes (Baseline to
   High 4:4:4 with lossless, 8 to 14 bits, PAFF and MBAFF, monochrome, RGB as G, B and R planes labelled matrix 0), FFmpeg's error
-  concealment, H.274 film grain applied as FFmpeg applies it (model 0, 8-bit 4:2:0), exact cropping as the ffmpeg command line applies it. Pictures that are not recovered (before the first IDR or
+  concealment (after the whole reference picture is decoded; above 8 bits and other than 4:2:0 only its motion-vector part, as the DC
+  fill and edge filter write 8-bit 4:2:0 samples), H.274 film grain applied as FFmpeg applies it (model 0, 8-bit 4:2:0), exact cropping as the ffmpeg command line applies it. Pictures that are not recovered (before the first IDR or
   recovery point) are held back, as in FFmpeg. Test switches: `FFAMP_H264_THREADS` (0 is FFmpeg's choice, the CPU count plus one up
   to 16), `FFAMP_H264_SLICES` (slice threads instead of frame threads), `FFAMP_H264_CPU` (a mask on the CPU features; 0 runs the plain
   C), `FFAMP_H264_FILL` (fills new frame buffers with a byte, to find output that depends on unwritten memory). `ffamp h264 <file>`
@@ -729,7 +741,9 @@ list; `Sample.offset` is then free for the reader's use.
 - ProRes and DV (based on FFmpeg's) are FFamp's own video decoders on Windows and Linux (backends `prores` and `dv`), bit-exact with
   ffmpeg: ProRes 422 as 10-bit, 4444 and XQ as 12-bit with the alpha plane handed out at 8 bits as swscale rounds it ((a + 8) >> 4);
   DV in the size and chroma layout of the profile its frames name (4:1:1, 4:2:0, 4:2:2; DVCPRO HD 1080 is 1280 or 1440 wide, as in
-  FFmpeg). 4:1:1 pictures convert to BGRA with the chroma sample centred on its four pixels, as swscale does.
+  FFmpeg). 4:1:1 pictures convert to BGRA with the chroma sample centred on its four pixels, as swscale does; 4:1:0 pictures (YUV9,
+  FFV1 4:1:0) likewise in both directions. A ProRes frame header field of 0, 2 or 3 says nothing about the colour, as in FFmpeg (a
+  matrix of 0 there is not RGB), and frames larger than the other own codecs allow are refused.
 - MPEG-1/2 on Linux, and on Windows for 4:2:2 streams and Windows without Media Foundation: libmpeg2 (backend `libmpeg2`,
   `openMpeg2`), used whenever `openPlatformVideo` gives nothing. `build_windows.sh` builds it with MSVC from its C code only (its x86
   code is GCC inline assembly), so its IDCT on Windows is the C one; 4:2:2 MPEG-2 comes out as 4:2:2, 51 dB or better against ffmpeg. Each sample's time

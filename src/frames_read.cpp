@@ -1,4 +1,5 @@
 #include "frames.h"
+#include "tools_common.h"
 #include <algorithm>
 #include <cmath>
 
@@ -39,9 +40,7 @@ std::unique_ptr<FrameReader> FrameReader::open(const std::string& path, const Fr
     r.decoder = VideoDecoder::open(*r.file, *r.track, error, spec.software);
     if (!r.decoder) return nullptr;
     if (!r.decoder->frames()) return fail("the video track has no frames");
-    double earliest = 1e300;
-    for (const Track& t : r.file->tracks()) if (t.timescale && !t.samples.empty()) earliest = std::min(earliest, double(t.delay) / t.timescale);
-    r.shift = double(r.track->delay) / r.track->timescale - (earliest < 1e300 ? earliest : 0);
+    r.shift = double(r.track->delay) / r.track->timescale - zeroSeconds(*r.file);
     r.turn = spec.rotate ? ((r.track->rotation % 360) + 360) % 360 / 90 * 90 : 0;
     int w = r.track->width, h = r.track->height;
     if (w <= 0 || h <= 0) {

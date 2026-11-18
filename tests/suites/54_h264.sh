@@ -1,4 +1,4 @@
-echo "== H.264: FFamp's own decoder (FFmpeg's, ported to src/h264); the Mac decodes H.264 with VideoToolbox and runs it here only through ffamp h264"
+echo "== H.264: FFamp's own decoder (FFmpeg's, ported to src/h264); the Mac decodes 8-bit 4:2:0 H.264 with VideoToolbox and the rest, or --software, with its own decoder"
 HV=fixtures/video
 H4_FUZZ=12
 [ -n "${QUICK:-}" ] && H4_FUZZ=4
@@ -27,13 +27,11 @@ if [ "$SYSTEM" = Windows ]; then
     check "without Media Foundation (Windows N) H.264 goes to FFamp's own decoder" h4_default $HV/h264_270p.mp4 FFAMP_NO_MEDIA_FOUNDATION=1 h264
     check "Media Foundation failing at the first sample hands H.264 to FFamp's own decoder" h4_default $HV/h264_270p.mp4 FFAMP_FAIL_SYSTEM_VIDEO=1 h264
 fi
-if ! on_mac; then
-    check "H.264 fixtures decode with FFamp's own decoder when the system decoder is not used" h4_backend $HV/h264_270p.mp4
-    for f in $HV/h264_270p.mp4 $HV/h264_mbaff_272p.mp4 $HV/h264_paff_64p.mp4 fixtures/formats/avi_h264_mp3.avi; do
-        check "random frames of $(basename $f) equal the straight decode (own decoder)" python3 comparex.py selfseek $f 12 5 --software
-        check "damaged copies of $(basename $f) decode or fail cleanly (own decoder)" python3 comparex.py fuzz $f $H4_FUZZ 9 --software
-    done
-fi
+check "H.264 fixtures decode with FFamp's own decoder when the system decoder is not used" h4_backend $HV/h264_270p.mp4
+for f in $HV/h264_270p.mp4 $HV/h264_mbaff_272p.mp4 $HV/h264_paff_64p.mp4 fixtures/formats/avi_h264_mp3.avi; do
+    check "random frames of $(basename $f) equal the straight decode (own decoder)" python3 comparex.py selfseek $f 12 5 --software
+    check "damaged copies of $(basename $f) decode or fail cleanly (own decoder)" python3 comparex.py fuzz $f $H4_FUZZ 9 --software
+done
 
 have_ffmpeg || { skip "H.264 encoded by ffmpeg at test time"; return 0; }
 
@@ -89,10 +87,14 @@ while IFS='|' read name size frames pixfmt codec options; do
     $F -f lavfi -i "${H4_SRC/SIZE/$size}" -frames:v $frames -pix_fmt $pixfmt -c:v $codec $options $out
     check "$codec $pixfmt $size $options: every frame bit-exact against ffmpeg (one thread, frame threads, slice threads)" python3 h264_check.py exact $out
 done <<< "$H4_SET"
-if ! on_mac; then
-    for name in high_pyramid mbaff hi10 high_open_gop high_refresh; do
-        [ -f $O/h4_$name.mkv ] || continue
-        check "random frames of h4_$name.mkv equal ffmpeg's (own decoder)" python3 comparex.py seek $O/h4_$name.mkv 50 3 --software
+for name in high_pyramid mbaff hi10 high_open_gop high_refresh; do
+    [ -f $O/h4_$name.mkv ] || continue
+    check "random frames of h4_$name.mkv equal ffmpeg's (own decoder)" python3 comparex.py seek $O/h4_$name.mkv 50 3 --software
+done
+if on_mac; then
+    for name in hi10 hi422_10 hi444; do
+        check "h4_$name.mkv goes to FFamp's own decoder on the Mac (VideoToolbox decodes only 8-bit 4:2:0 H.264)" h4_default $O/h4_$name.mkv "" h264
+        check "random frames of h4_$name.mkv equal ffmpeg's (the Mac's default decoder)" python3 comparex.py seek $O/h4_$name.mkv 30 3
     done
 fi
 [ -f $O/h4_high_open_gop.mkv ] && check "random frames of h4_high_open_gop.mkv equal ffmpeg's (system decoder: VideoToolbox, Media Foundation or VA-API)" python3 comparex.py seek $O/h4_high_open_gop.mkv 50 3

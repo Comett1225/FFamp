@@ -405,7 +405,7 @@ public:
 
     void trackList(View v) {
         children(v, [&](uint32_t id, View entry) {
-            if (id != kTrackEntry) return;
+            if (id != kTrackEntry || lanes.size() >= 1024) return;
             Lane lane;
             Track& t = lane.track;
             uint64_t type = 0;
@@ -766,9 +766,13 @@ void MatroskaReader::finish(Lane& lane) {
             else if (lane.defaultDuration) s.duration = uint32_t(std::min<int64_t>(ticks(int64_t(std::min<uint64_t>(lane.defaultDuration, 1ull << 40))), 0x7FFFFFFF));
             else if (i > 0) s.duration = t.samples[i - 1].duration;
         }
-        int64_t end = 0;
-        for (const Sample& s : t.samples) end = std::max(end, s.pts + int64_t(s.duration));
-        t.mediaStart = std::min<int64_t>(end, ticks(int64_t(std::min<uint64_t>(lane.codecDelay, 1ull << 40))));
+        int64_t end = 0, first = count ? t.samples[0].pts : 0;
+        for (const Sample& s : t.samples) {
+            end = std::max(end, s.pts + int64_t(s.duration));
+            first = std::min(first, s.pts);
+        }
+        t.delay = first;
+        t.mediaStart = std::min<int64_t>(end, first + ticks(int64_t(std::min<uint64_t>(lane.codecDelay, 1ull << 40))));
         if (lane.discard > 0) {
             int64_t cut = end - ticks(lane.discard);
             if (cut > t.mediaStart && cut < end) t.mediaEnd = cut;

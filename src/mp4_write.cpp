@@ -1,7 +1,9 @@
 #include "absent/media.h"
 #include "bytes.h"
+#include "tools_common.h"
 #include "writers.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -46,6 +48,15 @@ bool needsConfig(uint32_t codec) {
 bool storable(const TrackSpec& spec) {
     if (isPcm(spec)) return spec.bits == 8 || spec.bits == 16 || spec.bits == 24 || spec.bits == 32 || (spec.floating && spec.bits == 64);
     return needsConfig(spec.codec) || isProRes(spec.codec) || isDolby(spec.codec) || isMpegAudio(spec.codec) || spec.codec == fourcc("vp09") || spec.codec == fourcc("vp08") || visualObjectType(spec.codec);
+}
+
+bool setsInBand(const TrackSpec& spec) {
+    const std::vector<uint8_t>& c = spec.config;
+    if (spec.codec == fourcc("hvc1")) return c.size() < 23 || c[22] == 0;
+    if (c.size() < 6 || (c[5] & 0x1F) == 0) return true;
+    size_t at = 6;
+    for (int i = c[5] & 0x1F; i > 0 && at + 2 <= c.size(); --i) at += 2 + size_t(c[at] << 8 | c[at + 1]);
+    return at >= c.size() || c[at] == 0;
 }
 
 void wrap(Bytes& b, uint32_t tag, const std::vector<uint8_t>& body) {
@@ -191,7 +202,8 @@ void soundEntry(Bytes& b, const Out& t, bool quickTime) {
     };
     if (isPcm(spec)) {
         const bool small = spec.channels <= 2;
-        if (!quickTime) {
+        const bool bytes = !spec.floating && spec.bits == 8;
+        if (!quickTime && !bytes) {
             size_t at = open(spec.floating ? fourcc("fpcm") : fourcc("ipcm"));
             soundStart(b, 0, spec.channels, spec.bits, 0, rate);
             size_t config = b.open(fourcc("pcmC"), 0, 0);
@@ -199,7 +211,11 @@ void soundEntry(Bytes& b, const Out& t, bool quickTime) {
             b.u8(spec.bits);
             b.close(config);
             b.close(at);
-        } else if (small && !spec.floating && spec.bits == 16) {
+        } else if (small && bytes && rate <= 0xFFFF) {
+            size_t at = open(spec.bigEndian ? fourcc("twos") : fourcc("raw "));
+            soundStart(b, 0, spec.channels, 8, 0, rate);
+            b.close(at);
+        } else if (small && !spec.floating && spec.bits == 16 && rate <= 0xFFFF) {
             size_t at = open(spec.bigEndian ? fourcc("twos") : fourcc("sowt"));
             soundStart(b, 0, spec.channels, 16, 0, rate);
             b.close(at);
@@ -231,7 +247,7 @@ void soundEntry(Bytes& b, const Out& t, bool quickTime) {
             b.u32(uint32_t(spec.channels));
             b.u32(0x7F000000);
             b.u32(uint32_t(spec.bits));
-            b.u32((spec.floating ? 1u : spec.bits == 8 ? 0u : 4u) | (spec.bigEndian ? 2u : 0u) | 8u);
+            b.u32((spec.floating ? 1u : bytes && !spec.bigEndian ? 0u : 4u) | (spec.bigEndian && !bytes ? 2u : 0u) | 8u);
             b.u32(t.frameBytes);
             b.u32(1);
             b.close(at);
@@ -382,7 +398,8 @@ void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
     }
     const bool proRes = isProRes(spec.codec);
     const uint32_t visual = visualObjectType(spec.codec);
-    size_t at = b.open(visual && !quickTime ? fourcc("mp4v") : spec.codec == fourcc("mp1v") ? fourcc("m1v ") : spec.codec == fourcc("mp2v") ? fourcc("m2v1") : spec.codec);
+    const uint32_t named = spec.codec == fourcc("avc1") && setsInBand(spec) ? fourcc("avc3") : spec.codec == fourcc("hvc1") && setsInBand(spec) ? fourcc("hev1") : spec.codec;
+    size_t at = b.open(visual && !quickTime ? fourcc("mp4v") : spec.codec == fourcc("mp1v") ? fourcc("m1v ") : spec.codec == fourcc("mp2v") ? fourcc("m2v1") : named);
     b.zero(6);
     b.u16(1);
     b.zero(4);
@@ -402,10 +419,12 @@ void sampleEntry(Bytes& b, const Out& t, bool quickTime) {
     else if (visual) {
         if (!quickTime) child(b, fourcc("esds"), descriptor(visual, 0x11, {}));
     } else if (!proRes) child(b, spec.codec == fourcc("avc1") ? fourcc("avcC") : spec.codec == fourcc("hvc1") ? fourcc("hvcC") : spec.codec == fourcc("apv1") ? fourcc("apvC") : fourcc("av1C"), spec.config);
-    if (proRes) {
+    const bool headed = t.opening.size() > 20 && memcmp(t.opening.data() + 4, "icpf", 4) == 0;
+    const int scan = headed ? (t.opening[20] >> 2) & 3 : 3;
+    if (proRes && scan < 3) {
         size_t fields = b.open(fourcc("fiel"));
-        b.u8(1);
-        b.u8(0);
+        b.u8(scan ? 2 : 1);
+        b.u8(scan == 1 ? 9 : scan == 2 ? 14 : 0);
         b.close(fields);
     }
     if (spec.color.known && spec.color.primaries != 2 && spec.color.transfer != 2 && spec.color.matrix != 2) {
@@ -580,7 +599,27 @@ void userData(Bytes& b, const std::map<std::string, std::string>& tags) {
     b.close(udta);
 }
 
-void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool quickTime, uint32_t movieScale) {
+uint64_t createdSince1904(const std::map<std::string, std::string>& tags) {
+    auto found = tags.find("creation_time");
+    if (found == tags.end()) return 0;
+    int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    const int parts = sscanf(found->second.c_str(), "%d-%d-%d%*c%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+    if (parts < 3 || month < 1 || day < 1) return 0;
+    if (parts < 6 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60) hour = minute = second = 0;
+    const std::chrono::year_month_day date{std::chrono::year(year), std::chrono::month(unsigned(month)), std::chrono::day(unsigned(day))};
+    if (!date.ok() || year < 1904 || year > 9999) return 0;
+    const int64_t days = std::chrono::sys_days(date).time_since_epoch().count();
+    return uint64_t(days * 86400 + hour * 3600 + minute * 60 + second + 2082844800ll);
+}
+
+void stamps(Bytes& b, bool wide, uint64_t created) {
+    for (int i = 0; i < 2; ++i) {
+        if (wide) b.u64(created);
+        else b.u32(uint32_t(created));
+    }
+}
+
+void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool quickTime, uint32_t movieScale, uint64_t created) {
     const TrackSpec& spec = t.spec;
     bool video = spec.kind == Kind::Video;
     size_t trak = b.open(fourcc("trak"));
@@ -588,9 +627,9 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool q
     const uint64_t shownLength = scaled(t.shown, spec.timescale, movieScale);
     const uint64_t trackLength = scaled(t.shown + spec.delay, spec.timescale, movieScale);
     const uint64_t waitLength = scaled(spec.delay, spec.timescale, movieScale);
-    const bool longTrack = trackLength > 0xFFFFFFFFull;
+    const bool longTrack = trackLength > 0xFFFFFFFFull || created > 0xFFFFFFFFull;
     size_t tkhd = b.open(fourcc("tkhd"), longTrack ? 1 : 0, 3);
-    b.zero(longTrack ? 16 : 8);
+    stamps(b, longTrack, created);
     b.u32(id);
     b.u32(0);
     if (longTrack) b.u64(trackLength);
@@ -627,9 +666,9 @@ void track(Bytes& b, const Out& t, uint32_t id, uint64_t base, bool wide, bool q
     }
 
     size_t mdia = b.open(fourcc("mdia"));
-    const bool longMedia = t.mediaDuration > 0xFFFFFFFFll;
+    const bool longMedia = t.mediaDuration > 0xFFFFFFFFll || created > 0xFFFFFFFFull;
     size_t mdhd = b.open(fourcc("mdhd"), longMedia ? 1 : 0, 0);
-    b.zero(longMedia ? 16 : 8);
+    stamps(b, longMedia, created);
     b.u32(spec.timescale);
     if (longMedia) b.u64(uint64_t(t.mediaDuration));
     else b.u32(uint32_t(t.mediaDuration));
@@ -700,9 +739,10 @@ struct Mp4Writer::Impl {
             duration = std::max(duration, scaled(t.shown + t.spec.delay, t.spec.timescale, movieScale));
             ++used;
         }
-        const bool longMovie = duration > 0xFFFFFFFFull;
+        const uint64_t created = createdSince1904(tags);
+        const bool longMovie = duration > 0xFFFFFFFFull || created > 0xFFFFFFFFull;
         size_t mvhd = b.open(fourcc("mvhd"), longMovie ? 1 : 0, 0);
-        b.zero(longMovie ? 16 : 8);
+        stamps(b, longMovie, created);
         b.u32(movieScale);
         if (longMovie) b.u64(duration);
         else b.u32(uint32_t(duration));
@@ -714,7 +754,7 @@ struct Mp4Writer::Impl {
         b.u32(used + 1);
         b.close(mvhd);
         uint32_t id = 0;
-        for (const Out& t : tracks) if (!t.samples.empty()) track(b, t, ++id, base, wide, brand == Mp4Brand::QuickTime, movieScale);
+        for (const Out& t : tracks) if (!t.samples.empty()) track(b, t, ++id, base, wide, brand == Mp4Brand::QuickTime, movieScale, created);
         userData(b, tags);
         b.close(moov);
         return b;
@@ -739,7 +779,7 @@ struct Mp4Writer::Impl {
             duration = frames;
             t.frames += frames;
         }
-        if (t.samples.empty()) t.opening.assign(data, data + std::min<size_t>(size, isDolby(t.spec.codec) ? 65536 : 16));
+        if (t.samples.empty()) t.opening.assign(data, data + std::min<size_t>(size, isDolby(t.spec.codec) ? 65536 : 32));
         if (last != packet.track || t.chunkSizes.empty() || t.chunkSizes.back() >= (pcm ? std::max<uint32_t>(t.spec.timescale / 2, 1) : kChunkLimit)) {
             t.chunkSizes.push_back(0);
             t.chunkOffsets.push_back(this->size);
@@ -763,8 +803,7 @@ Mp4Writer::Mp4Writer() : impl(new Impl) {}
 Mp4Writer::~Mp4Writer() = default;
 
 std::unique_ptr<Mp4Writer> Mp4Writer::open(const std::string& path, std::string* error) {
-    auto ends = [&](const char* tail) { return path.size() > 4 && path.compare(path.size() - 4, 4, tail) == 0; };
-    return open(path, ends(".mov") ? Mp4Brand::QuickTime : ends(".m4a") ? Mp4Brand::M4a : Mp4Brand::Mp4, error);
+    return open(path, endsWith(path, ".mov") ? Mp4Brand::QuickTime : endsWith(path, ".m4a") ? Mp4Brand::M4a : Mp4Brand::Mp4, error);
 }
 
 std::unique_ptr<Mp4Writer> Mp4Writer::open(const std::string& path, Mp4Brand brand, std::string* error) {

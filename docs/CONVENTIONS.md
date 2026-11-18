@@ -53,6 +53,8 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
   edit list duration).
 - `order`: indexes of shown samples sorted by pts; `syncs`: key frames in decode order.
 - Matroska and TS have no stored dts: readers synthesise a non-decreasing dts not above pts.
+- Matroska CodecDelay counts from the first block of the track: `delay` is that block's time and `mediaStart` lies the delay after it,
+  so a file whose blocks start late still hides the Opus pre-skip. At most 1024 tracks are read.
 - Matroska Vorbis: the first packet lasts (its window + the next packet's window) / 4, as FFmpeg's Vorbis parser times it, so a file
   without CodecDelay (mkvmerge) starts with that packet's silent frames, as the app's FFmpeg reading does.
 
@@ -71,14 +73,21 @@ list; `Sample.offset` is then free for the reader's use.
 
 ## Writers
 
-- `Writer::open` picks the file type by extension: `.mp4`/`.m4v` (ISO MP4), `.mov` (QuickTime), `.m4a` (sound only), `.mkv`/`.mka`,
-  `.webm` (VP8, VP9, AV1, Opus, Vorbis only), `.ogg`/`.opus`/`.oga` (one Opus track). A track the file type cannot hold makes
-  `finish` fail with a message and no file is left behind.
+- `Writer::open` picks the file type by extension, in any case: `.mp4`/`.m4v` (ISO MP4), `.mov` (QuickTime), `.m4a` (sound only), `.mkv`/`.mka`,
+  `.webm` (VP8, VP9, AV1, Opus, Vorbis only), `.ogg`/`.opus`/`.oga` (one Opus track); other names get MP4, except the extensions of file
+  types it does not write (`.mp3`, `.mp2`, `.flac`, `.wav`, `.aac`, `.ac3`, `.eac3`, `.aif`, `.aiff`, `.caf`, `.avi`, `.ts`, `.wma`, `.wmv`,
+  `.gif`, `.ivf`), which it refuses. A track the file type cannot hold makes `finish` fail with a message and no file is left behind;
+  WebM and Ogg already refuse it in `add` (it returns -1), and the tools then stop before they encode or copy anything.
 - `TrackSpec` follows the table above. PCM (`lpcm`) also needs `bits`, `floating`, `bigEndian`; FLAC may give `bits`. `configType`
   for AAC may be `esds` or `ASC `; VP8/VP9 may have an empty config (MP4 gets a `vpcC` built from the first key frame).
 - `skip` and `length` (track timescale) describe encoder priming and the exact shown length. `Writer::trim(track, skip, length)` sets
   them late, when the length is only known at the end.
-- PCM packets are whole frames; MP4/MOV store them as one sample per frame, Matroska as one block per packet.
+- PCM packets are whole frames; MP4/MOV store them as one sample per frame, Matroska as one block per packet. 8-bit PCM goes into MP4
+  and MOV as QuickTime `twos` (signed) or `raw ` (unsigned), and as `lpcm` with the signed flag set by its sign above 65535 Hz or more than two
+  channels (FFmpeg reads no 8-bit `ipcm`); Matroska's 8-bit `A_PCM/INT/LIT` is unsigned, so signed 8-bit bytes get their top bit
+  flipped, and big-endian float samples are byte-swapped into `A_PCM/FLOAT/IEEE`. 16-bit PCM above 65535 Hz goes into MOV as `lpcm`
+  (the rate as a double); ISO `ipcm`/`fpcm` keep 0 in the rate field above 65535 Hz, as FFmpeg writes it, and the MP4 reader then takes
+  the rate from the media time scale, as FFmpeg does.
 - Sound-only MP4/MOV/M4A files use the sample rate as the movie timescale so lengths are exact to the sample.
 - `AudioFileWriter` rounds float samples the way FFmpeg does on arm64: truncate `x * 2^31` to 32 bits, then 16-bit =
   `(v + 0x8000) >> 16` (clamped), 24-bit = `v >> 8`.
@@ -94,7 +103,8 @@ list; `Sample.offset` is then free for the reader's use.
   out each unspecified (2) value.
 - `Writer::tags` takes a file's tags (the copy tools pass `Reader::tags()`). MP4, MOV and M4A write title, artist, album_artist,
   composer, album, date, comment, genre, copyright, grouping, lyrics and description as iTunes items (`udta/meta/ilst`) and location
-  as `©xyz`; Matroska writes the title into Info and the others as global SimpleTags in capitals, without creation_time and encoder.
+  as `©xyz`, and `creation_time` (`2024-05-06T07:08:09.000000Z`) as the creation and modification time of `mvhd`, `tkhd` and `mdhd`;
+  Matroska writes the title into Info and the others as global SimpleTags in capitals, without creation_time and encoder.
   The MP4 reader reads `©xyz` as location.
 - MP4 also holds MPEG audio (`mp4a`, object type 0x6B, 0x69 at 24 kHz and below), Vorbis (`mp4a`, object type 0xDD, the Xiph-laced
   headers as decoder specific info; the reader takes them back as `vorb`), AC-3 and E-AC-3 (`ac-3`/`ec-3` with `dac3`/`dec3` made
@@ -106,6 +116,9 @@ list; `Sample.offset` is then free for the reader's use.
   MPEG-2 video (`V_MPEG1`, `V_MPEG2`), MP2, AC-3 and E-AC-3. Video tracks get a DefaultDuration: the steps between shown frames that lie within 5 % of the median step,
   averaged, and snapped to a standard rate (23.976 to 120) within 0.2 %. Rotation is written as ProjectionPoseRoll, the negative of
   `rotation` in (-180, 180], as FFmpeg writes a display matrix, and the reader turns it back into `rotation`.
+- MP4/MOV write `fiel` for ProRes from the first frame's header (progressive 1/0, top field first 2/9, bottom field first 2/14, as
+  FFmpeg labels them) and leave it out when the header cannot be read. H.264 and HEVC whose configuration record holds no SPS or PPS
+  (parameter sets only inside the stream) are written as `avc3`/`hev1`, not `avc1`/`hvc1`.
 - MP4/MOV stretch the last sample of a video track to the end of `length` (`Writer::trim`) when the track would end earlier, so a held
   last frame keeps its time with encoders that hand out no packet durations (x264, Media Foundation).
 
@@ -113,7 +126,8 @@ list; `Sample.offset` is then free for the reader's use.
 
 - `delay` (track timescale) is the time on the file's own clock at which the tick `mediaStart` is shown. A sample is shown at
   `pts - mediaStart + delay`. Tracks of one file are kept in sync by their difference in `delay`; a consumer that wants the file to start
-  at zero subtracts the smallest `delay` of all tracks (what the app does with ffprobe's format `start_time`).
+  at zero subtracts the time of the earliest shown sample of any video or sound track (`zeroSeconds`; what `FrameReader`, the tools and
+  the app with ffprobe's format `start_time` do).
 - MP4/MOV: leading empty edits (media_time -1) add up to `delay`. The first media edit sets `mediaStart` and, when it has a duration,
   `mediaEnd`; edits that continue exactly where the previous one ended are joined to it. Samples at or after `mediaEnd` are left out of
   `order`. In a video track `mediaStart` is the first composition time inside the edit, so an edit at media time 0 on a track whose
@@ -121,7 +135,8 @@ list; `Sample.offset` is then free for the reader's use.
 - MP4/MOV with several separate media edits: the segments are joined into one timeline, each one starting where the one before it
   ends (`mediaEnd` is the end of the last). Video keeps, for each segment, the samples from the key frame before it up to its last
   shown sample; the samples among them that the segment does not show are decoded but not shown: their `pts` are moved below
-  `mediaStart` (unique, rising in decode order, never a shown time). Sound keeps the packets that start inside each segment (the
+  `mediaStart` (unique, rising in decode order, never a shown time); those past the end of their segment also get duration 0, so
+  VideoToolbox's jump never takes them for leading pictures. Sound keeps the packets that start inside each segment (the
   first segment also its run-in), as FFmpeg does. A segment's first shown sample is placed at the segment's start. An empty edit
   between media edits leaves a pause of its length before the next segment, as in FFmpeg. A stream copy
   keeps those samples before the start of its edit, where readers that go by time (FFamp, AVFoundation) do not show them; FFmpeg
@@ -149,7 +164,8 @@ list; `Sample.offset` is then free for the reader's use.
 - A stream copy that starts inside a sound track takes run-in packets before the cut (AAC 2, Opus and MP3 4, Vorbis 1) and hides
   them with `skip`.
 - A source frame without colour labels is taken as BT.709 and not converted; labelled frames are converted to 8-bit BT.709 limited
-  range before encoding (`Scaler` in `src/mac/tools_scale.cpp`).
+  range before encoding (`Scaler` in `src/mac/tools_scale.cpp`). On the Mac a frame without colour attachments is tagged from its
+  `Frame.color` first, and RGB frames (matrix 0, G, B and R in a 4:4:4 buffer) go through BGRA, so they are converted, not read as YCbCr.
 - Stream copies (`trimCopy`, `rewrap`, `stripAudio`, `merge`, `extractAudio` by copy) keep the source's tags, rotation and colour labels
   (none when the source has none); `merge` takes the tags of the video file.
 
@@ -285,7 +301,13 @@ list; `Sample.offset` is then free for the reader's use.
   `absent.alpha` attachment, `Picture.alpha` points at it, and BGRA/RGBA output (`copyBGRA`, `frames-out`) carries it, straight
   (not premultiplied), scaled with the picture. I420 and RGB24 output have no alpha.
 - A sample the decoder rejects does not end the stream: `VideoDecoder::frame` returns the nearest earlier frame that decoded, with the
-  asked frame's time, as FFmpeg's concealment shows a repeat.
+  asked frame's time, as FFmpeg's concealment shows a repeat. When no earlier frame decoded (pictures that lead the first key frame of
+  a cut, whose references are not in the file), the first later frame that decodes stands in, within 30 frames.
+- The Mac sends H.264 with more than 8 bits or other than 4:2:0, `software`, `FFAMP_OWN_H264` and streams VideoToolbox refuses to
+  FFamp's own H.264 decoder (backend `h264`), as Windows and Linux do. A VideoToolbox session that reports itself invalid or broken
+  (`kVTInvalidSessionErr`, `kVTVideoDecoderMalfunctionErr`, after sleep or a GPU change) is made again and the frame decoded anew, up to
+  three times in a row; the frames it lost are tried again. On every system, interlaced H.264 looks for field pictures to pair in the first 256 samples
+  only when one shows up there, so frame-coded and MBAFF streams are not read through when they open.
 - H.264 jumps with VideoToolbox: when the key frame the jump starts at is an IDR or I picture, its sample carries
   `kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding`, so the decoder drops the references it held (FFmpeg starts a new hardware
   decoder after every flush), and the pictures that follow the key frame in the file, up to the next key frame, but are shown before it
@@ -334,6 +356,7 @@ list; `Sample.offset` is then free for the reader's use.
   H.264 or HEVC stream with matrix coefficients 0 would be. `pictureToBGRA` copies them straight, `pictureToI420` and the scaler's
   I420 output go through BGRA and `bgraToI420`, `ffamp decode` writes the G, B, R planes (ffmpeg's `gbrp`). On the Mac they are stored
   as they are in a full-range 4:4:4 pixel buffer (G in the luma plane, B and R as the chroma pair) and the frame keeps matrix 0.
+  Chroma narrower than half the width (4:1:1, 4:1:0) is stored in a 4:2:2 or 4:2:0 buffer, each sample repeated.
 
 ## MPEG-4 part 2 through Xvid (`ABSENT_XVID`, `src/opt/xvid_decode.cpp`)
 

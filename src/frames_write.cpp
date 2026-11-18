@@ -1,4 +1,5 @@
 #include "frames.h"
+#include "tools_common.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -126,7 +127,8 @@ struct FrameWriter::Impl {
             sound.config = t.config;
             sound.skip = copySkip;
             audioTrack = writer->add(sound);
-            return true;
+            if (audioTrack < 0 && error) *error = kCannotHold;
+            return audioTrack >= 0;
         }
         rate = 48000;
         for (int known : kAacRates) if (known == t.sampleRate) rate = known;
@@ -148,7 +150,8 @@ struct FrameWriter::Impl {
         sound.config = aac->config();
         sound.skip = aac->priming();
         audioTrack = writer->add(sound);
-        return true;
+        if (audioTrack < 0 && error) *error = kCannotHold;
+        return audioTrack >= 0;
     }
 
     double soundLimit(double seconds) const {
@@ -270,7 +273,8 @@ std::unique_ptr<FrameWriter> FrameWriter::open(const std::string& path, const Fr
     picture.width = w.width;
     picture.height = w.height;
     w.videoTrack = w.writer->add(picture);
-    if (!spec.audioFrom.empty() && !w.soundOpen(error)) {
+    if (w.videoTrack < 0 && error) *error = kCannotHold;
+    if (w.videoTrack < 0 || (!spec.audioFrom.empty() && !w.soundOpen(error))) {
         w.writer.reset();
         removeFile(path);
         return nullptr;

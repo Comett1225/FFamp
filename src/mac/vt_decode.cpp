@@ -1,4 +1,5 @@
 #include "absent/media.h"
+#include "nal.h"
 #include "readers.h"
 #include "soft_video.h"
 #include "own_video.h"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <functional>
@@ -146,10 +148,18 @@ void liftRow(const T* __restrict in, T* __restrict out, int count, int lift) {
 }
 
 template <typename T>
-void weaveRow(const T* __restrict a, const T* __restrict b, T* __restrict out, int count, int lift) {
+void weaveRow(const T* __restrict a, const T* __restrict b, T* __restrict out, int count, int lift, int source) {
+    if (source == count) {
+        for (int x = 0; x < count; ++x) {
+            out[2 * x] = T(a[x] << lift);
+            out[2 * x + 1] = T(b[x] << lift);
+        }
+        return;
+    }
     for (int x = 0; x < count; ++x) {
-        out[2 * x] = T(a[x] << lift);
-        out[2 * x + 1] = T(b[x] << lift);
+        const int from = int(int64_t(x) * source / count);
+        out[2 * x] = T(a[from] << lift);
+        out[2 * x + 1] = T(b[from] << lift);
     }
 }
 
@@ -168,13 +178,14 @@ void fill(const Picture& p, CVPixelBufferRef buffer) {
     uint8_t* chroma = static_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(buffer, 1));
     const size_t chromaStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1);
     const int rows = int(CVPixelBufferGetHeightOfPlane(buffer, 1));
+    const int columns = int(CVPixelBufferGetWidthOfPlane(buffer, 1));
     for (int y = 0; y < rows; ++y) {
         const int from = int(int64_t(y) * p.chromaHeight / rows);
         const uint8_t* u = p.plane[1] + size_t(from) * p.stride[1];
         const uint8_t* v = p.plane[2] + size_t(from) * p.stride[2];
         uint8_t* to = chroma + size_t(y) * chromaStride;
-        if (wide) weaveRow(reinterpret_cast<const uint16_t*>(u), reinterpret_cast<const uint16_t*>(v), reinterpret_cast<uint16_t*>(to), p.chromaWidth, lift);
-        else weaveRow(u, v, to, p.chromaWidth, 0);
+        if (wide) weaveRow(reinterpret_cast<const uint16_t*>(u), reinterpret_cast<const uint16_t*>(v), reinterpret_cast<uint16_t*>(to), columns, lift, p.chromaWidth);
+        else weaveRow(u, v, to, columns, 0, p.chromaWidth);
     }
     CVPixelBufferUnlockBaseAddress(buffer, 0);
 }
@@ -258,7 +269,10 @@ struct VideoDecoder::Impl {
     Reader* file = nullptr;
     const Track* track = nullptr;
     CMVideoFormatDescriptionRef format = nullptr;
+    CFMutableDictionaryRef attributes = nullptr;
     VTDecompressionSessionRef session = nullptr;
+    std::atomic<bool> broken{false};
+    int renewals = 0;
     std::mutex lock;
     std::map<int64_t, CVPixelBufferRef> ready;
     std::atomic<uint64_t> shown{0};
@@ -329,10 +343,13 @@ struct VideoDecoder::Impl {
     Frame concealed(VideoDecoder& owner, uint32_t index) {
         uint32_t earlier = index;
         while (earlier > 0 && lost[earlier]) --earlier;
-        if (lost[earlier] || concealing >= 30) return {};
+        const bool none = lost[earlier];
+        if ((none && concealing) || concealing >= 30) return {};
         ++concealing;
         if (soft) next = kNone;
-        Frame shown = owner.frame(earlier);
+        Frame shown;
+        if (!none) shown = owner.frame(earlier);
+        for (uint32_t later = index + 1; none && !shown && later < list.size() && later <= index + 30; ++later) shown = owner.frame(later);
         --concealing;
         last = index;
         if (shown) {
@@ -414,9 +431,12 @@ struct VideoDecoder::Impl {
         std::vector<uint8_t> kind(samples.size(), 0);
         std::vector<uint32_t> number(samples.size(), 0);
         std::vector<uint8_t> bytes;
+        bool fields = false;
         for (uint32_t i = 0; i < samples.size(); ++i) {
+            if (i == 256 && !fields) return;
             bytes.resize(samples[i].size);
             if (file->read(*track, i, bytes.data())) kind[i] = uint8_t(h264FieldOf(layout, bytes.data(), bytes.size(), number[i]));
+            fields = fields || kind[i];
         }
         std::vector<uint8_t> second(samples.size(), 0);
         for (uint32_t i = 0; i + 1 < samples.size(); ++i) {
@@ -480,6 +500,19 @@ struct VideoDecoder::Impl {
         return out;
     }
 
+    bool renew() {
+        broken = false;
+        if (!session || !attributes) return false;
+        VTDecompressionSessionInvalidate(session);
+        CFRelease(session);
+        session = nullptr;
+        clear();
+        VTDecompressionOutputCallbackRecord callback{output, this};
+        if (VTDecompressionSessionCreate(nullptr, format, nullptr, attributes, &callback, &session) == noErr) return true;
+        session = nullptr;
+        return false;
+    }
+
     ~Impl() {
         if (worker.joinable()) {
             {
@@ -496,6 +529,7 @@ struct VideoDecoder::Impl {
         }
         clear();
         if (format) CFRelease(format);
+        if (attributes) CFRelease(attributes);
         if (pool) CFRelease(pool);
     }
 
@@ -576,7 +610,17 @@ struct VideoDecoder::Impl {
         arrived.wait(hold, [&] { return (ready.count(pts) && ready.count(later)) || (jobs.empty() && !busy); });
         if (ready.count(pts) && ready.count(later)) return;
         hold.unlock();
+        if (soft->drainKeepsState()) {
+            soft->drain([&](const Picture& p) { store(p); });
+            return;
+        }
+        for (int extra = 0; extra < 16 && next != kNone && next < track->samples.size(); ++extra) {
+            feedSoft(next++, false);
+            if (has(pts) && has(later)) return;
+        }
         soft->drain([&](const Picture& p) { store(p); });
+        soft->reset();
+        next = kNone;
     }
 
     CVPixelBufferRef surfaceFor(const Picture& p) {
@@ -605,7 +649,7 @@ struct VideoDecoder::Impl {
         }
         CVPixelBufferRef buffer = nullptr;
         if (!pool || CVPixelBufferPoolCreatePixelBuffer(nullptr, pool, &buffer) != kCVReturnSuccess) return nullptr;
-        if (int(CVPixelBufferGetWidthOfPlane(buffer, 1)) != p.chromaWidth || int(CVPixelBufferGetHeightOfPlane(buffer, 1)) != (p.chromaWidth < p.width ? p.chromaHeight : p.height)) {
+        if (p.chromaWidth < 1 || p.chromaHeight < 1 || int(CVPixelBufferGetWidthOfPlane(buffer, 1)) < p.chromaWidth || int(CVPixelBufferGetHeightOfPlane(buffer, 1)) < p.chromaHeight) {
             CFRelease(buffer);
             return nullptr;
         }
@@ -639,6 +683,7 @@ struct VideoDecoder::Impl {
 
     static void output(void* self, void*, OSStatus status, VTDecodeInfoFlags, CVImageBufferRef image, CMTime pts, CMTime) {
         auto* d = static_cast<Impl*>(self);
+        if (status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr) d->broken = true;
         if (status != noErr || !image) return;
         if (CVPixelBufferGetPlaneCount(image) != 2) {
             d->planar(image, pts.value);
@@ -659,7 +704,8 @@ struct VideoDecoder::Impl {
             return true;
         }
         if (soft) return feedSoft(index, keep);
-        if (index < leadingUntil && s.pts < leadingBefore) {
+        if (!session) return false;
+        if (index < leadingUntil && s.pts < leadingBefore && s.duration) {
             ++fed;
             return true;
         }
@@ -683,6 +729,7 @@ struct VideoDecoder::Impl {
         if (ok) {
             VTDecodeFrameFlags flags = async ? kVTDecodeFrame_EnableAsynchronousDecompression : 0;
             OSStatus status = VTDecompressionSessionDecodeFrame(session, sample, flags, nullptr, nullptr);
+            if (status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr) broken = true;
             ok = status == noErr;
             ++fed;
         }
@@ -844,6 +891,22 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
         d.backend = d.soft->name();
         return std::move(decoder);
     };
+    auto ownH264 = [&]() -> std::unique_ptr<VideoDecoder> {
+        d.avc = false;
+        uint32_t led = 0;
+        d.soft = openH264(config, error, [&d, &led](std::vector<uint8_t>& bytes) {
+            if (led >= d.track->samples.size()) return false;
+            bytes.resize(d.track->samples[led].size);
+            return d.file->read(*d.track, led++, bytes.data());
+        });
+        if (!d.soft) return nullptr;
+        d.backend = d.soft->name();
+        return std::move(decoder);
+    };
+    if (h264) {
+        const VideoInfo info = videoInfo(track.configType, config);
+        if (software || std::getenv("FFAMP_OWN_H264") || info.chroma != 1 || info.bitDepth > 8 || info.bitDepthChroma > 8) return ownH264();
+    }
     if (own || vp8 || apv || (vp9 && track.alpha) || (software && (vp9 || av1)) || (jpeg && !(d.shape.chromaX && d.shape.chromaY))) return softly();
     if (vc1 || msmpeg4) {
         d.soft = vc1 ? openVc1(codec, config, track.width, track.height, error) : openMsmpeg4(codec, config, track.width, track.height, error);
@@ -891,10 +954,11 @@ std::unique_ptr<VideoDecoder> VideoDecoder::open(Reader& file, const Track& trac
     CFDictionarySetValue(picture, kCVPixelBufferMetalCompatibilityKey, kCFBooleanTrue);
     VTDecompressionOutputCallbackRecord callback{Impl::output, &d};
     status = VTDecompressionSessionCreate(nullptr, d.format, nullptr, picture, &callback, &d.session);
-    CFRelease(picture);
+    d.attributes = picture;
     if (status != noErr) {
         d.session = nullptr;
         if (vp9 || av1) return softly();
+        if (h264) return ownH264();
         if (part2) return fail("this MPEG-4 video uses Advanced Simple Profile tools (B-frames, quarter-pixel motion or custom matrices) that the system decoder cannot play");
         return fail("the system video decoder refused this stream");
     }
@@ -913,10 +977,10 @@ Frame VideoDecoder::frame(uint32_t index) {
     if (index >= d.list.size()) return {};
     if (index < d.lost.size() && d.lost[index]) return d.concealed(*this, index);
     const Impl::Shown item = d.list[index];
-    const bool pair = item.second != kNone;
-    const uint32_t target = pair ? item.second : item.first;
+    const bool pair = item.second != kNone && !(d.soft && d.soft->weavesFields());
+    const uint32_t target = item.second != kNone ? item.second : item.first;
     const int64_t pts = track.samples[item.first].pts;
-    const int64_t later = track.samples[target].pts;
+    const int64_t later = pair ? track.samples[target].pts : pts;
     d.keep = true;
     d.floor = std::min(pts, later);
     const bool following = d.last != kNone && index == d.last + 1;
@@ -963,18 +1027,25 @@ Frame VideoDecoder::frame(uint32_t index) {
     } else {
         buffer = d.take(pts);
     }
+    if (!buffer && d.broken && d.renewals < 3 && d.renew()) {
+        ++d.renewals;
+        d.next = kNone;
+        d.lost.clear();
+        return frame(index);
+    }
     if (!buffer) {
         if (d.lost.size() < d.list.size()) d.lost.resize(d.list.size(), false);
         d.lost[index] = true;
         return d.concealed(*this, index);
     }
+    d.renewals = 0;
     d.kept = d.floor;
     Frame frame;
     frame.native = std::shared_ptr<void>(buffer, [](void* p) { CFRelease(p); });
     frame.width = int(CVPixelBufferGetWidth(buffer));
     frame.height = int(CVPixelBufferGetHeight(buffer));
     frame.pts = pts;
-    frame.duration = int64_t(track.samples[item.first].duration) + (pair ? int64_t(track.samples[item.second].duration) : 0);
+    frame.duration = int64_t(track.samples[item.first].duration) + (item.second != kNone ? int64_t(track.samples[item.second].duration) : 0);
     Picture described;
     if (describe(buffer, described)) {
         frame.bits = described.bits;

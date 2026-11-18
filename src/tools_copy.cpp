@@ -235,6 +235,7 @@ bool writeOut(std::vector<Piece>& pieces, double origin, const std::string& outp
     if (!writer) return false;
     writer->tags(from.tags());
     settle(pieces, origin, matroskaPath(output), *writer);
+    if (std::any_of(pieces.begin(), pieces.end(), [](const Piece& p) { return p.out < 0; })) return fail(error, kCannotHold);
     Ticker ticker{progress};
     if (!copyPieces(pieces, *writer, ticker, error)) return false;
     if (!writer->finish(error)) return false;

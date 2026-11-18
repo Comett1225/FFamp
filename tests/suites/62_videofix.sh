@@ -109,6 +109,26 @@ ffv1_rgb16.mkv gbrp16le - -c:v ffv1 -coder 1 -pix_fmt gbrp16le -g 5
 ffv1_gbrap12.mkv gbrap12le alpha -c:v ffv1 -coder 1 -pix_fmt gbrap12le -g 5
 TABLE
 fi
+while read name pix opts; do
+    vf_make $name "$S" -t 0.4 $opts
+    if on_mac; then check "$name: every frame, luma bit-exact (chroma held as 4:2:x on the Mac)" $VC luma $VF/$name $pix
+    else check "$name decodes bit-exact against ffmpeg" $VC planes $VF/$name $pix -; fi
+done <<TABLE
+raw410.avi yuv410p -c:v rawvideo -pix_fmt yuv410p
+raw411.avi yuv411p -c:v rawvideo -pix_fmt yuv411p
+ffv1_411.mkv yuv411p -c:v ffv1 -pix_fmt yuv411p -g 5
+TABLE
+vf_colours() {
+    $A compress $VF/$1 $VF/compressed_$1.mp4 --bitrate 8000000 > /dev/null 2>&1 || return 1
+    python3 -c "
+import subprocess, sys, numpy
+def rgb(path): return numpy.frombuffer(subprocess.run([sys.argv[3], '-nostdin', '-v', 'error', '-i', path, '-frames:v', '4', '-vf', 'scale=in_color_matrix=bt709', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], capture_output=True).stdout, numpy.uint8).astype(numpy.int32)
+a, b = rgb(sys.argv[1]), rgb(sys.argv[2])
+gap = numpy.abs(a - b).mean() if len(a) == len(b) > 0 else 255
+print(f'{sys.argv[1]}: mean RGB difference {gap:.2f}')
+sys.exit(0 if gap < 6 else 1)" $VF/$1 $VF/compressed_$1.mp4 "$FFMPEG"
+}
+for f in qtrle24.mov png.avi rawbgr.avi; do check "compress of $f keeps its colours (RGB pictures converted, not read as YCbCr)" vf_colours $f; done
 for f in qtrle.mov ffv1.mkv ffv1_range.mkv; do check "random frames of $f equal the straight decode" python3 comparex.py selfseek $VF/$f 8 3; done
 for pair in dnxhr_hq.mov:dnxhd qtrle.mov:qtrle png.mov:png v210.mov:v210 raw.avi:rawvideo ut.avi:utvideo ffv1.mkv:ffv1; do
     check "probe names ${pair%%:*} as ffprobe does (${pair##*:})" vf_named ${pair%%:*} ${pair##*:}

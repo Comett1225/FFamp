@@ -1,6 +1,7 @@
 #include "absent/media.h"
 #include "aac_config.h"
 #include "bytes.h"
+#include "tools_common.h"
 #include "writers.h"
 #include <algorithm>
 #include <cmath>
@@ -117,11 +118,22 @@ Entry describe(const TrackSpec& spec) {
         if (spec.config.size() == 34) e.secret.insert(e.secret.end(), spec.config.begin(), spec.config.end());
         else e.secret.clear();
     } else if (is("lpcm")) {
-        if (spec.floating) e.name = spec.bigEndian ? nullptr : "A_PCM/FLOAT/IEEE";
+        if (spec.floating) e.name = spec.bits == 32 || spec.bits == 64 ? "A_PCM/FLOAT/IEEE" : nullptr;
         else e.name = spec.bigEndian && spec.bits > 8 ? "A_PCM/INT/BIG" : "A_PCM/INT/LIT";
         e.secret.clear();
     }
     return e;
+}
+
+void storedPcm(const TrackSpec& spec, std::vector<uint8_t>& data) {
+    if (spec.codec != fourcc("lpcm") || !spec.bigEndian) return;
+    if (!spec.floating && spec.bits == 8) {
+        for (uint8_t& value : data) value ^= 0x80;
+        return;
+    }
+    if (!spec.floating) return;
+    const size_t width = size_t(spec.bits / 8);
+    for (size_t at = 0; width > 1 && at + width <= data.size(); at += width) std::reverse(data.begin() + ptrdiff_t(at), data.begin() + ptrdiff_t(at + width));
 }
 
 std::vector<uint8_t> specificInfo(const std::vector<uint8_t>& esds) {
@@ -277,7 +289,7 @@ std::unique_ptr<MkvWriter> MkvWriter::open(const std::string& path, std::string*
     std::unique_ptr<MkvWriter> writer(new MkvWriter);
     writer->impl->path = path;
     writer->impl->temp = path + ".part";
-    writer->impl->webm = path.size() > 5 && path.compare(path.size() - 5, 5, ".webm") == 0;
+    writer->impl->webm = endsWith(path, ".webm");
     writer->impl->data = openFile(writer->impl->temp, "wb+");
     if (!writer->impl->data) {
         if (error) *error = "cannot create output file";
@@ -289,6 +301,7 @@ std::unique_ptr<MkvWriter> MkvWriter::open(const std::string& path, std::string*
 }
 
 int MkvWriter::add(const TrackSpec& spec) {
+    if (impl->webm && !describe(spec).web) return -1;
     Out out;
     out.spec = spec;
     out.trims = spec.kind == Kind::Audio;
@@ -318,6 +331,7 @@ bool MkvWriter::write(int track, const uint8_t* data, size_t size, int64_t pts, 
     Queued packet;
     packet.track = track;
     packet.data.assign(data, data + size);
+    storedPcm(t.spec, packet.data);
     packet.pts = pts;
     packet.dts = dts;
     packet.duration = duration;
@@ -505,12 +519,14 @@ bool placeInFront(FILE*& data, uint64_t size, const std::vector<const Bytes*>& f
 }
 
 std::unique_ptr<Writer> Writer::open(const std::string& path, std::string* error) {
-    auto ends = [&](const char* tail) {
-        size_t n = strlen(tail);
-        return path.size() > n && path.compare(path.size() - n, n, tail) == 0;
-    };
-    if (ends(".mkv") || ends(".webm") || ends(".mka")) return MkvWriter::open(path, error);
+    auto ends = [&](const char* tail) { return endsWith(path, tail); };
+    if (matroskaPath(path)) return MkvWriter::open(path, error);
     if (ends(".ogg") || ends(".opus") || ends(".oga")) return openOggWriter(path, error);
+    for (const char* other : {".mp3", ".mp2", ".flac", ".wav", ".aac", ".ac3", ".eac3", ".aif", ".aiff", ".caf", ".avi", ".ts", ".wma", ".wmv", ".gif", ".ivf"}) {
+        if (!ends(other)) continue;
+        if (error) *error = std::string("cannot write a ") + other + " file here; FFamp writes .mp4, .m4v, .mov, .m4a, .mkv, .mka, .webm, .ogg, .opus and .oga files";
+        return nullptr;
+    }
     return Mp4Writer::open(path, error);
 }
 

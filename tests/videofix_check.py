@@ -40,7 +40,7 @@ def planes(path, pix_fmt, alpha):
 def luma(path, pix_fmt, slack):
     width, height, frame, plane = info(path)
     a, b = ours(path), theirs(path, pix_fmt)
-    step = plane * {"gray": 1, "gray10le": 1, "yuv440p": 2}[pix_fmt]
+    step = int(plane * {"gray": 1, "gray10le": 1, "yuv440p": 2, "yuv410p": 1.125, "yuv411p": 1.5}[pix_fmt])
     count = len(b) // step if step else 0
     kind = numpy.uint8 if plane == width * height else numpy.dtype("<u2")
     worst = 0

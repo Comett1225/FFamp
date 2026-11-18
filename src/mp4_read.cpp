@@ -197,8 +197,8 @@ void audioConfig(uint32_t type, View body, Track& track) {
     } else if (type == fourcc("enda") && body.n >= 2 && track.codec == fourcc("lpcm")) {
         track.bigEndian = body.p[1] == 0;
     } else if (type == fourcc("pcmC") && body.n >= 6 && track.codec == fourcc("lpcm")) {
-        track.bigEndian = !(body.p[4] & 1);
         track.bits = body.p[5];
+        track.bigEndian = !(body.p[4] & 1) || (track.bits == 8 && !track.floating);
     }
 }
 
@@ -243,7 +243,8 @@ void audioEntry(uint32_t format, View v, Track& track, SoundUnit& unit) {
     else if (format == fourcc("fl64")) pcm(track, 64, true, true);
     else if (format == fourcc("ipcm")) pcm(track, bits, false, true);
     else if (format == fourcc("fpcm")) pcm(track, bits, true, true);
-    else if (format == fourcc("lpcm") && version == 2 && (bits == 8) != bool(flags & 5)) pcm(track, bits, flags & 1, flags & 2);
+    else if (format == fourcc("lpcm") && version == 2 && bits == 8 && !(flags & 1)) pcm(track, 8, false, flags & 4);
+    else if (format == fourcc("lpcm") && version == 2 && bits != 8 && (flags & 5)) pcm(track, bits, flags & 1, flags & 2);
     else if (format == fourcc(".mp3") || format == 0x6D730055) track.codec = fourcc(".mp3");
     else if (format == fourcc("fLaC")) track.bits = bits;
     else if (format == fourcc("dtsc") || format == fourcc("dtsh") || format == fourcc("dtsl") || format == fourcc("dtse")) track.codec = fourcc("dts ");
@@ -473,6 +474,7 @@ void joinSegments(Track& track, const std::vector<Segment>& parts) {
                 if (inside) {
                     s.pts += shift;
                 } else if (j > 0 || s.pts >= end) {
+                    if (s.pts >= end) s.duration = 0;
                     away.push_back(joined.size());
                 }
                 if (s.dts <= lastDts) s.dts = lastDts + 1;
@@ -754,6 +756,7 @@ void place(Pending& p, uint64_t fileSize, uint64_t& samplesLeft) {
             taken = true;
         });
     }
+    if (track.kind == Kind::Audio && track.sampleRate < 1 && track.timescale > 1) track.sampleRate = int(track.timescale);
     if (track.kind == Kind::Audio && (track.codec >> 16) == 0x6D73 && track.config.empty() && unit.bytes) {
         const uint32_t tag = track.codec & 0xFFFF, ch = uint32_t(track.channels), rate = uint32_t(track.sampleRate);
         const uint8_t form[18] = {uint8_t(tag), uint8_t(tag >> 8), uint8_t(ch), uint8_t(ch >> 8), uint8_t(rate), uint8_t(rate >> 8), uint8_t(rate >> 16),

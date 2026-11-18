@@ -12,6 +12,8 @@ struct Ticker {
     bool stopped(std::string* error) const;
 };
 
+inline const char* kCannotHold = "the output file type cannot hold this codec (WebM holds only VP8, VP9 or AV1 pictures and Opus or Vorbis sound, Ogg one Opus track)";
+
 bool endsWith(const std::string& text, const char* tail);
 bool matroskaPath(const std::string& path);
 TrackSpec specFor(const Track& track);

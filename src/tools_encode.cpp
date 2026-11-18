@@ -49,7 +49,7 @@ struct VideoOut {
         picture.height = spec.height;
         picture.rotation = rotation;
         track = file.add(picture);
-        return true;
+        return track >= 0 || fail(error, kCannotHold);
     }
     void drain() {
         Packet packet;
@@ -275,6 +275,7 @@ bool compress(const CompressJob& job, const Progress& progress, std::string* err
     } else if (job.sound == SoundChoice::Mp3) {
         return fail(error, "sound is copied or encoded to AAC here");
     }
+    if ((!copied.empty() && copied[0].out < 0) || (encodeSound && sound.track < 0)) return fail(error, kCannotHold);
 
     auto soundUntil = [&](double seconds) {
         if (encodeSound) return sound.advance(seconds);
@@ -387,6 +388,7 @@ bool reverse(const ReverseJob& job, const Progress& progress, ReverseResult* res
         if (until > from) {
             if (!sound.open(job.input, plan, job.audioBitrate, error)) return false;
             sound.begin(from, until - from, true, *writer);
+            if (sound.track < 0) return fail(error, kCannotHold);
             hasSound = true;
         }
     }

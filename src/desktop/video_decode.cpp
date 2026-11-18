@@ -259,10 +259,13 @@ struct VideoDecoder::Impl {
     Frame concealed(VideoDecoder& owner, uint32_t index) {
         uint32_t earlier = index;
         while (earlier > 0 && lost[earlier]) --earlier;
-        if (lost[earlier] || concealing >= 30) return {};
+        const bool none = lost[earlier];
+        if ((none && concealing) || concealing >= 30) return {};
         ++concealing;
         next = kNone;
-        Frame shownFrame = owner.frame(earlier);
+        Frame shownFrame;
+        if (!none) shownFrame = owner.frame(earlier);
+        for (uint32_t later = index + 1; none && !shownFrame && later < list.size() && later <= index + 30; ++later) shownFrame = owner.frame(later);
         --concealing;
         last = index;
         if (shownFrame) {
@@ -278,9 +281,12 @@ struct VideoDecoder::Impl {
         std::vector<uint8_t> kind(samples.size(), 0);
         std::vector<uint32_t> number(samples.size(), 0);
         std::vector<uint8_t> bytes;
+        bool fields = false;
         for (uint32_t i = 0; i < samples.size(); ++i) {
+            if (i == 256 && !fields) return;
             bytes.resize(samples[i].size);
             if (file->read(*track, i, bytes.data())) kind[i] = uint8_t(h264FieldOf(layout, bytes.data(), bytes.size(), number[i]));
+            fields = fields || kind[i];
         }
         std::vector<uint8_t> second(samples.size(), 0);
         for (uint32_t i = 0; i + 1 < samples.size(); ++i) {

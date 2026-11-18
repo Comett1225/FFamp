@@ -142,7 +142,7 @@ int pack(const Args& args) {
     std::string error;
     auto writer = Writer::open(args.plain[0], &error);
     if (!writer) return fail(error);
-    for (Stored& s : tracks) s.out = writer->add(s.spec);
+    for (Stored& s : tracks) if ((s.out = writer->add(s.spec)) < 0) return fail("the output file type cannot hold one of the tracks");
     for (;;) {
         Stored* best = nullptr;
         for (Stored& s : tracks) if (s.out >= 0 && s.next < s.packets.size() && (!best || s.time() < best->time())) best = &s;

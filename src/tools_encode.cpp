@@ -235,6 +235,7 @@ bool compress(const CompressJob& job, const Progress& progress, std::string* err
 
     auto writer = Writer::open(job.output, error);
     if (!writer) return false;
+    writer->tags(in.reader->tags());
     EncodeSpec spec;
     spec.width = width;
     spec.height = height;
@@ -359,6 +360,7 @@ bool reverse(const ReverseJob& job, const Progress& progress, ReverseResult* res
     const double fps = frameRate(*in.track);
     auto writer = Writer::open(job.output, error);
     if (!writer) return false;
+    writer->tags(in.reader->tags());
     EncodeSpec spec;
     spec.width = width;
     spec.height = height;
@@ -537,6 +539,7 @@ bool gifToVideo(const std::string& input, const std::string& colour, const std::
                 opened = true;
                 break;
             }
+            if (colourVideo.encoder) return false;
         }
         if (!opened) return fail(error, "no video size fits this GIF");
         width = info.videoWidth = spec.width;

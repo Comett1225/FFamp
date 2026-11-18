@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include "portable.h"
 
 namespace absent {
 
@@ -227,7 +226,6 @@ bool CaptureRecorder::finish(std::string* error) {
         if (error) *error = text;
         if (problem.empty()) problem = text;
         writer.reset();
-        if (!spec.record.empty()) removeFile(spec.record);
         return false;
     };
     if (finished) return problem.empty();

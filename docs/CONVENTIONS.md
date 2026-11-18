@@ -64,6 +64,10 @@ Every reader fills `absent::Track` the same way, so any decoder or writer works 
 no PES header, Annex-B already turned into length-prefixed NAL units). Readers whose packets are split in the file keep their own piece
 list; `Sample.offset` is then free for the reader's use.
 
+MP4/MOV: a track whose chunks use a second sample description that differs from the first (two clips joined without re-encoding)
+gets no samples, so it is left out instead of decoded with the wrong settings. The samples of all tracks and fragments together are
+capped at one per 8 bytes of the file plus 65536, and at 2^25.
+
 ## Rules
 
 - C++20. No comments in any source file or script. Clear names instead.
@@ -151,8 +155,9 @@ list; `Sample.offset` is then free for the reader's use.
   H.264 video starts, and starts again after a lost or scrambled packet, at the first IDR or I picture (an open-GOP or broadcast
   recovery point, not marked `sync`), so a recording with rare or no IDR pictures keeps its video.
 - MPEG-TS clock jumps: a stamp more than 1 s back or 10 s ahead of both its own stream's last stamp and the last stamp of any stream
-  (joined HLS pieces, an ad splice) starts a new run, and every stream's later stamps continue after the furthest point any stream
-  reached, as FFmpeg's command line rebases them.
+  of its program (joined HLS pieces, an ad splice) starts a new run, and the program's later stamps continue after the furthest
+  point a stream of it that gives samples reached (at most 1 s past its last stamp), as FFmpeg's command line rebases them. Each
+  program of a multi-program stream keeps its own clock.
 - MPEG audio layer I uses the codec `.mp1` (layer II `.mp2`, layer III `.mp3`).
 - `Reader::format()` of the transport stream reader is `mpegts`.
 

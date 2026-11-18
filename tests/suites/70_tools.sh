@@ -124,6 +124,8 @@ check "GIF alpha: matte video opens in AVFoundation" opens $T/alpha-mask.mp4
 check "a still GIF is refused, nothing left behind" refused $T/still.mp4 tool gif-video $FX/still.gif $T/still.mp4 $T/still-mask.mp4
 check "no matte left behind either" [ ! -e $T/still-mask.mp4 -a ! -e $T/still-mask.mp4.part ]
 check "a file that is not a GIF is refused" refused $T/notgif.mp4 tool gif-video $FX/clip.mp4 $T/notgif.mp4
+check "a GIF into WebM is refused, nothing left behind" refused $T/gif.webm tool gif-video $FX/opaque.gif $T/gif.webm
+check "the GIF into WebM refusal names what WebM holds" grep -q "WebM holds only" $T/last.log
 
 tool merge $FX/dash_video.mp4 $FX/dash_audio.m4a $T/merged.mp4
 check "merge fragmented H.264 + AAC pieces into MP4: every packet kept" judged merge $FX/dash_video.mp4 $FX/dash_audio.m4a $T/merged.mp4

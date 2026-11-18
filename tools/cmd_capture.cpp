@@ -113,19 +113,13 @@ int framesIn(const Args& args) {
             got += more;
         }
         if (got != pixels.size()) {
-            if (got) {
-                removeFile(args.plain[0]);
-                return fail("the last frame is incomplete");
-            }
+            if (got) return fail("the last frame is incomplete");
             break;
         }
         if (!writer->write(pixels.data())) break;
     }
     if (in != stdin) fclose(in);
-    if (!writer->finish(&error)) {
-        removeFile(args.plain[0]);
-        return fail(error);
-    }
+    if (!writer->finish(&error)) return fail(error);
     const double spent = now() - began;
     fprintf(stderr, "wrote %ld frames of %dx%d in %.3f s (%.1f fps)\n", writer->frames(), writer->width(), writer->height(), spent, writer->frames() / std::max(spent, 1e-9));
     return 0;
@@ -134,10 +128,7 @@ int framesIn(const Args& args) {
 int speech(const Args& args) {
     if (args.plain.size() < 2) return fail("speech needs <in> <out.wav> [--rate R] [--speed s] [--pitch p]");
     std::string error;
-    if (!convertSpeech(args.plain[0], args.plain[1], int(args.number("rate", 44100)), real(args, "speed", 1), real(args, "pitch", 1), &error)) {
-        removeFile(args.plain[1]);
-        return fail(error);
-    }
+    if (!convertSpeech(args.plain[0], args.plain[1], int(args.number("rate", 44100)), real(args, "speed", 1), real(args, "pitch", 1), &error)) return fail(error);
     return 0;
 }
 

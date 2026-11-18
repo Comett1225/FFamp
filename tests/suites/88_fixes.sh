@@ -10,6 +10,10 @@ fx_named() {
 }
 for name in Café Привет 動画; do check "fixes: a folder and file named $name open, probe and extract-audio into it" fx_named $name; done
 check "fixes: compress --fps 29.97 encodes at 30000/1001, not 29" eval '$A compress fixtures/tools/clip.mp4 $FX/fps.mp4 --fps 29.97 --audio none > /dev/null 2>&1 && $A probe $FX/fps.mp4 | grep -q "timescale 30000 "'
+kept_after() { printf keep > "$1" && ! "${@:2}" > /dev/null 2>&1 && [ "$(cat "$1")" = keep ] && [ ! -e "$1.part" ]; }
+head -c 1000 /dev/zero > $FX/short.raw
+check "fixes: frames-in with an incomplete frame keeps the file already at the output" kept_after $FX/kept_in.mp4 $A frames-in $FX/kept_in.mp4 --size 64x64 --fps 30 --in $FX/short.raw
+check "fixes: speech from a missing file keeps the file already at the output" kept_after $FX/kept_speech.wav $A speech $FX/no_such_voice.wav $FX/kept_speech.wav
 if have_ffmpeg; then
     decoded_bytes() { [ "$($FFMPEG -nostdin -v error -i "$1" -f s16le - | wc -c | tr -d ' ')" = "$2" ]; }
     stated_length() { [ "$($FFPROBE -v error -show_entries format=duration -of csv=p=0 "$1" 2> /dev/null)" = "$2" ]; }
@@ -18,6 +22,8 @@ if have_ffmpeg; then
     check "fixes: FFmpeg decodes nothing from the empty AAC file" decoded_bytes $FX/empty.m4a 0
     check "fixes: FFmpeg decodes nothing from the empty Opus file" decoded_bytes $FX/empty.opus 0
     check "fixes: FFmpeg decodes 100 frames from the 100-frame AAC file" decoded_bytes $FX/short.m4a 400
+    first_sample() { [ "$($FFMPEG -nostdin -v error -i "$1" -f s16le - | head -c 2 | od -An -tx1 | tr -d ' \n')" = 0064 ]; }
+    for f in signed8 unsigned8; do for ext in mp4 mov mkv; do check "fixes: FFmpeg reads the sign of 8-bit PCM in $f.$ext" first_sample $FX/$f.$ext; done; done
     check "fixes: FFmpeg decodes 100 frames from the 100-frame Opus file" decoded_bytes $FX/short.opus 400
     check "fixes: FFmpeg reads the 13 hour length of the long MP4" stated_length $FX/long.m4a 47722.858844
     check "fixes: FFmpeg reads the late trim of the PCM track in MP4" stated_length $FX/trimmed.mp4 1.000000
@@ -83,9 +89,12 @@ sys.exit(0 if len(ours) == len(theirs) == 2048 and max(gaps) <= 16 and sum(gaps)
     $F -f lavfi -i sine=r=48000:d=3 -ac 1 -f f32le $FX/mono.f32
     mono_rate() { $A aencode $FX/mono_$1.m4a --pcm $FX/mono.f32 --rate 48000 --channels 1 --format aac --bitrate $1 > /dev/null 2>&1 && [ "$($FFPROBE -v error -show_entries stream=bit_rate -of csv=p=0 $FX/mono_$1.m4a)" -ge 120000 ]; }
     for rate in 192000 256000 320000; do check "fixes: mono AAC at $((rate / 1000)) kbit/s is not cut to 64 kbit/s" mono_rate $rate; done
-    $F -f lavfi -i testsrc2=s=320x180:d=4 -f lavfi -i sine=d=4 -c:v libx264 -c:a aac -metadata title=Holiday -metadata location=+52.3700+004.8900/ -f mov $FX/phone.mov
+    $F -f lavfi -i testsrc2=s=320x180:d=4 -f lavfi -i sine=d=4 -c:v libx264 -c:a aac -metadata title=Holiday -metadata location=+52.3700+004.8900/ -metadata creation_time=2024-05-06T07:08:09Z -f mov $FX/phone.mov
     kept_tags() { $A trim $FX/phone.mov "$1" --start 1 --end 3 > /dev/null 2>&1 && local tags=$($FFPROBE -v error -show_entries format_tags -of compact=p=0 "$1") && [[ "$tags" == *"title=Holiday"* ]] && echo "$tags" | grep -qi "location=+52.3700+004.8900/"; }
     for ext in mp4 mov mkv; do check "fixes: a trim into .$ext keeps the title and location" kept_tags $FX/phone_trim.$ext; done
+    created() { $A "$1" $FX/phone.mov "${@:2}" > /dev/null 2>&1 && $FFPROBE -v error -show_entries format_tags=creation_time -of csv=p=0 "$2" | grep -q "^2024-05-06T07:08:09"; }
+    check "fixes: compress keeps the creation time" created compress $FX/phone_small.mp4 --size 160x90 --audio none
+    check "fixes: reverse keeps the creation time" created reverse $FX/phone_back.mp4
     rotation_of() { $FFPROBE -v error -select_streams v:0 -show_entries stream_side_data=rotation -of csv=p=0 "$1" | tr -d ',\r\n'; }
     turned() { $A $1 fixtures/probe/rot90.mp4 $2 > /dev/null 2>&1 && [ -n "$(rotation_of $2)" ] && [ "$(rotation_of $2)" = "$(rotation_of fixtures/probe/rot90.mp4)" ]; }
     check "fixes: rewrap of a rotated MP4 into Matroska keeps the rotation" turned rewrap $FX/rot.mkv
@@ -119,6 +128,25 @@ steady = all(b[1] >= a[1] for t in (video, audio) for a, b in zip(t, t[1:]))
 sys.exit(0 if steady and len(video) >= 118 and max(p for p, d in video) - min(p for p, d in video) < 4.5 * 90000 else 1)"
     }
     check "fixes: two transport streams joined with their clocks restarting play one after the other" in_step $FX/spliced.ts
+    $F -f lavfi -i testsrc2=s=320x180:r=30:d=4 -f lavfi -i sine=d=4 -c:v libx264 -preset veryfast -c:a aac -output_ts_offset 5000 -mpegts_service_id 2 -mpegts_pmt_start_pid 0x1100 -mpegts_start_pid 0x200 -f mpegts $FX/program_b.ts
+    python3 -c "
+import sys
+a, b = (open(name, 'rb').read() for name in sys.argv[1:3])
+a, b = ([data[i:i + 188] for i in range(0, len(data) - 187, 188)] for data in (a, b))
+mixed = sorted([(i / len(a), 0, p) for i, p in enumerate(a)] + [(i / len(b), 1, p) for i, p in enumerate(b)])
+open(sys.argv[3], 'wb').write(b''.join(p for _, _, p in mixed))" $FX/spliced.ts $FX/program_b.ts $FX/two_programs.ts
+    programs_steady() {
+        $A packets "$1" | python3 -c "
+import sys
+tracks = []
+for line in sys.stdin:
+    word = line.split()
+    if word and word[0] == 'track': tracks.append([])
+    elif tracks and len(word) == 6 and word[0].lstrip('-').isdigit(): tracks[-1].append((int(word[0]), int(word[1])))
+steady = all(b[1] >= a[1] for t in tracks for a, b in zip(t, t[1:]))
+sys.exit(0 if len(tracks) == 4 and all(tracks) and steady and all(max(p for p, d in t) - min(p for p, d in t) < 4.5 * 90000 for t in tracks) else 1)"
+    }
+    check "fixes: a spliced program next to another program with its own clock: each keeps its own steady time line" programs_steady $FX/two_programs.ts
 else
     skip "fixes: FFmpeg as the judge of the written files and the 7.1 order"
 fi

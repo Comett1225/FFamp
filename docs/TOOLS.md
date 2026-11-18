@@ -50,6 +50,7 @@ What the app's command does and what ours does:
 | Encoder | `h264_videotoolbox -realtime 0 -profile:v high -b:v B -g fps` | VideoToolbox H.264 High, average bitrate B, key frame every `fps` frames, B-frames; also HEVC, AV1 (SVT-AV1) and VP9 (libvpx) |
 | Colour | output labelled BT.709, limited range, pixels not converted | a source without colour labels is treated the same way (labelled BT.709, not converted). A source labelled as something else (BT.601, BT.2020, HLG, PQ, full range, 10-bit) is converted to 8-bit BT.709 limited by VideoToolbox, so the label is true |
 | Rotation | `-noautorotate`, rotation flag carried over | the same |
+| Tags | the input's title, creation time, location and other tags are copied | the same |
 | Sound, copy | packets from the one at or before the start | the same packets plus two run-in packets for AAC (four for Opus and MP3), and an edit list that starts and ends the sound on the exact sample |
 | Sound, AAC | `aac_at -b:a K` from the packet at or before the start | AudioToolbox AAC at K, cut to the exact sample at both ends. More than two channels are mixed to stereo (FFmpeg keeps 5.1); a rate AAC does not take is resampled to the next one that it does |
 | No sound track | `0:a:0?` is optional | the same, the file has no sound |
@@ -106,7 +107,8 @@ joins them with the concat demuxer and encodes the sound to AAC. The result is M
   the output (`<output>.spill.mp4`: H.264, every frame a key frame, about 2 bits per pixel) and read back from the end. The result
   line reports how many groups went that way (`spilled N`). The scratch file is removed in every case.
 - **Sound**: the same span, sample-exact, reversed. Where the sound ends before the picture, the result starts with silence.
-- Odd sizes are stretched to the next even size by one pixel (the app pads with a black line). Rotation is carried over.
+- Odd sizes are stretched to the next even size by one pixel (the app pads with a black line). Rotation and tags (title, creation
+  time, location) are carried over.
 - Colour is handled as in Compress.
 
 Against the app's FFmpeg steps on the test clip: same frame count, length and frame times; pictures agree at 36 dB or better.

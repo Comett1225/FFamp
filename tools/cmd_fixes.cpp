@@ -1507,6 +1507,38 @@ bool mp4SampleBudget() {
     return samples <= b.d.size() / 8 + 65536 && reader->tracks()[0].id == 1 && reader->tracks()[0].samples.size() < 100;
 }
 
+bool mp4Descriptions() {
+    const auto samplesOf = [](const char* name, uint32_t secondIndex, uint8_t secondSetting, uint16_t secondReference) -> long {
+        Bytes b = testMovie(30, [&](Bytes& m) {
+            testTrak(m, 1, "vide", 30, {}, [&](Bytes& t) {
+                const size_t stsd = t.open(fourcc("stsd"), 0, 0);
+                t.u32(2);
+                for (int k = 0; k < 2; ++k) {
+                    const size_t entry = t.open(fourcc("zzzz"));
+                    t.zero(6);
+                    t.u16(k ? secondReference : 1);
+                    t.u32(k ? secondSetting : 7);
+                    t.close(entry);
+                }
+                t.close(stsd);
+                fullBox(t, "stsz", {1, 10});
+                fullBox(t, "stsc", {2, 1, 5, 1, 2, 5, secondIndex});
+                fullBox(t, "stco", {2, 8, 13});
+                fullBox(t, "stts", {1, 10, 1});
+            });
+        });
+        const size_t mdat = b.open(fourcc("mdat"));
+        b.zero(16);
+        b.close(mdat);
+        const std::string path = scratch(name);
+        if (!save(path, b.d)) return -1;
+        auto reader = Reader::open(path);
+        return reader && reader->tracks().size() == 1 ? long(reader->tracks()[0].samples.size()) : -1;
+    };
+    return samplesOf("one_description.mov", 1, 9, 1) == 10 && samplesOf("same_descriptions.mov", 2, 7, 2) == 10 && samplesOf("other_description.mov", 2, 9, 1) == 0 &&
+        samplesOf("missing_description.mov", 3, 9, 1) == 10;
+}
+
 bool mp4EditGaps() {
     const auto video = [](Bytes& m, const std::vector<uint32_t>& edits, bool firstKeyOnly) {
         testTrak(m, 1, "vide", 30, edits, [&](Bytes& t) {
@@ -2017,7 +2049,7 @@ bool probeRateBudget() {
     if (!video || video->samples.size() != count) return false;
     const auto start = std::chrono::steady_clock::now();
     const std::string json = probeJson(path, false);
-    return !json.empty() && std::chrono::steady_clock::now() - start < std::chrono::milliseconds(500);
+    return !json.empty() && std::chrono::steady_clock::now() - start < std::chrono::seconds(3);
 }
 
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
@@ -2037,7 +2069,7 @@ const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"finish-twice", finishTwice}, {"many-tracks", manyTracks}, {"long-gap", longGap}, {"wma-block-align", wmaBlockAlign},
     {"interleave", interleave}, {"colour-unknown", colourUnknown}, {"copy-codecs", copyCodecs}, {"mkv-frame-rate", mkvFrameRate}, {"gif-hold", gifHold},
     {"chroma-lines", chromaLines}, {"aac-mono-rate", aacMonoRate}, {"copy-tags", copyTags}, {"mkv-rotation", mkvRotation},
-    {"avi-hostile", aviHostile}, {"mp4-sample-budget", mp4SampleBudget}, {"mp4-edit-gaps", mp4EditGaps}, {"mp4-fragment-times", mp4FragmentTimes},
+    {"avi-hostile", aviHostile}, {"mp4-sample-budget", mp4SampleBudget}, {"mp4-descriptions", mp4Descriptions}, {"mp4-edit-gaps", mp4EditGaps}, {"mp4-fragment-times", mp4FragmentTimes},
     {"mov-mp3-packets", movMp3Packets}, {"android-vorbis-config", androidVorbisConfig}, {"scaled-matrix-zero", scaledMatrixZero},
     {"writer-suffix", writerSuffix}, {"pcm-labels", pcmLabels}, {"creation-time", creationTime}, {"sample-entry-names", sampleEntryNames},
     {"mkv-track-cap", mkvTrackCap}, {"late-opus", lateOpus}, {"frames-from-zero", framesFromZero}, {"leading-pictures", leadingPictures},

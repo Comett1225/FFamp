@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <map>
 #include "portable.h"
 
 namespace absent {
@@ -292,6 +293,7 @@ struct Unit {
 
 struct Stream {
     uint16_t pid = 0;
+    uint16_t program = 0;
     Flavor flavor = Flavor::Avc;
     Track track;
     std::vector<Where> where;
@@ -449,7 +451,8 @@ struct Stream {
                 std::vector<uint8_t> body = unescape(head.data() + 1, head.size() - 1);
                 BitReader r{body.data(), body.size()};
                 first = r.ue() == 0;
-                intra = first && r.ue() % 5 == 2;
+                const uint32_t sliceType = r.ue();
+                intra = first && sliceType % 5 == 2;
                 r.ue();
                 if (info.separatePlanes) r.skip(2);
                 frameNumber = r.bits(info.frameNumBits);
@@ -786,8 +789,11 @@ private:
         bool clocked = false;
         bool early = false;
         int64_t clock = 0;
-        int64_t latest = 0;
-        int64_t offset = 0;
+        struct ProgramClock {
+            int64_t latest = 0;
+            int64_t offset = 0;
+        };
+        std::map<uint16_t, ProgramClock> programClocks;
         const uint8_t* packet;
         uint64_t place;
         while (walk.next(packet, place)) {
@@ -836,21 +842,24 @@ private:
                 int64_t dts = unwrap(s.pes.dts, near);
                 int64_t pts = unwrap(s.pes.pts, dts);
                 if (!clocked) early = dts > kClockMask - 60 * 90000;
+                ProgramClock& program = programClocks[s.program];
                 if (s.clocked) {
-                    const int64_t own = dts + offset - s.placed, all = dts + offset - latest;
+                    const int64_t own = dts + program.offset - s.placed, all = dts + program.offset - program.latest;
                     if ((own < -90000 && all < -90000) || (own > 900000 && all > 900000)) {
                         int64_t reached = s.placed + 1;
-                        for (auto& other : streams) if (other->clocked) reached = std::max(reached, other->placed + std::max<int64_t>(other->stride, 1));
-                        offset = reached - dts;
+                        for (auto& other : streams)
+                            if (other->clocked && other->program == s.program && !other->track.samples.empty())
+                                reached = std::max(reached, other->placed + std::clamp<int64_t>(other->stride, 1, 90000));
+                        program.offset = reached - dts;
                     } else if (own > 0) {
                         s.stride = own;
                     }
                 }
                 s.clocked = clocked = true;
                 s.clock = clock = dts;
-                s.placed = latest = dts + offset;
+                s.placed = program.latest = dts + program.offset;
                 if (s.stamps.size() >= 64) s.stamps.pop_front();
-                s.stamps.push_back({s.position, pts + offset, dts + offset});
+                s.stamps.push_back({s.position, pts + program.offset, dts + program.offset});
             }
             if (data.second) s.feed(data.first, data.second, place, uint8_t(data.first - part.p), s.pes.fresh);
         }
@@ -901,6 +910,7 @@ private:
             if (!known || present || streams.size() >= 64) continue;
             auto stream = std::make_unique<Stream>();
             stream->pid = pid;
+            stream->program = uint16_t(d[3] << 8 | d[4]);
             stream->flavor = flavor;
             stream->track.id = pid;
             stream->track.kind = stream->video() ? Kind::Video : Kind::Audio;

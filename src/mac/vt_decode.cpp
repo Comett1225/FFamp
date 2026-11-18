@@ -273,6 +273,7 @@ struct VideoDecoder::Impl {
     VTDecompressionSessionRef session = nullptr;
     std::atomic<bool> broken{false};
     int renewals = 0;
+    uint32_t backKeys = 0;
     std::mutex lock;
     std::map<int64_t, CVPixelBufferRef> ready;
     std::atomic<uint64_t> shown{0};
@@ -502,10 +503,12 @@ struct VideoDecoder::Impl {
 
     bool renew() {
         broken = false;
-        if (!session || !attributes) return false;
-        VTDecompressionSessionInvalidate(session);
-        CFRelease(session);
-        session = nullptr;
+        if (!format || !attributes) return false;
+        if (session) {
+            VTDecompressionSessionInvalidate(session);
+            CFRelease(session);
+            session = nullptr;
+        }
         clear();
         VTDecompressionOutputCallbackRecord callback{output, this};
         if (VTDecompressionSessionCreate(nullptr, format, nullptr, attributes, &callback, &session) == noErr) return true;
@@ -764,7 +767,10 @@ struct VideoDecoder::Impl {
         auto it = std::upper_bound(syncs.begin(), syncs.end(), target);
         while (it != syncs.begin()) {
             --it;
-            if (track->samples[*it].pts <= track->samples[target].pts) return *it;
+            if (track->samples[*it].pts <= track->samples[target].pts) {
+                for (uint32_t back = backKeys; back && it != syncs.begin(); --back) --it;
+                return *it;
+            }
         }
         return syncs.empty() || syncs.front() > target ? 0 : syncs.front();
     }
@@ -1027,7 +1033,14 @@ Frame VideoDecoder::frame(uint32_t index) {
     } else {
         buffer = d.take(pts);
     }
-    if (!buffer && d.broken && d.renewals < 3 && d.renew()) {
+    if (!buffer && d.soft && d.backKeys < 3 && !d.keys.empty() && d.keyFor(item.first) != d.keys.front()) {
+        const uint32_t saved = d.backKeys++;
+        d.next = kNone;
+        Frame retried = frame(index);
+        d.backKeys = saved;
+        return retried;
+    }
+    if (!buffer && !d.soft && (d.broken || !d.session) && d.renewals < 3 && d.renew()) {
         ++d.renewals;
         d.next = kNone;
         d.lost.clear();

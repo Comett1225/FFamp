@@ -61,6 +61,7 @@ void boxes(View v, F f) {
 struct Run {
     uint32_t first = 0;
     uint32_t count = 0;
+    uint32_t description = 1;
 };
 
 struct Defaults {
@@ -353,7 +354,7 @@ void table(uint32_t type, View v, Pending& p) {
             Run run;
             run.first = v.u32();
             run.count = v.u32();
-            v.skip(4);
+            run.description = v.u32();
             p.stsc.push_back(run);
         }
     } else if (type == fourcc("stsz")) {
@@ -747,15 +748,22 @@ void gapless(View movie, std::vector<Track*>& audio, const std::map<uint32_t, bo
 void place(Pending& p, uint64_t fileSize, uint64_t& samplesLeft) {
     Track& track = p.track;
     SoundUnit unit;
+    std::vector<std::pair<uint32_t, View>> entries;
     if (p.stsd.n >= 8) {
         View v = p.stsd;
         v.skip(8);
-        bool taken = false;
         boxes(v, [&](uint32_t format, View body) {
-            if (!taken) entry(format, body, track, unit);
-            taken = true;
+            if (entries.empty()) entry(format, body, track, unit);
+            entries.emplace_back(format, body);
         });
     }
+    const auto sameEntry = [&](const Run& run) {
+        if (run.description < 2 || run.description > entries.size()) return true;
+        const auto& [format, body] = entries[run.description - 1];
+        const View& first = entries[0].second;
+        return format == entries[0].first && body.n == first.n && (body.n <= 8 || memcmp(body.p + 8, first.p + 8, body.n - 8) == 0);
+    };
+    if (!std::all_of(p.stsc.begin(), p.stsc.end(), sameEntry)) return;
     if (track.kind == Kind::Audio && track.sampleRate < 1 && track.timescale > 1) track.sampleRate = int(track.timescale);
     if (track.kind == Kind::Audio && (track.codec >> 16) == 0x6D73 && track.config.empty() && unit.bytes) {
         const uint32_t tag = track.codec & 0xFFFF, ch = uint32_t(track.channels), rate = uint32_t(track.sampleRate);
@@ -933,7 +941,7 @@ std::unique_ptr<Mp4Reader> Mp4Reader::open(const std::string& path, std::string*
     std::vector<uint8_t> piece;
     bool seen = false;
     uint64_t at = 0;
-    uint64_t samplesLeft = total / 8 + 65536;
+    uint64_t samplesLeft = std::min<uint64_t>(total / 8 + 65536, uint64_t(1) << 25);
     while (at + 8 <= total) {
         uint8_t head[16];
         if (fseeko(file, int64_t(at), SEEK_SET) != 0 || fread(head, 1, 8, file) != 8) break;

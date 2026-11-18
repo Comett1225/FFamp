@@ -149,6 +149,7 @@ bool gifRead(const std::string& path, GifInfo& info, const std::function<bool(ui
     }
     std::vector<GifFrame> frames;
     GifFrame next;
+    int64_t decodedPixels = 0;
     while (c.ok && frames.size() <= kMostFrames) {
         const int kind = c.u8();
         if (!c.ok || kind == 0x3B) break;
@@ -180,11 +181,12 @@ bool gifRead(const std::string& path, GifInfo& info, const std::function<bool(ui
             }
             const int minimum = c.u8();
             std::vector<uint8_t> data;
-            if (!c.blocks(&data) || f.width <= 0 || f.height <= 0 || f.palette.empty() || int64_t(f.width) * f.height > int64_t(info.width) * info.height) {
+            if (!c.blocks(&data) || f.width <= 0 || f.height <= 0 || f.palette.empty() || int64_t(f.width) * f.height > kMostPixels) {
                 if (frames.empty()) return fail(error, "the GIF is damaged");
                 break;
             }
-            if (int64_t(frames.size() + 1) * info.width * info.height > kMostWork) return fail(error, "the GIF is too large");
+            decodedPixels += int64_t(f.width) * f.height;
+            if (decodedPixels > kMostWork || int64_t(frames.size() + 1) * info.width * info.height > kMostWork) return fail(error, "the GIF is too large");
             if (!unpack(minimum, data, size_t(f.width) * size_t(f.height), f.indexes)) {
                 if (frames.empty()) return fail(error, "the GIF is damaged");
                 break;

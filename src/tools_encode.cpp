@@ -189,7 +189,7 @@ double frameRate(const Track& track) {
 }
 
 bool compress(const CompressJob& job, const Progress& progress, std::string* error) {
-    if (job.input == job.output) return fail(error, "the output would replace the input");
+    if (sameFile(job.input, job.output)) return fail(error, "the output would replace the input");
     Clip in;
     if (!in.open(job.input, error)) return false;
     VideoDecoder& decoder = *in.decoder;
@@ -297,7 +297,7 @@ bool compress(const CompressJob& job, const Progress& progress, std::string* err
     };
     int64_t next = 0;
     int64_t written = 0;
-    int64_t origin = decoder.pts(first);
+    const int64_t origin = shownTick;
     for (uint32_t i = first; i <= last; ++i) {
         const double ends = i < last ? in.at(i + 1) - shown : finish;
         double shownAt = 0;
@@ -313,8 +313,9 @@ bool compress(const CompressJob& job, const Progress& progress, std::string* err
             Frame frame = decoder.frame(i);
             Buffer buffer(frame ? scaler.fit(frame) : nullptr);
             if (!buffer.p) return fail(error, "a frame did not decode");
-            const int64_t pts = decoder.pts(i) - origin;
-            const int64_t length = std::max<int64_t>(1, (i < last ? decoder.pts(i + 1) : decoder.pts(i) + std::max<int64_t>(probe.duration, 1)) - decoder.pts(i));
+            const int64_t begin = i == first ? origin : decoder.pts(i);
+            const int64_t pts = begin - origin;
+            const int64_t length = std::max<int64_t>(1, (i < last ? decoder.pts(i + 1) : decoder.pts(i) + std::max<int64_t>(probe.duration, 1)) - begin);
             if (!video.push(buffer.p, pts, length)) return fail(error, video.problem());
             written = pts + length;
             shownAt = ends;
@@ -344,7 +345,7 @@ struct Scratch {
 }
 
 bool reverse(const ReverseJob& job, const Progress& progress, ReverseResult* result, std::string* error) {
-    if (job.input == job.output) return fail(error, "the output would replace the input");
+    if (sameFile(job.input, job.output)) return fail(error, "the output would replace the input");
     Clip in;
     if (!in.open(job.input, error)) return false;
     VideoDecoder& decoder = *in.decoder;

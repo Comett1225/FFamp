@@ -214,7 +214,7 @@ std::unique_ptr<PacketDecoder> openSystemAudio(const Track& track, const std::ve
         from = items[0].mASBD;
         decoder->sourceLayout = items[0].mChannelLayoutTag;
         decoder->prerollPackets = from.mFormatID == kAudioFormatMPEG4AAC ? 4 : 32;
-    } else if (track.codec == fourcc(".mp3") || track.codec == fourcc(".mp2")) {
+    } else if (track.codec == fourcc(".mp3") || track.codec == fourcc(".mp2") || track.codec == fourcc(".mp1")) {
         if (!describeMpeg(firstPacket, from)) return fail("MPEG audio header not understood");
         decoder->mpeg = true;
         decoder->prerollPackets = 12;

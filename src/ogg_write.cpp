@@ -26,6 +26,7 @@ struct Checksums {
 class OggWriter : public Writer {
 public:
     std::string path;
+    std::string target;
     FILE* file = nullptr;
     TrackSpec spec;
     bool added = false;
@@ -158,7 +159,7 @@ public:
         if (failed) return fail("writing the output file failed");
         bool ok = fclose(file) == 0;
         file = nullptr;
-        if (!ok) return fail("writing the output file failed");
+        if (!ok || !renameFile(path, target)) return fail("writing the output file failed");
         return true;
     }
 };
@@ -167,8 +168,9 @@ public:
 
 std::unique_ptr<Writer> openOggWriter(const std::string& path, std::string* error) {
     auto writer = std::make_unique<OggWriter>();
-    writer->path = path;
-    writer->file = openFile(path, "wb");
+    writer->path = path + ".part";
+    writer->target = path;
+    writer->file = openFile(writer->path, "wb");
     if (!writer->file) {
         if (error) *error = "cannot create output file";
         return nullptr;

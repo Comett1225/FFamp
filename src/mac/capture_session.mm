@@ -50,6 +50,8 @@ namespace absent {
 
 namespace {
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 NSArray<AVCaptureDevice*>* found(bool video) {
     NSMutableArray<AVCaptureDeviceType>* kinds = [NSMutableArray array];
     if (video) {
@@ -57,15 +59,19 @@ NSArray<AVCaptureDevice*>* found(bool video) {
         if (@available(macOS 14.0, *)) {
             [kinds addObject:AVCaptureDeviceTypeExternal];
             [kinds addObject:AVCaptureDeviceTypeContinuityCamera];
+        } else {
+            [kinds addObject:AVCaptureDeviceTypeExternalUnknown];
         }
     } else if (@available(macOS 14.0, *)) {
         [kinds addObject:AVCaptureDeviceTypeMicrophone];
+    } else {
+        [kinds addObject:AVCaptureDeviceTypeBuiltInMicrophone];
     }
-    if (kinds.count == 0) return @[];
     AVCaptureDeviceDiscoverySession* search = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:kinds mediaType:video ? AVMediaTypeVideo : AVMediaTypeAudio
         position:AVCaptureDevicePositionUnspecified];
     return search.devices ?: @[];
 }
+#pragma clang diagnostic pop
 
 AVCaptureDevice* chosen(const std::string& id, bool video) {
     NSArray<AVCaptureDevice*>* all = found(video);

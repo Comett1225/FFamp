@@ -12,7 +12,11 @@
   `false` to stop.
 - **Stopping**: SIGINT or SIGTERM stops at the next frame or packet group. Data is written to `<output>.part` and only becomes
   `<output>` when the file is complete, so a stopped or failed run leaves no output file, no `.part` file and no scratch file. The
-  exit code is 130 and the message is `ffamp: cancelled`. Other failures exit with 1 and one line on standard error.
+  exit code is 130 and the message is `ffamp: cancelled`. Other failures exit with 1 and one line on standard error. This holds for
+  every file type written (MP4, MOV, Matroska, Ogg, WAV, FLAC, MP3), so a file already at `<output>` stays as it was until the new one
+  is complete.
+- **The output is never the input**: the tools compare the files themselves, so `./clip.mp4`, another spelling of the same name on a
+  drive that ignores case, or a link to the input is refused like the same name.
 - **Output files start at zero** and keep picture and sound in step: a track that starts later than the other gets a leading empty
   edit in MP4/MOV, later block times in Matroska.
 - A result line (for `reverse`, `gif-video`, `gif-info`, and `output <path>` when the command chose the extension) is printed on
@@ -22,7 +26,7 @@
 
 | Command | What it does |
 |---|---|
-| `compress <in> <out> [--start s --end s] [--size WxH \| --fit WxH] [--fps N \| N/D] [--codec h264\|hevc\|av1\|vp9] [--bitrate bits] [--audio copy\|aac\|none] [--audio-bitrate bits]` | decode, cut, scale, change the frame rate, encode |
+| `compress <in> <out> [--start s --end s] [--size WxH \| --fit WxH] [--fps N \| N.NN \| N/D] [--codec h264\|hevc\|av1\|vp9] [--bitrate bits] [--audio copy\|aac\|none] [--audio-bitrate bits]` | decode, cut, scale, change the frame rate, encode |
 | `trim <in> <out> --start s --end s` | stream copy between two times |
 | `extract-audio <in> <out> [--aac \| --mp3] [--bitrate bits]` | copy the first sound track, or re-encode it |
 | `reverse <in> <out.mp4> [--start s --end s] [--bitrate bits] [--audio-bitrate bits] [--memory megabytes]` | picture and sound backwards into H.264 + AAC |
@@ -41,7 +45,7 @@ What the app's command does and what ours does:
 | Cut | `-ss start` before the input (exact: frames before it are decoded and dropped), `-t end-start` | the same frames: first frame at or after the start, last frame before start + length |
 | A span with no frame in it | the app looks for the frame shown before the start and seeks there | the same: that one frame is shown |
 | Size | `scale=W:H` (stretches to exactly W x H, bicubic) | `--size WxH` stretches to exactly W x H; `--fit WxH` keeps the aspect inside the box; one side 0 derives it. Sides are made even. Scaling is done by VideoToolbox on the GPU, averaging when shrinking |
-| Frame rate | `fps=N`: constant rate, frames dropped or repeated by timestamp, time rounded to the nearest slot, halves up | the same rule in whole numbers; the tests find the same source frame in every slot as in FFmpeg's file. Without `--fps` the source frame times are kept |
+| Frame rate | `fps=N`: constant rate, frames dropped or repeated by timestamp, time rounded to the nearest slot, halves up | the same rule in whole numbers; the tests find the same source frame in every slot as in FFmpeg's file. Without `--fps` the source frame times are kept, and the first frame is shown from the start time, so sound that begins before the first picture stays in step. `--fps 29.97` is 30000/1001 |
 | First slot | the first output frame may sit at slot 1 with an edit list in front | the first frame is shown from slot 0, so picture and sound both start at zero |
 | Encoder | `h264_videotoolbox -realtime 0 -profile:v high -b:v B -g fps` | VideoToolbox H.264 High, average bitrate B, key frame every `fps` frames, B-frames; also HEVC, AV1 (SVT-AV1) and VP9 (libvpx) |
 | Colour | output labelled BT.709, limited range, pixels not converted | a source without colour labels is treated the same way (labelled BT.709, not converted). A source labelled as something else (BT.601, BT.2020, HLG, PQ, full range, 10-bit) is converted to 8-bit BT.709 limited by VideoToolbox, so the label is true |

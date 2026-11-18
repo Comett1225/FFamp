@@ -126,11 +126,12 @@ Deliberate differences from ffprobe (all checked in `tests/suites/40_probe.sh`):
   out the ADTS headers (ffprobe counts them), `pos` is given for every packet, and a mid-PES `pts` at 44.1 kHz can differ by one 90 kHz
   tick. Transport stream video packet sizes are those of the length-prefixed samples without delimiters.
 - Transport streams get `bit_rate` and `nb_frames` per stream (ffprobe has none).
-- H.264 in a transport stream: only IDR pictures carry the `K` flag (ffprobe also flags recovery points); the decoder cannot start on
-  the others.
+- H.264 in a transport stream: only IDR pictures carry the `K` flag (ffprobe also flags recovery points); the track starts, and starts
+  again after a lost packet, at the first IDR or I picture, and a jump goes back to the IDR before it.
 - MP4 key flags come from the sync sample table only (ffprobe's parser adds a few more), and `dts` is not shifted down when a file
   has negative composition offsets (`pts` is the same).
-- `r_frame_rate` of a file with uneven frame times is the lowest common rate that fits every time stamp; ffprobe's guess can differ
+- `r_frame_rate` of a file with uneven frame times is the lowest common rate that fits every time stamp (checking at most 8 times the
+  sample count, or 32 million, time stamps in all; past that the time scale over the common step); ffprobe's guess can differ
   (2 of 26 real files tried). `avg_frame_rate` matched on all of them.
 - MP4 with several separate edits: the segments are joined with each one starting where the one before ends; FFmpeg's joined times
   can leave out one frame step at a join. A single edit at media time 0 on a B-frame track: the video starts at 0 as in ffprobe, and

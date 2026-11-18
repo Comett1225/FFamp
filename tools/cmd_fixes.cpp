@@ -6,6 +6,7 @@
 #include "absent/android.h"
 #include "absent/audio.h"
 #include "absent/encoders.h"
+#include "absent/probe.h"
 #include "cli.h"
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <numbers>
 
 namespace {
 
@@ -1836,6 +1838,188 @@ bool leadingPictures() {
     return shown && shown.pts == decoder->pts(0) && decoder->frame(1) && decoder->frame(3);
 }
 
+uint8_t checksum8(const uint8_t* p, size_t n) {
+    uint8_t crc = 0;
+    for (size_t i = 0; i < n; ++i) {
+        crc ^= p[i];
+        for (int k = 0; k < 8; ++k) crc = uint8_t((crc << 1) ^ ((crc & 0x80) ? 0x07 : 0));
+    }
+    return crc;
+}
+
+bool flacSuccessors() {
+    std::vector<uint8_t> file = {'f', 'L', 'a', 'C', 0x80, 0, 0, 34, 0x10, 0, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0, 0x0A, 0xC4, 0x4E, 0xF0};
+    file.resize(8 + 34, 0);
+    for (uint32_t number = 0; file.size() < (2u << 20); number += 2) {
+        uint8_t head[10] = {0xFF, 0xF8, 0x10, 0x70};
+        size_t n = 4;
+        if (number < 0x80) {
+            head[n++] = uint8_t(number);
+        } else if (number < 0x800) {
+            head[n++] = uint8_t(0xC0 | (number >> 6));
+            head[n++] = uint8_t(0x80 | (number & 0x3F));
+        } else if (number < 0x10000) {
+            head[n++] = uint8_t(0xE0 | (number >> 12));
+            head[n++] = uint8_t(0x80 | ((number >> 6) & 0x3F));
+            head[n++] = uint8_t(0x80 | (number & 0x3F));
+        } else {
+            head[n++] = uint8_t(0xF0 | (number >> 18));
+            head[n++] = uint8_t(0x80 | ((number >> 12) & 0x3F));
+            head[n++] = uint8_t(0x80 | ((number >> 6) & 0x3F));
+            head[n++] = uint8_t(0x80 | (number & 0x3F));
+        }
+        head[n] = checksum8(head, n);
+        file.insert(file.end(), head, head + n + 1);
+    }
+    const std::string path = scratch("headers.flac");
+    if (!save(path, file)) return false;
+    const auto start = std::chrono::steady_clock::now();
+    auto reader = Reader::open(path);
+    return std::chrono::steady_clock::now() - start < std::chrono::seconds(3) && (!reader || reader->tracks().size() == 1);
+}
+
+bool compressLead() {
+    auto source = Reader::open(fixtures + "/tools/clip.mp4");
+    const Track* video = source ? source->first(Kind::Video) : nullptr;
+    const Track* audio = source ? source->first(Kind::Audio) : nullptr;
+    if (!video || !audio) return false;
+    const std::string path = scratch("sound_first.mkv");
+    auto writer = Writer::open(path);
+    if (!writer) return false;
+    TrackSpec pictureSpec = specOf(*video);
+    pictureSpec.delay = int64_t(video->timescale) * 2 / 5;
+    const int pictures = writer->add(pictureSpec), sound = writer->add(specOf(*audio));
+    std::vector<uint8_t> data;
+    for (const auto& [t, out] : {std::pair{video, pictures}, std::pair{audio, sound}}) {
+        for (uint32_t i = 0; i < t->samples.size(); ++i) {
+            const Sample& s = t->samples[i];
+            data.resize(s.size);
+            if (!source->read(*t, i, data.data()) || !writer->write(out, data.data(), data.size(), s.pts, s.dts, s.duration, s.sync)) return false;
+        }
+    }
+    if (!writer->finish()) return false;
+    CompressJob job;
+    job.input = path;
+    job.output = scratch("sound_first.mp4");
+    job.width = 320;
+    if (!compress(job, nullptr)) return false;
+    auto result = Reader::open(job.output);
+    const Track* made = result ? result->first(Kind::Video) : nullptr;
+    if (!made || made->order.size() < 2) return false;
+    const double firstShown = double(made->samples[made->order[1]].pts - made->samples[made->order[0]].pts) / made->timescale;
+    return firstShown > 0.4;
+}
+
+bool ivfSharedStamp() {
+    std::vector<uint8_t> file = load(fixtures + "/video/vp8_270p.ivf");
+    if (file.size() < 32) return false;
+    std::vector<size_t> frames;
+    for (size_t at = size_t(file[6] | (file[7] << 8)); at + 12 <= file.size(); at += 12 + size_t(file[at] | (file[at + 1] << 8) | (file[at + 2] << 16) | (uint32_t(file[at + 3]) << 24))) frames.push_back(at);
+    if (frames.size() < 5) return false;
+    memcpy(&file[frames[2] + 4], &file[frames[3] + 4], 8);
+    const std::string path = scratch("shared_stamp.ivf");
+    if (!save(path, file)) return false;
+    auto reader = Reader::open(path);
+    const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+    if (!video || video->samples.size() != frames.size() || video->order.size() != frames.size() - 1) return false;
+    auto decoder = VideoDecoder::open(*reader, *video);
+    return decoder && decoder->frames() == frames.size() - 1 && decoder->frame(2) && decoder->frame(3);
+}
+
+bool keptOnFailure() {
+    const std::vector<uint8_t> kept = {'k', 'e', 'e', 'p'};
+    const std::string video = scratch("kept.mp4");
+    if (!save(video, kept)) return false;
+    FrameWriterSpec spec;
+    spec.width = 320;
+    spec.height = 240;
+    spec.layout = PixelLayout::I420;
+    spec.audioFrom = scratch("no such sound.wav");
+    if (FrameWriter::open(video, spec) || load(video) != kept) return false;
+    std::vector<std::pair<std::string, AudioFormat>> sounds = {{"kept.wav", AudioFormat::Wav16}, {"kept.flac", AudioFormat::Flac}, {"kept.mp3", AudioFormat::Mp3}};
+#ifdef ABSENT_OPUS
+    sounds.push_back({"kept.opus", AudioFormat::Opus});
+#endif
+    const std::vector<float> silence(48000 * 2, 0.0f);
+    for (const auto& [name, format] : sounds) {
+        const std::string path = scratch(name);
+        if (!save(path, kept)) return false;
+        auto writer = AudioFileWriter::open(path, format, 48000, 2, 0);
+        if (!writer) continue;
+        if (!writer->write(silence.data(), 48000) || load(path) != kept) return false;
+        writer.reset();
+        if (load(path) != kept || fileBytes(path + ".part") != 0) return false;
+        writer = AudioFileWriter::open(path, format, 48000, 2, 0);
+        if (!writer || !writer->write(silence.data(), 48000) || !writer->finish() || load(path) == kept || fileBytes(path + ".part") != 0) return false;
+    }
+    return true;
+}
+
+bool sameInput() {
+    const std::string path = scratch("same.m4a");
+    if (!save(path, load(fixtures + "/audio/aac_stereo_44k.m4a"))) return false;
+    const std::vector<uint8_t> before = load(path);
+    std::string error;
+    return !extractAudio(path, folder + "/./same.m4a", SoundChoice::Copy, 0, nullptr, &error) && error == "the output would replace the input" && load(path) == before;
+}
+
+bool layerOne() {
+    std::vector<uint8_t> file;
+    for (int frame = 0; frame < 100; ++frame) {
+        std::vector<uint8_t> bits;
+        auto put = [&](uint32_t value, int count) { for (int i = count - 1; i >= 0; --i) bits.push_back(uint8_t((value >> i) & 1)); };
+        put(0xFFFF, 16);
+        put(0x48, 8);
+        put(0xC0, 8);
+        for (int band = 0; band < 32; ++band) put(band == 1 || band == 3 ? 3 : 0, 4);
+        put(8, 6);
+        put(8, 6);
+        for (int s = 0; s < 12; ++s) {
+            for (int band : {1, 3}) {
+                const double t = frame * 12 + s;
+                put(uint32_t(std::clamp(int(7.5 + 7 * std::sin(2 * std::numbers::pi * t / (band == 1 ? 5 : 3))), 0, 14)), 4);
+            }
+        }
+        std::vector<uint8_t> bytes(192, 0);
+        for (size_t i = 0; i < bits.size(); ++i) bytes[i / 8] |= uint8_t(bits[i] << (7 - i % 8));
+        file.insert(file.end(), bytes.begin(), bytes.end());
+    }
+    const std::string path = scratch("tone.mp1");
+    if (!save(path, file)) return false;
+    auto reader = Reader::open(path);
+    const Track* sound = reader ? reader->first(Kind::Audio) : nullptr;
+    auto decoder = sound && sound->codec == fourcc(".mp1") ? AudioDecoder::open(*reader, *sound) : nullptr;
+    if (!decoder || decoder->length() != 38400) return false;
+    std::vector<float> pcm(38400);
+    if (!decoder->read(0, pcm.size(), pcm.data())) return false;
+    float loudest = 0;
+    for (float v : pcm) loudest = std::max(loudest, std::fabs(v));
+    return loudest > 0.05f;
+}
+
+bool probeRateBudget() {
+    const uint32_t count = 2400000;
+    Bytes b = testMovie(90000, [&](Bytes& m) {
+        testTrak(m, 1, "vide", 90000, {}, [&](Bytes& t) {
+            fullBox(t, "stsz", {1, count});
+            fullBox(t, "stsc", {1, 1, count, 1});
+            fullBox(t, "stco", {1, 8});
+            fullBox(t, "stts", {3, count - 2, 90000, 1, 90003, 1, 90000});
+        });
+    });
+    const size_t mdat = b.open(fourcc("mdat"));
+    b.zero(size_t(count) * 9);
+    b.close(mdat);
+    const std::string path = scratch("rate_budget.mov");
+    if (!save(path, b.d)) return false;
+    auto reader = Reader::open(path);
+    const Track* video = reader ? reader->first(Kind::Video) : nullptr;
+    if (!video || video->samples.size() != count) return false;
+    const auto start = std::chrono::steady_clock::now();
+    const std::string json = probeJson(path, false);
+    return !json.empty() && std::chrono::steady_clock::now() - start < std::chrono::milliseconds(500);
+}
+
 const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"audio-gap", audioGap}, {"audio-lost", audioLost}, {"coded-loss", codedLoss}, {"coded-gap", codedGap}, {"audio-negative", audioNegative}, {"audio-held", audioHeld}, {"mix-centre", mixCentre}, {"s16-gain", s16Gain},
     {"wav-mask", wavMask}, {"flac-channels", flacChannels}, {"channel-order", channelOrder}, {"encoder-names", encoderNames}, {"opus-empty", opusEmpty}, {"aac-empty", aacEmpty}, {"short-files", shortFiles},
@@ -1857,6 +2041,8 @@ const std::pair<const char*, std::function<bool()>> kChecks[] = {
     {"mov-mp3-packets", movMp3Packets}, {"android-vorbis-config", androidVorbisConfig}, {"scaled-matrix-zero", scaledMatrixZero},
     {"writer-suffix", writerSuffix}, {"pcm-labels", pcmLabels}, {"creation-time", creationTime}, {"sample-entry-names", sampleEntryNames},
     {"mkv-track-cap", mkvTrackCap}, {"late-opus", lateOpus}, {"frames-from-zero", framesFromZero}, {"leading-pictures", leadingPictures},
+    {"flac-successors", flacSuccessors}, {"compress-lead", compressLead}, {"ivf-shared-stamp", ivfSharedStamp}, {"kept-on-failure", keptOnFailure},
+    {"same-input", sameInput}, {"layer-one", layerOne}, {"probe-rate-budget", probeRateBudget},
 };
 
 int fixcheck(const Args& args) {

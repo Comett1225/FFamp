@@ -11,6 +11,7 @@ namespace {
 class LameFile : public Mp3File {
 public:
     std::string path;
+    std::string target;
     FILE* file = nullptr;
     lame_global_flags* lame = nullptr;
     int channels = 0;
@@ -57,6 +58,7 @@ public:
         if (tag > 0 && tag <= coded.size()) failed = failed || fseeko(file, 0, SEEK_SET) != 0 || fwrite(coded.data(), 1, tag, file) != tag;
         failed = fclose(file) != 0 || failed;
         file = nullptr;
+        failed = failed || !renameFile(path, target);
         if (failed) removeFile(path);
         return !failed;
     }
@@ -71,7 +73,8 @@ std::unique_ptr<Mp3File> Mp3File::open(const std::string& path, int rate, int ch
     };
     if (channels > 2) return fail("MP3 holds one or two channels");
     auto out = std::make_unique<LameFile>();
-    out->path = path;
+    out->path = path + ".part";
+    out->target = path;
     out->channels = channels;
     out->lame = lame_init();
     if (!out->lame) return fail("the MP3 encoder did not start");
@@ -85,7 +88,7 @@ std::unique_ptr<Mp3File> Mp3File::open(const std::string& path, int rate, int ch
     lame_set_bWriteVbrTag(out->lame, 1);
     lame_set_write_id3tag_automatic(out->lame, 0);
     if (lame_init_params(out->lame) < 0) return fail("the MP3 encoder does not take this rate or bitrate");
-    out->file = openFile(path, "wb");
+    out->file = openFile(out->path, "wb");
     if (!out->file) return fail("cannot create output file");
     return out;
 }

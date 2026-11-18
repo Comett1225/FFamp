@@ -280,6 +280,7 @@ struct Unit {
     uint64_t size = 0;
     bool picture = false;
     bool key = false;
+    bool intra = false;
     bool stamped = false;
     int64_t pts = 0;
     int64_t dts = 0;
@@ -302,6 +303,8 @@ struct Stream {
     std::deque<Stamp> stamps;
     bool clocked = false;
     int64_t clock = 0;
+    int64_t placed = 0;
+    int64_t stride = 0;
 
     int zeros = 0;
     bool inside = false;
@@ -380,7 +383,7 @@ struct Stream {
         uint64_t raw = end - u.start;
         if (raw > kLargestUnit || u.size > kLargestUnit || u.place.file == kNowhere) return;
         if (!started) {
-            if (!u.key) return;
+            if (!u.key && !u.intra) return;
             std::vector<uint8_t> config = flavor == Flavor::Avc ? buildAvcConfig(sps, pps) : buildHevcConfig(vps, sps, pps);
             if (config.empty() || !info.valid) return;
             started = true;
@@ -397,7 +400,7 @@ struct Stream {
             track.color.matrix = info.matrix;
             track.color.full = info.full;
         }
-        if (needKey && !u.key) return;
+        if (needKey && !u.key && !u.intra) return;
         needKey = false;
         Sample s;
         s.offset = u.place.file;
@@ -427,7 +430,7 @@ struct Stream {
         if (end <= nalBody || head.empty()) return;
         uint64_t size = end - nalBody;
         if (head.size() > size) head.resize(size_t(size));
-        bool picture, starter, key, first, dropped;
+        bool picture, starter, key, first, dropped, intra = false;
         bool field = false, bottom = false;
         uint32_t frameNumber = 0;
         if (flavor == Flavor::Avc) {
@@ -446,7 +449,7 @@ struct Stream {
                 std::vector<uint8_t> body = unescape(head.data() + 1, head.size() - 1);
                 BitReader r{body.data(), body.size()};
                 first = r.ue() == 0;
-                r.ue();
+                intra = first && r.ue() % 5 == 2;
                 r.ue();
                 if (info.separatePlanes) r.skip(2);
                 frameNumber = r.bits(info.frameNumBits);
@@ -454,7 +457,7 @@ struct Stream {
                     field = true;
                     bottom = r.bit();
                 }
-                if (!r.ok) field = false;
+                if (!r.ok) field = intra = false;
             }
         } else {
             if (size < 2) return;
@@ -497,6 +500,7 @@ struct Stream {
             current.size += added;
             current.picture = true;
             current.key = current.key || key;
+            current.intra = current.intra || intra;
         } else {
             Unit& target = (starter && current.picture) || lead.open ? lead : current;
             if (!target.open) begin(target);
@@ -782,6 +786,8 @@ private:
         bool clocked = false;
         bool early = false;
         int64_t clock = 0;
+        int64_t latest = 0;
+        int64_t offset = 0;
         const uint8_t* packet;
         uint64_t place;
         while (walk.next(packet, place)) {
@@ -830,10 +836,21 @@ private:
                 int64_t dts = unwrap(s.pes.dts, near);
                 int64_t pts = unwrap(s.pes.pts, dts);
                 if (!clocked) early = dts > kClockMask - 60 * 90000;
+                if (s.clocked) {
+                    const int64_t own = dts + offset - s.placed, all = dts + offset - latest;
+                    if ((own < -90000 && all < -90000) || (own > 900000 && all > 900000)) {
+                        int64_t reached = s.placed + 1;
+                        for (auto& other : streams) if (other->clocked) reached = std::max(reached, other->placed + std::max<int64_t>(other->stride, 1));
+                        offset = reached - dts;
+                    } else if (own > 0) {
+                        s.stride = own;
+                    }
+                }
                 s.clocked = clocked = true;
                 s.clock = clock = dts;
+                s.placed = latest = dts + offset;
                 if (s.stamps.size() >= 64) s.stamps.pop_front();
-                s.stamps.push_back({s.position, pts, dts});
+                s.stamps.push_back({s.position, pts + offset, dts + offset});
             }
             if (data.second) s.feed(data.first, data.second, place, uint8_t(data.first - part.p), s.pes.fresh);
         }

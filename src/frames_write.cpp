@@ -276,7 +276,6 @@ std::unique_ptr<FrameWriter> FrameWriter::open(const std::string& path, const Fr
     if (w.videoTrack < 0 && error) *error = kCannotHold;
     if (w.videoTrack < 0 || (!spec.audioFrom.empty() && !w.soundOpen(error))) {
         w.writer.reset();
-        removeFile(path);
         return nullptr;
     }
     return out;

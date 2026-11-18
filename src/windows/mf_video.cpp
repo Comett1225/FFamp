@@ -268,7 +268,7 @@ struct MfVideoDecoder : SoftDecoder {
             scan = start;
             stride = pitch;
         }
-        UINT32 rows = std::max<UINT32>(frameHeight, UINT32(height));
+        const UINT32 rows = frameHeight ? frameHeight : UINT32(height);
         if (scan && stride > 0) {
             Picture p = shaped(time);
             place(p, scan, size_t(stride), rows);

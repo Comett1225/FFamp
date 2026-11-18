@@ -354,7 +354,7 @@ int64_t flacFrames(Source& source, uint64_t at, uint64_t limit, const FlacInfo& 
     while (current < found.size()) {
         const Candidate& c = found[current];
         size_t next = found.size();
-        for (size_t j = current + 1; j < found.size() && found[j].at - c.at <= reach; ++j) {
+        for (size_t j = current + 1; j < found.size() && j - current <= 256 && found[j].at - c.at <= reach; ++j) {
             if (found[j].number == c.number + c.block) {
                 next = j;
                 break;

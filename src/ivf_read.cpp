@@ -100,9 +100,15 @@ std::unique_ptr<Reader> openIvf(const std::string& path, std::string* error) {
         if (s.size == 0) continue;
         if (!track.samples.empty()) {
             Sample& before = track.samples.back();
-            if (s.pts <= before.pts) return fail("IVF frames are out of order");
-            before.duration = uint32_t(std::min<int64_t>(s.pts - before.pts, 0x7FFFFFFF));
-            s.duration = before.duration;
+            if (s.pts < before.pts) return fail("IVF frames are out of order");
+            if (s.pts == before.pts) {
+                s.duration = before.duration;
+                before.duration = 0;
+                if (!track.order.empty() && track.order.back() + 1 == track.samples.size()) track.order.pop_back();
+            } else {
+                before.duration = uint32_t(std::min<int64_t>(s.pts - before.pts, 0x7FFFFFFF));
+                s.duration = before.duration;
+            }
         }
         if (s.sync) track.syncs.push_back(uint32_t(track.samples.size()));
         track.order.push_back(uint32_t(track.samples.size()));

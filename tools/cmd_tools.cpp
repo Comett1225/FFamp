@@ -1,4 +1,5 @@
 #include "cli.h"
+#include "absent/capture.h"
 #include "absent/tools.h"
 #include <cmath>
 #include <csignal>
@@ -39,14 +40,14 @@ int64_t microseconds(const Args& args, const char* name) {
 }
 
 bool hasExtension(const std::string& path) {
-    const size_t slash = path.find_last_of('/');
+    const size_t slash = path.find_last_of("/\\:");
     const size_t dot = path.find_last_of('.');
     return dot != std::string::npos && (slash == std::string::npos || dot > slash + 1);
 }
 
 int compress(const Args& args) {
     if (args.plain.size() < 2) {
-        return fail("compress needs <in> <out> [--start s --end s] [--size WxH | --fit WxH] [--fps N or N/D] [--codec h264|hevc|av1|vp9|apv] [--bitrate bits] [--audio copy|aac|none] [--audio-bitrate bits]");
+        return fail("compress needs <in> <out> [--start s --end s] [--size WxH | --fit WxH] [--fps N, N.NN or N/D] [--codec h264|hevc|av1|vp9|apv] [--bitrate bits] [--audio copy|aac|none] [--audio-bitrate bits]");
     }
     CompressJob job;
     job.input = args.plain[0];
@@ -57,8 +58,8 @@ int compress(const Args& args) {
     if (!size.empty() && (sscanf(size.c_str(), "%dx%d", &job.width, &job.height) != 2 || job.width < 0 || job.height < 0 || job.width > 16384 || job.height > 16384)) return fail("bad size");
     job.keepAspect = args.has("fit");
     if (args.has("fps")) {
-        long numerator = 0, denominator = 1;
-        if (sscanf(args.get("fps").c_str(), "%ld/%ld", &numerator, &denominator) < 1 || numerator <= 0 || denominator <= 0 || numerator > 1000000 || denominator > 1000000) return fail("bad --fps");
+        int64_t numerator = 0, denominator = 1;
+        if (!frameRateFrom(args.get("fps"), numerator, denominator) || numerator > 1000000 || denominator > 1000000) return fail("bad --fps");
         job.fpsNumerator = int(numerator);
         job.fpsDenominator = int(denominator);
     }

@@ -1,4 +1,5 @@
 #include "cli.h"
+#include "absent/capture.h"
 #include "absent/probe.h"
 #include <algorithm>
 #include <cmath>
@@ -158,9 +159,8 @@ int encode(const Args& args) {
     if (args.plain.empty() || !args.has("video") || !args.has("size")) return fail("encode needs an output file, --video raw.yuv and --size WxH");
     int width = 0, height = 0;
     if (sscanf(args.get("size").c_str(), "%dx%d", &width, &height) != 2 || width <= 0 || height <= 0 || width > 16384 || height > 16384) return fail("bad --size");
-    long num = 30, den = 1;
-    std::string fps = args.get("fps", "30");
-    if (sscanf(fps.c_str(), "%ld/%ld", &num, &den) < 1 || num <= 0 || den <= 0) return fail("bad --fps");
+    int64_t num = 30, den = 1;
+    if (!frameRateFrom(args.get("fps", "30"), num, den)) return fail("bad --fps");
     FILE* video = args.get("video") == "-" ? stdin : openFile(args.get("video").c_str(), "rb");
     if (!video) return fail("cannot open the raw video");
     bool redFirst = args.get("format", "i420") == "rgb0";

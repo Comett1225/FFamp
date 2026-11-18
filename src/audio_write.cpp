@@ -45,6 +45,7 @@ bool problem(std::string* error, const char* text) {
 
 struct WaveTarget : Target {
     std::string path;
+    std::string target;
     FILE* file = nullptr;
     int rate = 0;
     int channels = 0;
@@ -143,7 +144,7 @@ struct WaveTarget : Target {
         failed = failed || fseeko(file, 0, SEEK_SET) != 0 || fwrite(head.data(), 1, head.size(), file) != head.size();
         failed = fclose(file) != 0 || failed;
         file = nullptr;
-        if (failed) {
+        if (failed || !renameFile(path, target)) {
             removeFile(path);
             return problem(error, "writing the output file failed");
         }
@@ -159,6 +160,7 @@ struct FlacTarget : Target {
         uint32_t frames;
     };
     std::string path;
+    std::string target;
     FILE* file = nullptr;
     int channels = 0;
     int bits = 0;
@@ -221,7 +223,7 @@ struct FlacTarget : Target {
         failed = failed || fseeko(file, 0, SEEK_SET) != 0 || fwrite(h.data(), 1, h.size(), file) != h.size();
         failed = fclose(file) != 0 || failed;
         file = nullptr;
-        if (failed) {
+        if (failed || !renameFile(path, target)) {
             removeFile(path);
             return problem(error, "writing the output file failed");
         }
@@ -316,22 +318,24 @@ std::unique_ptr<AudioFileWriter> AudioFileWriter::open(const std::string& path, 
     std::unique_ptr<AudioFileWriter> writer(new AudioFileWriter);
     if (format == AudioFormat::Wav16 || format == AudioFormat::Wav24 || format == AudioFormat::WavFloat) {
         auto wave = std::make_unique<WaveTarget>();
-        wave->path = path;
+        wave->path = path + ".part";
+        wave->target = path;
         wave->rate = rate;
         wave->channels = channels;
         wave->bits = format == AudioFormat::Wav16 ? 16 : format == AudioFormat::Wav24 ? 24 : 32;
         wave->floating = format == AudioFormat::WavFloat;
-        wave->file = openFile(path, "wb");
+        wave->file = openFile(wave->path, "wb");
         std::vector<uint8_t> head = wave->header();
         if (!wave->file || fwrite(head.data(), 1, head.size(), wave->file) != head.size()) return fail("cannot create output file");
         writer->impl->target = std::move(wave);
     } else if (format == AudioFormat::Flac || format == AudioFormat::Flac24) {
         auto flac = std::make_unique<FlacTarget>();
-        flac->path = path;
+        flac->path = path + ".part";
+        flac->target = path;
         flac->channels = channels;
         flac->bits = format == AudioFormat::Flac ? 16 : 24;
         flac->encoder = std::make_unique<FlacEncoder>(rate, channels, flac->bits);
-        flac->file = openFile(path, "wb");
+        flac->file = openFile(flac->path, "wb");
         std::vector<uint8_t> head = flac->head();
         if (!flac->file || fwrite(head.data(), 1, head.size(), flac->file) != head.size()) return fail("cannot create output file");
         writer->impl->target = std::move(flac);

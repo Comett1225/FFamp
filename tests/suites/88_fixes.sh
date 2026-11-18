@@ -9,6 +9,7 @@ fx_named() {
         $A extract-audio "$FX/$1/clip $1.m4a" "$FX/$1/sound $1.m4a" > /dev/null && $A adecode "$FX/$1/sound $1.mp3" > /dev/null 2>&1 && $A adecode "$FX/$1/sound $1.m4a" > /dev/null 2>&1
 }
 for name in Café Привет 動画; do check "fixes: a folder and file named $name open, probe and extract-audio into it" fx_named $name; done
+check "fixes: compress --fps 29.97 encodes at 30000/1001, not 29" eval '$A compress fixtures/tools/clip.mp4 $FX/fps.mp4 --fps 29.97 --audio none > /dev/null 2>&1 && $A probe $FX/fps.mp4 | grep -q "timescale 30000 "'
 if have_ffmpeg; then
     decoded_bytes() { [ "$($FFMPEG -nostdin -v error -i "$1" -f s16le - | wc -c | tr -d ' ')" = "$2" ]; }
     stated_length() { [ "$($FFPROBE -v error -show_entries format=duration -of csv=p=0 "$1" 2> /dev/null)" = "$2" ]; }
@@ -89,6 +90,35 @@ sys.exit(0 if len(ours) == len(theirs) == 2048 and max(gaps) <= 16 and sum(gaps)
     turned() { $A $1 fixtures/probe/rot90.mp4 $2 > /dev/null 2>&1 && [ -n "$(rotation_of $2)" ] && [ "$(rotation_of $2)" = "$(rotation_of fixtures/probe/rot90.mp4)" ]; }
     check "fixes: rewrap of a rotated MP4 into Matroska keeps the rotation" turned rewrap $FX/rot.mkv
     check "fixes: strip-audio of a rotated MP4 into Matroska keeps the rotation" turned strip-audio $FX/rot_silent.mkv
+    check "fixes: the hand-made MPEG-1 Layer I file sounds as FFmpeg decodes it" python3 audio.py against $FX/tone.mp1 40 0 0
+    $F -f lavfi -i testsrc2=s=320x180:r=30:d=6 -f lavfi -i sine=d=6 -c:v libx264 -preset veryfast -bf 2 -x264-params open-gop=1:keyint=30:min-keyint=30:scenecut=0 -c:a aac -f mpegts $FX/open_gop.ts
+    $F -ss 2.5 -i $FX/open_gop.ts -c copy -f mpegts $FX/open_gop_cut.ts
+    python3 -c "
+import sys
+data = open(sys.argv[1], 'rb').read()
+packets = [data[i:i + 188] for i in range(0, len(data) - 187, 188)]
+video = [k for k, p in enumerate(packets) if ((p[1] & 0x1F) << 8 | p[2]) == 256 and not p[1] & 0x40]
+del packets[video[len(video) // 2]]
+open(sys.argv[2], 'wb').write(b''.join(packets))" $FX/open_gop.ts $FX/open_gop_lost.ts
+    ts_pictures() { $A packets "$1" | awk '$1 == "track" && $3 == "video" { for (i = 1; i < NF; ++i) if ($i == "packets") print $(i + 1) }'; }
+    check "fixes: a transport stream cut at an I picture that is not an IDR keeps its video" [ "$(ts_pictures $FX/open_gop_cut.ts)" -ge 80 ]
+    check "fixes: H.264 in a transport stream with one IDR goes on after a lost packet" [ "$(ts_pictures $FX/open_gop_lost.ts)" -ge 140 ]
+    $F -f lavfi -i testsrc2=s=320x180:r=30:d=2 -f lavfi -i sine=d=2 -c:v libx264 -preset veryfast -c:a aac -output_ts_offset 20 -f mpegts $FX/splice_a.ts
+    $F -f lavfi -i testsrc2=s=320x180:r=30:d=2 -f lavfi -i sine=d=2 -c:v libx264 -preset veryfast -c:a aac -f mpegts $FX/splice_b.ts
+    cat $FX/splice_a.ts $FX/splice_b.ts > $FX/spliced.ts
+    in_step() {
+        $A packets "$1" | python3 -c "
+import sys
+tracks, kind = {}, None
+for line in sys.stdin:
+    word = line.split()
+    if word[0] == 'track': kind = word[2]; tracks[kind] = []
+    elif kind and len(word) == 6 and word[0].lstrip('-').isdigit(): tracks[kind].append((int(word[0]), int(word[1])))
+video, audio = tracks.get('video', []), tracks.get('audio', [])
+steady = all(b[1] >= a[1] for t in (video, audio) for a, b in zip(t, t[1:]))
+sys.exit(0 if steady and len(video) >= 118 and max(p for p, d in video) - min(p for p, d in video) < 4.5 * 90000 else 1)"
+    }
+    check "fixes: two transport streams joined with their clocks restarting play one after the other" in_step $FX/spliced.ts
 else
     skip "fixes: FFmpeg as the judge of the written files and the 7.1 order"
 fi

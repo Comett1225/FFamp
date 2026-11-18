@@ -240,7 +240,7 @@ bool parseSequence(BitReader& b, Sequence& s) {
 }
 
 bool supported(const Sequence& s) {
-    return s.profile == 0 && !s.mono && s.bits <= 10 && s.subX && s.subY && s.opIdc[0] == 0;
+    return s.profile == 0 && !s.mono && s.bits <= 10 && s.subX && s.subY && s.opIdc[0] == 0 && !s.grain;
 }
 
 struct Slot {
@@ -914,8 +914,7 @@ std::unique_ptr<SoftDecoder> openVaapiAv1(const std::vector<uint8_t>& config, co
         return fail("only 4:2:0 AV1 Main at 8 or 10 bits is decoded on the GPU");
     auto decoder = std::make_unique<Av1Decoder>();
     if (config.size() > 4 && !decoder->decode(config.data() + 4, config.size() - 4, 0, [](const Picture&) {}))
-        return fail("the AV1 sequence header is not one the GPU decodes");
-    if (decoder->seq.grain) return fail("AV1 film grain is applied by the software decoder");
+        return fail("the AV1 sequence header is not one the GPU decodes (film grain stays with the software decoder)");
     const bool deep = shape.bits > 8;
     if (d3d12Wrong(deep, width, height)) return fail("the GPU driver decodes this AV1 frame size wrongly or crashes on it");
     if (!vaDecodes(VAProfileAV1Profile0) || !decoder->session.open(VAProfileAV1Profile0, width, height, deep, 10))

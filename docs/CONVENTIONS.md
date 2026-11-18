@@ -148,6 +148,11 @@ list; `Sample.offset` is then free for the reader's use.
   minute before the wrap gets negative times before it, as ffprobe shows it. `Track.id` is the PID.
 - MPEG-TS video keeps parameter sets and SEI inside the samples as well as in `config`; access unit delimiters and filler data are
   dropped. H.264 samples are marked `sync` on IDR pictures only, HEVC on every IRAP picture. Two fields of one H.264 frame are one sample.
+  H.264 video starts, and starts again after a lost or scrambled packet, at the first IDR or I picture (an open-GOP or broadcast
+  recovery point, not marked `sync`), so a recording with rare or no IDR pictures keeps its video.
+- MPEG-TS clock jumps: a stamp more than 1 s back or 10 s ahead of both its own stream's last stamp and the last stamp of any stream
+  (joined HLS pieces, an ad splice) starts a new run, and every stream's later stamps continue after the furthest point any stream
+  reached, as FFmpeg's command line rebases them.
 - MPEG audio layer I uses the codec `.mp1` (layer II `.mp2`, layer III `.mp3`).
 - `Reader::format()` of the transport stream reader is `mpegts`.
 
@@ -331,9 +336,12 @@ list; `Sample.offset` is then free for the reader's use.
 - Matroska and WebM rotation: Video > Projection with the rectangular type, pitch 0 and yaw 0 or 180 gives `rotation` from its pose
   roll as FFmpeg's display matrix does (roll 90, counter-clockwise, is `rotation` 270, as in MP4; with yaw 180, a mirror, `rotation` is
   the angle FFmpeg reports for that matrix). `MkvWriter` writes ProjectionPoseRoll for a rotated track (`TrackSpec::rotation`).
+- IVF: a frame with the same time as the one before it (a VP8 alt-ref picture stamped with the next shown frame's time) is decoded
+  but not shown; the earlier frame gets length 0. Only a time that goes back fails the file.
 - Raw MP3 (and MP2, MP1): after junk of any length (a tag with large cover art in the middle of joined files) the reader finds the
   frames again. Frames of the same layer at another sample rate are kept, with durations counted in the first frame's rate; mpg123
   resamples them to that rate, and on the Mac the AudioToolbox converter is rebuilt for their rate with the first rate as its output.
+  AudioToolbox also decodes MP1 on the Mac, 241 frames early like MP2, which is taken off.
 - A Matroska video codec no decoder here knows is kept as a track named by its VFW fourcc or the first letters of its codec ID, so
   probe reports its name, start and length; `VideoDecoder::open` fails with `video codec not supported by this decoder`.
 
@@ -680,7 +688,8 @@ list; `Sample.offset` is then free for the reader's use.
   driver loses the IDR's references when the context is replaced right after it, and every following picture comes out wrong). Under the
   d3d12 driver four cases stay on the software decoders (H.264 on FFamp's own decoder) because the driver gets them wrong: H.264 with non-flat scaling matrices
   (it ignores them), 10-bit VP9 and AV1 whose height % 16 is 2 to 9 (wrong chroma and inter pictures), VP9 and AV1 with an odd width
-  or height (the driver crashes the process in `vaEndPicture`; `d3d12Wrong`), and AV1 film grain. NVIDIA's
+  or height (the driver crashes the process in `vaEndPicture`; `d3d12Wrong`), and AV1 film grain (from `av1C` or a sequence header
+  inside the stream: the GPU decoder refuses it and the stream goes to dav1d). NVIDIA's
   driver has no VA-API; see `docs/PLAN_WINLINUX.md` for what NVDEC would take.
 - Software paths: FFamp's own H.264 decoder (below), libde265 (monochrome HEVC comes out as 4:2:0 with neutral chroma, as dav1d's
   monochrome AV1), FFamp's own AAC decoder (`src/aac_*.cpp`: LC, HE-AAC, HE-AAC v2) and

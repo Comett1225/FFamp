@@ -578,12 +578,13 @@ Timing timingOf(const Track& t) {
     return timing;
 }
 
-bool onGrid(const Track& t, int64_t top, int64_t bottom) {
+bool onGrid(const Track& t, int64_t top, int64_t bottom, int64_t& budget) {
     double step = double(t.timescale) * double(bottom) / double(top);
     int64_t origin = t.samples[0].pts;
     double slack = t.timescale >= 10000 ? 1.0 : 0.5001;
     if (step < 2 * slack + 1) return false;
     for (const Sample& s : t.samples) {
+        if (--budget < 0) return false;
         double at = double(int64_t(uint64_t(s.pts) - uint64_t(origin)));
         if (std::fabs(at - std::round(at / step) * step) > slack) return false;
     }
@@ -600,10 +601,11 @@ std::string baseRate(const Track& t, const Timing& timing) {
     }
     if (even) return fraction(t.timescale, t.samples[0].duration);
     double average = double(t.samples.size()) * t.timescale / double(timing.ticks);
-    for (int64_t whole = 1; whole <= 1000; ++whole) {
+    int64_t budget = std::max<int64_t>(int64_t(t.samples.size()) * 8, int64_t(32) << 20);
+    for (int64_t whole = 1; whole <= 1000 && budget > 0; ++whole) {
         if (double(whole) < average * 0.99) continue;
-        if (double(whole) * 1000 / 1001 >= average * 0.99 && onGrid(t, whole * 1000, 1001)) return fraction(whole * 1000, 1001);
-        if (onGrid(t, whole, 1)) return fraction(whole, 1);
+        if (double(whole) * 1000 / 1001 >= average * 0.99 && onGrid(t, whole * 1000, 1001, budget)) return fraction(whole * 1000, 1001);
+        if (onGrid(t, whole, 1, budget)) return fraction(whole, 1);
     }
     return fraction(t.timescale, std::max<int64_t>(common, 1));
 }

@@ -243,8 +243,6 @@ bool writeOut(std::vector<Piece>& pieces, double origin, const std::string& outp
     return true;
 }
 
-bool sameFile(const std::string& a, const std::string& b) { return a == b; }
-
 }
 
 bool trimCopy(const std::string& input, const std::string& output, int64_t startUs, int64_t endUs, const Progress& progress, std::string* error) {

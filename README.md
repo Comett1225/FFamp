@@ -1,9 +1,10 @@
 # FFamp
 
-Fast Forward Absent Multimedia Project: a small media layer for AbsentMotion's desktop apps that does not use FFmpeg: its own container code, written from the public
-specifications, on top of the codecs the operating system already has.
+Fast Forward Absent Multimedia Project: AbsentMotion's own media layer, used instead of FFmpeg: its own container code, written from the
+public specifications, on top of the codecs the operating system already has, plus its own decoders for formats the system cannot play.
 
-This is a prototype. It proves the riskiest part on macOS; nothing here is used by the app yet.
+AbsentMotion uses it on phones for videos and sound the phone cannot play (AVI, WMV, AC-3 sound, 10-bit and 4:2:2 H.264, ProRes,
+DNxHD), and on computers as the experimental media reader (Settings > Playback > Media reader).
 
 ## What works today (macOS)
 
@@ -69,4 +70,4 @@ is linked; parts based on FFmpeg are listed in `docs/NOTICE.md`.
 - FFamp is inspired by FFmpeg.
 - Written from the specifications and the operating-system documentation. Parts based on FFmpeg are listed in `docs/NOTICE.md`.
 - No comments in source files; explanations go in `docs/`.
-- Licence: GPL-3.0-or-later.
+- Licence: GPL-3.0-or-later (`LICENSE`).

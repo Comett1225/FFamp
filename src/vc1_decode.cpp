@@ -418,6 +418,7 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
     std::vector<char> covered(size_t(rows) * size_t(fields), 0);
     int headerResult = 0;
     for (int i = 0; i <= nSlices; i++) {
+        if (i) gb = slices[size_t(i - 1)].gb;
         if (i > 0 && slices[size_t(i - 1)].mbyStart >= rows) {
             if (fieldMode <= 0) continue;
             secondField = 1;
@@ -449,7 +450,6 @@ bool Vc1::decodeFrame(const uint8_t* buf, size_t size) {
         if (((pictType == kPictureP && !pFrameSkipped) || (pictType == kPictureB && !biType)) && !cbpcyVlc) continue;
         decodeBlocks();
         if (secondField < fields) std::fill(covered.begin() + secondField * rows + startMbY, covered.begin() + secondField * rows + endMbY, 1);
-        if (i != nSlices) gb = slices[size_t(i)].gb;
     }
     for (size_t row = 0; row < covered.size(); row++) {
         if (covered[row]) continue;

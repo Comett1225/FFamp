@@ -207,7 +207,8 @@ capped at one per 8 bytes of the file plus 65536, and at 2^25.
 - A gap between packets that the reader keeps, a packet that cannot be read and a packet the decoder rejects are played as silence of
   the same length, so the sound after them stays at its own time. Gaps of any length are kept (up to an hour of silence in all), as
   FFmpeg's `aresample=async=1` fills them; with a decoder whose output lags its input (Media Foundation AAC) the silence goes after
-  the output still inside the decoder.
+  the output still inside the decoder, except after a first packet followed by more than 131072 frames of gap, whose lagging output
+  is left out so that the silence is never stored.
 - `Writer::trim(track, skip, 0)` means nothing is shown: an encoder that was given no sound writes a file that decodes to 0 frames.
 - `Mp4Writer` writes version 1 (64-bit) `mvhd`, `tkhd`, `mdhd` and `elst` boxes when a length does not fit in 32 bits.
 - `PcmReader::mixPeak()` is the largest row sum of its channel mix (2.414 for 5.1 to stereo, 1 when nothing is mixed). Float output is
@@ -426,6 +427,8 @@ capped at one per 8 bytes of the file plus 65536, and at 2^25.
 - Macroblocks that do not decode (a cut or damaged slice, an X8 picture that stops part way, a macroblock that fails, such as direct
   mode in a field B-picture whose anchor is a frame) are filled from the reference picture before (grey at the start), from one
   macroblock row above where decoding stopped to the end of that slice, and the picture is shown; FFmpeg's error resilience differs.
+  After a slice that is skipped (damaged header, rows out of order) the next slice still reads its own bits (FFmpeg's reads the bits
+  of the slice before).
 - The display extension's colour description is given on each picture where FFmpeg exports it (primaries 1, 5, 6; transfer 1, 7;
   matrix 1, 6, 7); the other fields are unspecified (2).
 - Frame buffers come from a small pool owned by the decoder: a picture handed to the sink stays valid until the next `decode`.

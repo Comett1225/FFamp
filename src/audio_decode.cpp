@@ -288,7 +288,7 @@ struct AudioDecoder::Impl {
 
     void settleGap(int64_t needFrom, int64_t needTo) {
         const size_t channels = size_t(codec->channels);
-        if (!gap || heldFrom + int64_t(held.size() / channels) < gapAt || gapAt + gap >= needTo) return;
+        if (!gap || heldFrom + int64_t(held.size() / channels) < gapAt || gapEnd() >= needTo) return;
         const size_t at = size_t(std::max<int64_t>(0, gapAt - heldFrom)) * channels;
         const int64_t unseen = std::clamp<int64_t>(needFrom - gapAt, 0, gap);
         if (unseen) {
@@ -301,7 +301,9 @@ struct AudioDecoder::Impl {
         gap = 0;
     }
 
-    bool silentTail(size_t to) const { return gap && gapAt + gap >= starts[to]; }
+    int64_t gapEnd() const { return gapAt + gap + (lagKnown ? 0 : std::max<int64_t>(0, codec->lead)); }
+
+    bool silentTail(size_t to) const { return gap && gapEnd() >= starts[to]; }
 
     void forget(int64_t before) {
         const size_t channels = size_t(codec->channels);
